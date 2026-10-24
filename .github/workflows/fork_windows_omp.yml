@@ -1,6 +1,7 @@
-# Builds this fork's Windows omp.exe and publishes it as a GitHub Release, so a
-# Windows machine installs the fork by downloading it instead of compiling it.
-# Every upstream workflow is removed from this fork; this is the only one.
+# Builds this fork's omp for Windows (omp.exe) and Linux (for WSL) and publishes
+# both in one GitHub Release, so those machines install the fork by downloading
+# it instead of compiling it. Every upstream workflow is removed from this fork;
+# this is the only one.
 name: Fork Windows omp
 
 on:
@@ -18,9 +19,15 @@ concurrency:
 
 jobs:
   build:
-    # windows-2022 ships Visual Studio 2022's MSVC tools; the native addon builds
-    # through cargo for the host (packages/natives/scripts/build-bindings.ts), not Bazel.
-    runs-on: windows-2022
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # windows-2022 ships Visual Studio 2022's MSVC tools.
+          - { os: windows-2022, binary: omp.exe, asset: omp-windows-x64.exe }
+          # ubuntu-22.04's glibc 2.35 keeps the binary runnable on newer distributions such as WSL's.
+          - { os: ubuntu-22.04, binary: omp, asset: omp-linux-x64 }
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +40,7 @@ jobs:
           bun-version: latest
 
       - name: Show the toolchain
-        shell: pwsh
+        shell: bash
         run: |
           bun --version
           rustup show active-toolchain
@@ -41,52 +48,60 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The native addon builds through cargo for the host
+      # (packages/natives/scripts/build-bindings.ts), not Bazel.
       - name: Build the native addon
         run: bun run build:native
 
-      - name: Build omp.exe
+      - name: Build omp
         run: bun --cwd=packages/coding-agent run build
 
       - name: Smoke the binary
-        shell: pwsh
+        shell: bash
         run: |
-          $binary = 'packages/coding-agent/dist/omp.exe'
-          $runtimeDir = Join-Path $env:RUNNER_TEMP 'omp-smoke'
-          $env:HOME = Join-Path $runtimeDir 'home'
-          $env:USERPROFILE = $env:HOME
-          $env:LOCALAPPDATA = Join-Path $runtimeDir 'local'
-          $env:XDG_DATA_HOME = Join-Path $runtimeDir 'xdg'
-          New-Item -ItemType Directory -Force -Path $env:HOME, $env:LOCALAPPDATA, $env:XDG_DATA_HOME | Out-Null
-          & $binary --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $binary --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          binary="packages/coding-agent/dist/${{ matrix.binary }}"
+          runtime="$RUNNER_TEMP/omp-smoke"
+          mkdir -p "$runtime/home" "$runtime/local" "$runtime/xdg"
+          export HOME="$runtime/home" USERPROFILE="$runtime/home" LOCALAPPDATA="$runtime/local" XDG_DATA_HOME="$runtime/xdg"
+          "$binary" --version
+          "$binary" --smoke-test
 
-      - name: Stage the release assets
-        shell: pwsh
+      - name: Stage the release asset
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item packages/coding-agent/dist/omp.exe release/omp-windows-x64.exe
-          $hash = (Get-FileHash release/omp-windows-x64.exe -Algorithm SHA256).Hash.ToLower()
-          Set-Content -Path release/omp-windows-x64.exe.sha256 -Value "$hash  omp-windows-x64.exe" -NoNewline -Encoding ascii
+          mkdir -p release
+          cp "packages/coding-agent/dist/${{ matrix.binary }}" "release/${{ matrix.asset }}"
+          cd release
+          sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
 
       - name: Publish release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = (Get-Content packages/coding-agent/package.json -Raw | ConvertFrom-Json).version
-          $sha = $env:GITHUB_SHA.Substring(0, 10)
-          $tag = "fork-v$version-$sha"
-          $notes = "Windows build of qiulinfan/oh-my-pi main at $env:GITHUB_SHA (omp $version). update-forks installs omp-windows-x64.exe after checking it against omp-windows-x64.exe.sha256."
-          gh release create $tag release/omp-windows-x64.exe release/omp-windows-x64.exe.sha256 `
-            --target $env:GITHUB_SHA --title "omp $version (fork, $sha)" --notes $notes --latest
-
-      - name: Keep the binary as a run artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: omp-windows-x64
-          path: release/
-          if-no-files-found: ignore
-          retention-days: 14
+          version="$(jq -r .version packages/coding-agent/package.json)"
+          sha="${GITHUB_SHA:0:10}"
+          tag="fork-v$version-$sha"
+          notes="Builds of qiulinfan/oh-my-pi main at $GITHUB_SHA (omp $version): omp-windows-x64.exe for Windows and omp-linux-x64 for WSL. update-forks installs each after checking it against its .sha256."
+          gh release create "$tag" release/* -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "omp $version (fork, $sha)" --notes "$notes" --latest
