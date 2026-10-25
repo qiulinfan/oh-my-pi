@@ -788,6 +788,8 @@ export class AcpAgent implements Agent {
 	#connection: AgentSideConnection;
 	#initialSession: AgentSession | undefined;
 	#createSession: CreateAcpSession;
+	/** `--session-dir`: where new sessions are written, so listing and loading must look there too. */
+	#sessionDir: string | undefined;
 	#sessions = new Map<string, ManagedSessionRecord>();
 	#disposePromise: Promise<void> | undefined;
 	#cleanupRegistered = false;
@@ -795,10 +797,16 @@ export class AcpAgent implements Agent {
 	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 	#blobs = new BlobStore(getBlobsDir());
 
-	constructor(connection: AgentSideConnection, createSession: CreateAcpSession, initialSession?: AgentSession) {
+	constructor(
+		connection: AgentSideConnection,
+		createSession: CreateAcpSession,
+		initialSession?: AgentSession,
+		options: { sessionDir?: string } = {},
+	) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
+		this.#sessionDir = options.sessionDir;
 	}
 
 	setCancelCleanupTimeoutForTesting(timeoutMs: number): void {
@@ -1419,7 +1427,7 @@ export class AcpAgent implements Agent {
 				return buildAcpSpeechModelsCatalog();
 			case "_omp/sessions/listAll": {
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
-				const sessions = await SessionManager.listAll();
+				const sessions = await this.#sessionsOnDisk();
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
 				return {
 					sessions: sorted.map(s => this.#toSessionInfo(s)),
@@ -1427,7 +1435,7 @@ export class AcpAgent implements Agent {
 				};
 			}
 			case "_omp/projects/list": {
-				const sessions = await SessionManager.listAll();
+				const sessions = await this.#sessionsOnDisk();
 				const buckets = new Map<
 					string,
 					{ cwd: string; sessionCount: number; lastActivityAt: number; lastTitle: string }
@@ -1458,7 +1466,7 @@ export class AcpAgent implements Agent {
 				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				if (!cwd) throw new Error("cwd required");
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(500, params.limit as number)) : 100;
-				const sessions = await SessionManager.list(cwd);
+				const sessions = await this.#sessionsOnDisk(cwd);
 				const sorted = sessions.sort((l, r) => r.modified.getTime() - l.modified.getTime()).slice(0, limit);
 				return { sessions: sorted.map(s => this.#toSessionInfo(s)) };
 			}
@@ -2641,8 +2649,20 @@ export class AcpAgent implements Agent {
 	}
 
 	async #listStoredSessions(cwd?: string): Promise<StoredSessionInfo[]> {
-		const sessions = cwd ? await SessionManager.list(cwd) : await SessionManager.listAll();
+		const sessions = await this.#sessionsOnDisk(cwd);
 		return sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
+	}
+
+	/**
+	 * Stored sessions, optionally only those for `cwd`. With `--session-dir` every session lives in
+	 * that one directory, whatever its cwd; otherwise they are spread over the per-project defaults.
+	 */
+	async #sessionsOnDisk(cwd?: string): Promise<StoredSessionInfo[]> {
+		if (this.#sessionDir) {
+			const sessions = await SessionManager.list(cwd ?? this.#sessionDir, this.#sessionDir);
+			return cwd ? sessions.filter(session => session.cwd === cwd) : sessions;
+		}
+		return cwd ? await SessionManager.list(cwd) : await SessionManager.listAll();
 	}
 
 	async #findStoredSession(sessionId: string, cwd: string): Promise<StoredSessionInfo | undefined> {

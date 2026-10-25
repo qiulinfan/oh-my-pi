@@ -489,6 +489,7 @@ interface AgentHarness {
 	sessionFactoryOptions: Array<{ interactivePrompts?: boolean } | undefined>;
 	cwdA: string;
 	cwdB: string;
+	sessionDir: string | undefined;
 	findSession(sessionId: string): FakeAgentSession | undefined;
 }
 
@@ -534,6 +535,8 @@ async function createHarness(
 		extensionRunners?: boolean;
 		/** Exposed to each created session's `modelRegistry` for MCP credential round-trips. */
 		authStorage?: AuthStorage;
+		/** Starts the agent as `omp --session-dir <root>/sessions acp` does. */
+		sessionDir?: boolean;
 	} = {},
 ): Promise<AgentHarness> {
 	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-test-"));
@@ -587,7 +590,8 @@ async function createHarness(
 		return { session: session as unknown as AgentSession, setToolUIContext };
 	};
 
-	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession);
+	const sessionDir = options.sessionDir ? path.join(root, "sessions") : undefined;
+	const agent = new AcpAgent(connection, factory, initialSession as unknown as AgentSession, { sessionDir });
 	const clientCapabilities =
 		options.clientCapabilities ?? (options.elicitationHandler ? { elicitation: { form: {} } } : undefined);
 	if (clientCapabilities) {
@@ -606,6 +610,7 @@ async function createHarness(
 		sessionFactoryOptions,
 		cwdA,
 		cwdB,
+		sessionDir,
 		findSession: (sessionId: string) => sessions.find(session => session.sessionId === sessionId),
 	};
 }
@@ -1727,6 +1732,39 @@ describe("ACP agent", () => {
 					update.update.sessionUpdate === "agent_message_chunk"),
 		);
 		expect(replayChunks.length).toBeGreaterThan(0);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("lists and loads sessions written to --session-dir", async () => {
+		// Clients that pass --session-dir (Zed, IINA) could create sessions there but never list or
+		// reload them: listing and lookup only scanned the per-project default directories.
+		const harness = await createHarness({ sessionDir: true });
+		if (!harness.sessionDir) throw new Error("harness has no session dir");
+		const stored = SessionManager.create(harness.cwdA, harness.sessionDir);
+		stored.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "session-dir hello" }],
+			timestamp: Date.now(),
+		});
+		stored.appendMessage(makeAssistantMessage("session-dir reply"));
+		await stored.ensureOnDisk();
+		await stored.flush();
+		const sessionId = stored.getSessionId();
+		// Release the writer, as a client process that created the session would have exited.
+		await stored.close();
+
+		const all = await harness.agent.listSessions({});
+		expect(all.sessions.map(session => session.sessionId)).toContain(sessionId);
+		const forCwdB = await harness.agent.listSessions({ cwd: harness.cwdB });
+		expect(forCwdB.sessions.map(session => session.sessionId)).not.toContain(sessionId);
+
+		await harness.agent.loadSession({ sessionId, cwd: harness.cwdA, mcpServers: [] });
+		const replayed = harness.updates.filter(
+			update => update.sessionId === sessionId && update.update.sessionUpdate === "user_message_chunk",
+		);
+		expect(replayed.length).toBeGreaterThan(0);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
