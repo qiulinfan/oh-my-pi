@@ -55,6 +55,11 @@ function pendingReplies(messaging: WaitMessaging): PendingReplies {
 	const replies: PendingReplies = { from: [], blocked: [], stopped: [] };
 	const since = registry.get(senderId)?.session?.runStartedAt ?? 0;
 	for (const { to, sentAt } of IrcBus.global().unansweredSends(senderId, since)) {
+		if (to.includes("@")) {
+			// Another session (`<agent>@<session>`): its turn state lives in another process.
+			replies.from.push(to);
+			continue;
+		}
 		const session = registry.get(to)?.session;
 		if (session && registry.awaits.blocksOn(to, senderId, sentAt)) replies.blocked.push(to);
 		else if (session?.isStreaming) replies.from.push(to);

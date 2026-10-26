@@ -30,6 +30,7 @@ import { MemoryProtocolHandler } from "./memory-protocol";
 import { MrProtocolHandler } from "./mr-protocol";
 import { OmpProtocolHandler } from "./omp-protocol";
 import { extractUriScheme, parseInternalUrl } from "./parse";
+import { PeerProtocolHandler } from "./peer-protocol";
 import { ProcProtocolHandler } from "./proc-protocol";
 import { RuleProtocolHandler } from "./rule-protocol";
 import { SecurityProtocolHandler } from "./security-protocol";
@@ -112,6 +113,7 @@ export class InternalUrlRouter {
 		this.register(new ArtifactProtocolHandler());
 		this.register(new LocalProtocolHandler());
 		this.register(new ProcProtocolHandler());
+		this.register(new PeerProtocolHandler());
 		this.register(new CfgProtocolHandler());
 		this.register(new SshProtocolHandler());
 		// Reserved OMP-owned security-analysis namespace; vendor adapters normalize into its store.

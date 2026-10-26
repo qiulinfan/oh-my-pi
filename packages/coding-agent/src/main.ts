@@ -97,6 +97,7 @@ import {
 import { ensureTheme, initTheme, stopThemeWatcher } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
+import { PeerHost } from "./peers/host";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
@@ -1787,6 +1788,8 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	// Cross-session messaging: the sessions this omp run hosts join ~/.omp/run/peers.
+	if (process.env.PI_PEERS !== "0" && !isBunTestRuntime()) PeerHost.enableGlobal();
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
 		// already initialized its cached theme synchronously for the first frame.

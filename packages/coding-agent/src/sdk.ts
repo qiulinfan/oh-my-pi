@@ -166,6 +166,7 @@ import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
+import { PeerHost, peerModeFor } from "./peers/host";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
@@ -5183,6 +5184,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
+		// Offer top-level sessions to other omp sessions on this machine (agent://Main@<session>);
+		// a no-op unless the omp CLI enabled it (see `main`).
+		const unregisterPeer =
+			agentKind === "main"
+				? PeerHost.global().register(session, resolvedAgentId, peerModeFor(resolvedAgentId))
+				: undefined;
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,
 		// invoked from the dispose wrapper AND registered as a postmortem so both
 		// explicit-dispose (SDK embedders that reuse the process across sessions) and
@@ -5234,6 +5241,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						}
 					}
 					unregisterUnlessParked();
+					unregisterPeer?.();
 					unsubscribeCredentialDisabled();
 					unbindSessionEffects?.();
 					restoreProviderToggles?.();

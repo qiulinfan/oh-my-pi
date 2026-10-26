@@ -203,6 +203,10 @@ export class IrcBridge {
 		// harness envelope it is rendered into or open a forged one, e.g. a parent
 		// steer. `details.message` keeps the raw body for the transcript card and inbox.
 		const envelopeBody = escapeHarnessTags(msg.body);
+		// A sender in another session is addressed `<agent>@<session>` (peers/host.ts); local
+		// agent ids never contain `@`. Its message gets a provenance line so the model weighs
+		// it as a peer's request rather than its user's.
+		const remote = msg.from.includes("@");
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -212,6 +216,7 @@ export class IrcBridge {
 				replyTo: msg.replyTo ?? "",
 				interrupting: streaming,
 				relayOnStop,
+				remote,
 			}),
 			display: true,
 			details: {

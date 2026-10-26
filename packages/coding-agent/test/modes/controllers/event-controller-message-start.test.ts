@@ -255,6 +255,19 @@ describe("EventController IRC expiry", () => {
 		expect(chatContainer.children).toHaveLength(1);
 	});
 
+	it("keeps a message from another session after the TTL", async () => {
+		vi.useFakeTimers();
+		const message = createIrcMessage(4);
+		message.details = { from: "Main@abcd1234", message: "Ready 4" };
+		const { ctx, chatContainer } = createIrcContext({ liveBlockAbove: true });
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "irc_message", message });
+		vi.advanceTimersByTime(60_000);
+
+		expect(chatContainer.children).toHaveLength(2);
+	});
+
 	it("clears pending IRC expiry timers on dispose", async () => {
 		vi.useFakeTimers();
 		const message = createIrcMessage(3);

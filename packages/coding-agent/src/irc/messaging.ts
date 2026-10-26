@@ -3,6 +3,7 @@ import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { Settings } from "../config/settings";
 import { IrcBus } from "./bus";
+import { PeerHost, parsePeerAddress } from "../peers/host";
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
@@ -41,6 +42,22 @@ export function messageResult(senderId: string, waited: IrcMessage): AgentToolRe
 	};
 }
 
+/**
+ * The session id peers address `senderId` by: the top-level session of its
+ * agent tree (a subagent's replies route through its root's process entry).
+ */
+function rootSessionId(registry: AgentRegistry, senderId: string): string | undefined {
+	let ref = registry.get(senderId);
+	const seen = new Set<string>();
+	while (ref?.parentId && !seen.has(ref.id)) {
+		seen.add(ref.id);
+		const parent = registry.get(ref.parentId);
+		if (!parent) break;
+		ref = parent;
+	}
+	return ref?.session?.sessionId;
+}
+
 /** Send a direct message or broadcast; delivery never waits for a reply. */
 export async function executeSend(
 	deps: { registry: AgentRegistry; senderId: string; sessionFileHint?: string | null },
@@ -54,6 +71,21 @@ export async function executeSend(
 		return coordinationErrorResult("A non-empty message is required.", { op: "send", from: senderId });
 	if (to === senderId)
 		return coordinationErrorResult("Cannot send a message to yourself.", { op: "send", from: senderId, to });
+	if (parsePeerAddress(to)) {
+		const sessionId = rootSessionId(registry, senderId);
+		if (!sessionId)
+			return coordinationErrorResult("This session cannot message other sessions.", {
+				op: "send",
+				from: senderId,
+				to,
+			});
+		const sent = await PeerHost.global().send(senderId, sessionId, to, message);
+		return {
+			content: [{ type: "text", text: sent.text }],
+			details: { op: "send", from: senderId, to: sent.canonical ?? to },
+			isError: sent.isError,
+		};
+	}
 	const isBroadcast = to === "all";
 	// Restore parked recipients only when needed; never delay delivery to a live peer.
 	if (!isBroadcast && sessionFileHint) {
