@@ -16,15 +16,27 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { $ } from "bun";
 import { listPeers } from "@oh-my-pi/pi-coding-agent/peers/registry";
+import {
+	isEmptySession,
+	listAllSessions,
+	listSessionsReadOnly,
+	type SessionInfo as StoredSession,
+} from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { TspDocument } from "@oh-my-pi/pi-tui/native/apply";
+import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import type { TspFrame, TspNode } from "@oh-my-pi/pi-wire";
 import index from "./index.html";
 import { SUPPORTED_KINDS } from "./src/kinds";
 
 const PORT = Number(process.env.OMP_GUI_PORT ?? 4317);
 const OMP_BIN = process.env.OMP_GUI_OMP ?? path.join(os.homedir(), ".local/bin/omp");
-const SESSION_DIR = process.env.OMP_GUI_SESSION_DIR ?? path.join(os.homedir(), ".omp/agent/sessions-omp-gui");
+/** No-project chats: each gets its own empty working directory here, and they share one session dir. */
+const CHATS_DIR = process.env.OMP_GUI_CHATS_DIR ?? path.join(os.homedir(), ".omp/chats");
+const CHAT_SESSION_DIR = path.join(getAgentDir(), "sessions-chats");
 const TOKEN = process.env.OMP_GUI_TOKEN ?? crypto.randomUUID().replaceAll("-", "");
 const ESC = "\x1b";
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -358,40 +370,99 @@ function authorized(url: URL, req: Request): boolean {
 	return token === TOKEN;
 }
 
-/** Recent sessions in the spike's session dir: header line plus the first user prompt. */
-async function recentSessions(): Promise<unknown[]> {
-	let names: string[] = [];
-	try {
-		names = (await fs.readdir(SESSION_DIR)).filter(name => name.endsWith(".jsonl"));
-	} catch {
-		return [];
-	}
-	names.sort().reverse();
-	const out = [];
-	for (const name of names.slice(0, 40)) {
+interface SavedSession {
+	id: string;
+	path: string;
+	cwd: string;
+	title: string;
+	prompt: string;
+	modified: string;
+}
+
+interface Project {
+	root: string;
+	name: string;
+	modified: string;
+	sessions: SavedSession[];
+}
+
+function saved(session: StoredSession): SavedSession {
+	const prompt = session.firstMessage === "(no messages)" ? "" : session.firstMessage;
+	return {
+		id: session.id,
+		path: session.path,
+		cwd: session.cwd,
+		title: session.title ?? "",
+		prompt: prompt.replace(/\s+/g, " ").slice(0, 160),
+		modified: session.modified.toISOString(),
+	};
+}
+
+function insideChats(dir: string): boolean {
+	return dir === CHATS_DIR || dir.startsWith(`${CHATS_DIR}${path.sep}`);
+}
+
+const projectRoots = new Map<string, string | null>();
+
+/** A session's project is its git checkout, or its own directory outside one; null once that directory is gone. */
+async function projectRoot(cwd: string): Promise<string | null> {
+	const cached = projectRoots.get(cwd);
+	if (cached !== undefined) return cached;
+	let root: string | null = null;
+	if ((await fs.stat(cwd).catch(() => null))?.isDirectory()) {
 		try {
-			const text = (await Bun.file(path.join(SESSION_DIR, name)).text()).slice(0, 200_000);
-			// Line 1 is a padded title slot rewritten in place, then the session header.
-			const lines = text.split("\n");
-			let header: { id?: string; cwd?: string; timestamp?: string } = {};
-			let prompt = "";
-			let title = "";
-			for (const line of lines.slice(0, 400)) {
-				if (!line) continue;
-				const entry = JSON.parse(line);
-				if (entry.type === "session") header = entry;
-				if (entry.type === "title" && typeof entry.title === "string") title = entry.title;
-				if (!prompt && entry.type === "message" && entry.message?.role === "user") {
-					const content = entry.message.content;
-					prompt =
-						typeof content === "string" ? content : (content?.find?.((c: any) => c.type === "text")?.text ?? "");
-				}
-				if (prompt && title) break;
-			}
-			out.push({ id: header.id, cwd: header.cwd, timestamp: header.timestamp, title, prompt: prompt.slice(0, 160) });
-		} catch {}
+			root = vcs.gitInfo(cwd)?.repoRoot ?? cwd;
+		} catch {
+			root = cwd;
+		}
 	}
-	return out;
+	projectRoots.set(cwd, root);
+	return root;
+}
+
+/** Projects from omp's own session store (every directory omp has run in, CLI included), newest first. */
+async function listProjects(): Promise<Project[]> {
+	const projects = new Map<string, Project>();
+	for (const session of await listAllSessions()) {
+		if (!session.cwd || insideChats(session.cwd) || isEmptySession(session)) continue;
+		const root = await projectRoot(session.cwd);
+		if (!root) continue;
+		let project = projects.get(root);
+		if (!project) {
+			project = { root, name: path.basename(root) || root, modified: "", sessions: [] };
+			projects.set(root, project);
+		}
+		project.sessions.push(saved(session));
+	}
+	for (const project of projects.values()) {
+		project.sessions.sort((a, b) => b.modified.localeCompare(a.modified));
+		project.sessions = project.sessions.slice(0, 20);
+		project.modified = project.sessions[0]?.modified ?? "";
+	}
+	return [...projects.values()].sort((a, b) => b.modified.localeCompare(a.modified));
+}
+
+async function listChats(): Promise<SavedSession[]> {
+	const sessions = await listSessionsReadOnly(CHAT_SESSION_DIR, new FileSessionStorage()).catch(() => []);
+	return sessions
+		.filter(session => !isEmptySession(session))
+		.map(saved)
+		.sort((a, b) => b.modified.localeCompare(a.modified))
+		.slice(0, 40);
+}
+
+function expandHome(dir: string): string {
+	return dir.replace(/^~(?=$|\/)/, os.homedir());
+}
+
+/** The macOS folder chooser, shown by this local server; null when the owner cancels. */
+async function chooseFolder(): Promise<string | null> {
+	const result =
+		await $`osascript -e ${"activate"} -e ${'POSIX path of (choose folder with prompt "Choose a project folder for omp")'}`
+			.quiet()
+			.nothrow();
+	if (result.exitCode !== 0) return null;
+	return result.text().trim().replace(/\/$/, "") || null;
 }
 
 Bun.serve<{ id: string }>({
@@ -412,16 +483,37 @@ Bun.serve<{ id: string }>({
 		}
 		if (url.pathname === "/api/sessions") {
 			const live = [...sessions.values()].map(session => session.info);
-			return Response.json({ live, recent: await recentSessions(), sessionDir: SESSION_DIR, home: os.homedir() });
+			const [projects, chats] = await Promise.all([listProjects(), listChats()]);
+			return Response.json({ live, projects, chats, chatsDir: CHATS_DIR, home: os.homedir() });
+		}
+		if (url.pathname === "/api/choose-folder" && req.method === "POST") {
+			return Response.json({ path: await chooseFolder() });
 		}
 		if (url.pathname === "/api/spawn" && req.method === "POST") {
-			const body = (await req.json()) as { cwd?: string; resume?: string; model?: string; prompt?: string };
-			const cwd = body.cwd?.replace(/^~(?=$|\/)/, os.homedir()) || os.homedir();
+			const body = (await req.json()) as {
+				project?: string;
+				resume?: { path: string; cwd: string };
+				model?: string;
+				prompt?: string;
+			};
+			const args: string[] = [];
+			let cwd: string;
+			if (body.resume) {
+				cwd = body.resume.cwd;
+				args.push("--resume", body.resume.path);
+			} else if (body.project) {
+				cwd = expandHome(body.project);
+			} else {
+				const day = new Date().toISOString().slice(0, 10);
+				cwd = path.join(CHATS_DIR, `${day}-${crypto.randomUUID().slice(0, 8)}`);
+				await fs.mkdir(cwd, { recursive: true });
+			}
 			const stat = await fs.stat(cwd).catch(() => null);
 			if (!stat?.isDirectory()) return Response.json({ error: `not a directory: ${cwd}` }, { status: 400 });
-			await fs.mkdir(SESSION_DIR, { recursive: true });
-			const args = ["--session-dir", SESSION_DIR];
-			if (body.resume) args.push("--resume", body.resume);
+			if (insideChats(cwd)) {
+				await fs.mkdir(CHAT_SESSION_DIR, { recursive: true });
+				args.push("--session-dir", CHAT_SESSION_DIR);
+			}
 			if (body.model) args.push("--model", body.model);
 			// The first message goes in as omp's positional prompt, so the session starts working on it.
 			if (body.prompt?.trim() && !body.resume) args.push("--", body.prompt.trim());
