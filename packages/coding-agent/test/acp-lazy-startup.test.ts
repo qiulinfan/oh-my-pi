@@ -105,6 +105,10 @@ class LazyFakeSession {
 		return [TEST_MODEL];
 	}
 
+	isFastModeEnabled(): boolean {
+		return false;
+	}
+
 	getAvailableThinkingLevels(): ReadonlyArray<string> {
 		return ["low", "medium", "high"];
 	}
