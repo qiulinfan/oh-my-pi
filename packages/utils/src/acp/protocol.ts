@@ -148,6 +148,8 @@ export interface ClientCapabilities {
 	terminal?: boolean;
 	auth?: { terminal?: boolean };
 	elicitation?: { form?: Record<string, unknown>; url?: Record<string, unknown> };
+	/** `configOptions.boolean` (`{}`) admits `type: "boolean"` config options. */
+	session?: { configOptions?: { boolean?: Record<string, unknown> | null } | null } | null;
 	_meta?: Record<string, unknown>;
 }
 /** Implementation identity sent during initialization. */

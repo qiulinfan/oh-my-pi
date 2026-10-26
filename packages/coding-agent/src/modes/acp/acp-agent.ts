@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, type Model, realizesPriorityServiceTier } from "@oh-my-pi/pi-ai";
 import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import {
 	type Agent,
@@ -106,6 +106,9 @@ const REFINE_OPTION = "Refine plan";
 const MODE_CONFIG_ID = "mode";
 const MODEL_CONFIG_ID = "model";
 const THINKING_CONFIG_ID = "thinking";
+const FAST_CONFIG_ID = "fast";
+const FAST_ON = "on";
+const FAST_OFF = "off";
 const THINKING_OFF = "off";
 const SESSION_PAGE_SIZE = 50;
 const SPEECH_MODELS_LIST_METHOD = "speech.models.list";
@@ -964,6 +967,11 @@ export class AcpAgent implements Agent {
 
 	async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
 		const record = this.#getSessionRecord(params.sessionId);
+		if (params.configId === FAST_CONFIG_ID) {
+			this.#setFastModeByValue(record.session, params.value);
+			await this.#pushConfigOptionUpdate(record);
+			return { configOptions: this.#buildConfigOptions(record.session) };
+		}
 		if (typeof params.value === "boolean") {
 			throw new Error(`Unsupported boolean ACP config option: ${params.configId}`);
 		}
@@ -2179,6 +2187,31 @@ export class AcpAgent implements Agent {
 			),
 			options: this.#buildThinkingOptions(session),
 		});
+
+		// Only models that actually realize the priority tier on the wire get the
+		// switch; elsewhere `/fast` would be a silent no-op.
+		if (currentModel && realizesPriorityServiceTier("priority", currentModel)) {
+			const enabled = session.isFastModeEnabled();
+			const fast = {
+				id: FAST_CONFIG_ID,
+				name: "Fast",
+				description: "Priority service tier (Anthropic fast mode) at a higher per-token price",
+				category: "model_config",
+			};
+			configOptions.push(
+				this.#clientCapabilities?.session?.configOptions?.boolean != null
+					? { ...fast, type: "boolean", currentValue: enabled }
+					: {
+							...fast,
+							type: "select",
+							currentValue: enabled ? FAST_ON : FAST_OFF,
+							options: [
+								{ value: FAST_OFF, name: "Off" },
+								{ value: FAST_ON, name: "On" },
+							],
+						},
+			);
+		}
 		return configOptions;
 	}
 
@@ -2218,6 +2251,15 @@ export class AcpAgent implements Agent {
 			throw new Error(`Unknown ACP thinking level: ${value}`);
 		}
 		session.setThinkingLevel(thinkingLevel);
+	}
+
+	#setFastModeByValue(session: AgentSession, value: string | boolean): void {
+		if (value !== true && value !== false && value !== FAST_ON && value !== FAST_OFF) {
+			throw new Error(`Unknown ACP fast mode value: ${String(value)}`);
+		}
+		if (!session.setFastMode(value === true || value === FAST_ON)) {
+			throw new Error("Fast mode is unavailable for the current model.");
+		}
 	}
 
 	#toModelId(model: Model): string {

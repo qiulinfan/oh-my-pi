@@ -1269,6 +1269,95 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("exposes fast mode as a boolean switch that drives the Anthropic priority tier", async () => {
+		// Zed renders `type: "boolean"` options as a switch only when it
+		// advertised `session.configOptions.boolean`; flipping it must reach the
+		// session's `/fast` state and come back in one config_option_update.
+		const harness = await createHarness({ clientCapabilities: { session: { configOptions: { boolean: {} } } } });
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		await advanceBootstrapGuard();
+		expect(created.configOptions?.find(option => option.id === "fast")).toMatchObject({
+			type: "boolean",
+			currentValue: false,
+		});
+
+		const updatesBefore = harness.updates.length;
+		const response = await harness.agent.setSessionConfigOption({
+			sessionId: created.sessionId,
+			configId: "fast",
+			value: true,
+		});
+
+		expect(session.isFastModeEnabled()).toBe(true);
+		expect(response.configOptions.find(option => option.id === "fast")).toMatchObject({ currentValue: true });
+		const configUpdates = harness.updates
+			.slice(updatesBefore)
+			.filter(
+				notification =>
+					notification.sessionId === created.sessionId &&
+					notification.update.sessionUpdate === "config_option_update",
+			);
+		expect(configUpdates.length).toBe(1);
+		expectAcpNotifications(configUpdates);
+
+		vi.useRealTimers();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("falls back to an off/on select for clients without boolean config options", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		expect(created.configOptions?.find(option => option.id === "fast")).toMatchObject({
+			type: "select",
+			currentValue: "off",
+		});
+
+		const response = await harness.agent.setSessionConfigOption({
+			sessionId: created.sessionId,
+			configId: "fast",
+			value: "on",
+		});
+
+		expect(session.isFastModeEnabled()).toBe(true);
+		expect(response.configOptions.find(option => option.id === "fast")).toMatchObject({ currentValue: "on" });
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("pushes the fast switch state after /fast changes it", async () => {
+		// `/fast` changes only the service tier (no lifetime event), so the
+		// command itself must notify, or the client switch goes stale.
+		const harness = await createHarness({ clientCapabilities: { session: { configOptions: { boolean: {} } } } });
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		await advanceBootstrapGuard();
+
+		const updatesBefore = harness.updates.length;
+		await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/fast on" }] });
+
+		const configUpdates = harness.updates
+			.slice(updatesBefore)
+			.filter(
+				notification =>
+					notification.sessionId === created.sessionId &&
+					notification.update.sessionUpdate === "config_option_update",
+			);
+		expect(configUpdates.length).toBe(1);
+		const update = configUpdates[0]!.update;
+		if (update.sessionUpdate !== "config_option_update") {
+			throw new Error("expected config_option_update");
+		}
+		expect(update.configOptions.find(option => option.id === "fast")).toMatchObject({ currentValue: true });
+
+		vi.useRealTimers();
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("lists role selectors for ACP mobile voice settings", async () => {
 		const harness = await createHarness();
 

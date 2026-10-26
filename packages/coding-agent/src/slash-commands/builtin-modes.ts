@@ -563,8 +563,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => `Fast: ${formatFastModeStatus(runtime.ctx.session)}`,
 		handle: async (command, runtime) => {
-			const message = runFastCommand(command.args.trim().toLowerCase(), runtime.session);
+			const arg = command.args.trim().toLowerCase();
+			const message = runFastCommand(arg, runtime.session);
 			if (message === undefined) return usage(FAST_USAGE, runtime);
+			// ACP clients render fast mode as a config option; keep it in sync.
+			if (arg !== "status") await runtime.notifyConfigChanged?.();
 			await runtime.output(message);
 			return commandConsumed();
 		},
