@@ -663,13 +663,34 @@ kbd {
 	background: var(--active);
 	color: var(--fg);
 }
+.model-picker {
+	flex: 1;
+}
+.picker-search {
+	width: 100%;
+	box-sizing: border-box;
+	margin-bottom: 4px;
+	padding: 6px 8px;
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	outline: none;
+	background: var(--sunken);
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+}
+.picker-search:focus {
+	border-color: var(--line-3);
+}
+.picker-group {
+	padding: 8px 8px 3px;
+	font-size: 11.5px;
+	color: var(--dim);
+}
 .picker-sep {
 	height: 1px;
 	margin: 4px 6px;
 	background: var(--line);
-}
-.field-chip.model {
-	flex: 1;
 }
 .send-btn {
 	width: 32px;
