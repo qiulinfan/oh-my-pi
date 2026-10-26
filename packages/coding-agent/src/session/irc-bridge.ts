@@ -3,6 +3,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
+import { isPeerRequest } from "../peers/host";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "./agent-session-events";
 import { escapeHarnessTags } from "./harness-tags";
@@ -18,12 +19,16 @@ export interface IrcBridgeHost {
 	planModeEnabled(): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	wakeForIrc(records: AgentMessage[]): void;
+	/** Another session's request reached the conversation by a path that emits no `message_end` for it. */
+	notePeerRequest(): void;
 }
 
 /** Owns incoming IRC queues and the session's non-interrupting aside queue. */
 export class IrcBridge {
 	/** Tracks parent IRC steers by object identity without trusting prompt text or publication on receipt. */
 	readonly #parentSteers = new WeakSet<AgentMessage>();
+	/** Records and steers carrying another omp session's request ({@link isPeerRequest}), by identity. */
+	readonly #peerRequests = new WeakSet<AgentMessage>();
 
 	readonly #host: IrcBridgeHost;
 	#interrupts: AgentMessage[] = [];
@@ -42,6 +47,11 @@ export class IrcBridge {
 	/** Identifies a consumed user-role steer as an actual parent IRC request, not another agent-authored steer. */
 	isParentSteer(message: AgentMessage): boolean {
 		return this.#parentSteers.has(message);
+	}
+
+	/** Whether `message`, as it enters the conversation, carries another omp session's request. */
+	carriesPeerRequest(message: AgentMessage): boolean {
+		return this.#peerRequests.has(message);
 	}
 
 	/** Whether an incoming peer message can interrupt a wait. */
@@ -171,6 +181,8 @@ export class IrcBridge {
 					queue.remaining.push(record);
 					continue;
 				}
+				// Read through a tool result rather than injected, so no `message_end` carries it.
+				if (this.#peerRequests.has(record)) this.#host.notePeerRequest();
 				messages.push({
 					id,
 					from,
@@ -203,6 +215,13 @@ export class IrcBridge {
 		// harness envelope it is rendered into or open a forged one, e.g. a parent
 		// steer. `details.message` keeps the raw body for the transcript card and inbox.
 		const envelopeBody = escapeHarnessTags(msg.body);
+		// A sender in another session is addressed `<agent>@<session>` (peers/host.ts); local
+		// agent ids never contain `@`. Its message gets a provenance line so the model weighs
+		// it as a peer's request rather than its user's.
+		const remote = msg.from.includes("@");
+		// That request, or one a local agent passes on, holds the turn's tool approval
+		// (`AgentSession.peerTurn`) once the record or steer below enters the conversation.
+		const peerRequest = isPeerRequest(msg);
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:incoming",
@@ -212,6 +231,7 @@ export class IrcBridge {
 				replyTo: msg.replyTo ?? "",
 				interrupting: streaming,
 				relayOnStop,
+				remote,
 			}),
 			display: true,
 			details: {
@@ -226,6 +246,7 @@ export class IrcBridge {
 			attribution: "agent",
 			timestamp: msg.ts,
 		};
+		if (peerRequest) this.#peerRequests.add(record);
 		void this.#host.emitSessionEvent({ type: "irc_message", message: record });
 		if (streaming) {
 			if (fromParent) {
@@ -238,6 +259,7 @@ export class IrcBridge {
 				};
 				// A broadcast leg asks no one in particular: consuming it never makes the turn the parent's.
 				if (msg.broadcast !== true) this.#parentSteers.add(steer);
+				if (peerRequest) this.#peerRequests.add(steer);
 				this.#host.agent.steer(steer);
 			} else {
 				this.#interrupts.push(record);
@@ -245,6 +267,7 @@ export class IrcBridge {
 			return "injected";
 		}
 		if (this.#host.planModeEnabled()) {
+			if (peerRequest) this.#host.notePeerRequest();
 			this.#host.agent.appendMessage(record);
 			this.#host.sessionManager.appendCustomMessageEntry(
 				record.customType,

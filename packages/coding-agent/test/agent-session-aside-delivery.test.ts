@@ -958,6 +958,7 @@ describe("AgentSession aside delivery", () => {
 			planModeEnabled: () => planMode,
 			emitSessionEvent: async () => {},
 			wakeForIrc: records => wakeRecords.push(...records),
+			notePeerRequest: () => {},
 		};
 		const registry = AgentRegistry.global();
 		const recipient = "ParentMarkerRecipient";
@@ -1033,6 +1034,7 @@ describe("AgentSession aside delivery", () => {
 			planModeEnabled: () => false,
 			emitSessionEvent: async () => {},
 			wakeForIrc: () => {},
+			notePeerRequest: () => {},
 		};
 		const irc = new IrcBridge(host);
 
@@ -1075,6 +1077,7 @@ describe("AgentSession aside delivery", () => {
 			planModeEnabled: () => false,
 			emitSessionEvent: async () => {},
 			wakeForIrc: () => {},
+			notePeerRequest: () => {},
 		};
 		const irc = new IrcBridge(host);
 		const wake: AgentMessage = {
@@ -1109,6 +1112,7 @@ describe("AgentSession aside delivery", () => {
 			planModeEnabled: () => false,
 			emitSessionEvent: async () => {},
 			wakeForIrc: () => {},
+			notePeerRequest: () => {},
 		};
 		const irc = new IrcBridge(host);
 		const wake: AgentMessage = {

@@ -150,6 +150,8 @@ export interface ClientCapabilities {
 	elicitation?: { form?: Record<string, unknown>; url?: Record<string, unknown> };
 	/** `configOptions.boolean` (`{}`) admits `type: "boolean"` config options. */
 	session?: { configOptions?: { boolean?: Record<string, unknown> | null } | null } | null;
+	/** Draft subagents RFD: `{}` asks for each subagent as a child session (`subagent_update`). */
+	subagents?: Record<string, unknown> | null;
 	_meta?: Record<string, unknown>;
 }
 /** Implementation identity sent during initialization. */

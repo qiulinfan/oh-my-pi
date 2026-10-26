@@ -183,6 +183,18 @@ describe("tools.approvalMode setting", () => {
 		).rejects.toThrow('Tool "bash" is blocked by tool policy.\nReason: Blocked by bash pattern: rm -rf *');
 	});
 
+	it.each([
+		{ grant: "yolo mode", context: { settings: approvalSettings({ "tools.approvalMode": "yolo" }) } },
+		{ grant: "--auto-approve", context: { settings: approvalSettings(), autoApprove: true } },
+	])("a turn acting on another session's request asks before exec-tier tools despite $grant", async ({ context }) => {
+		await expect(
+			bashTool().execute("peer-turn", { command: "echo peer" }, undefined, undefined, {
+				...context,
+				peerTurn: true,
+			} as AgentToolContext),
+		).rejects.toThrow(/requires approval but no interactive UI available/);
+	});
+
 	it("CLI --auto-approve forces yolo mode for non-overriding tool calls", async () => {
 		const settings = approvalSettings({ "tools.approvalMode": "always-ask" });
 		const result = await bashTool().execute("cli-override", { command: "echo override" }, undefined, undefined, {

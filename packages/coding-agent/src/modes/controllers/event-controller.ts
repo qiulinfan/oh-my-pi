@@ -37,6 +37,7 @@ import type { InteractiveModeContext } from "../../modes/types";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
 import type { AgentSessionEvent } from "../../session/agent-session";
+import type { CustomMessage } from "../../session/messages";
 import {
 	isSilentAbort,
 	isUserInvokedSkillPrompt,
@@ -1294,7 +1295,11 @@ export class EventController {
 		this.#renderedCustomMessages.add(signature);
 		this.#resetReadGroup();
 		const components = this.ctx.addMessageToChat(event.message);
-		this.#scheduleIrcExpiry(signature, components);
+		// A message from another session (`<agent>@<session>`) is why the turn that follows exists,
+		// so it stays; only this session's own agent chatter is transient.
+		const from = (event.message as CustomMessage<{ from?: string }>).details?.from;
+		if (!(event.message.customType === "irc:incoming" && from?.includes("@")))
+			this.#scheduleIrcExpiry(signature, components);
 		this.#enforceIrcCardCap(signature);
 		this.ctx.ui.requestRender();
 	}

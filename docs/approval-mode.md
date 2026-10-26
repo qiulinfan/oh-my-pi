@@ -26,6 +26,8 @@ Configure with `tools.approvalMode`:
 
 `--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies and explicit tool prompt policies still apply.
 
+A session acting on another omp session's request runs in `write` mode at most, whatever the configured mode or flags, from the moment that session's message (or one a local agent passes on from such a turn) enters the conversation until you send your next message: it may read and write, and asks before every `exec` call. Messaging another session (`agent://<id>@<session>`) is a `write`; messaging an agent in the same process stays a `read`.
+
 ### Ask and remember (`always-ask-cached`)
 
 Ask and remember prompts like `always-ask`, and also before a tool reads a file it has not been granted. Its prompts can remember what the call touched:

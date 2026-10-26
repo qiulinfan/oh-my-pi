@@ -48,6 +48,8 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 export type ApprovalContextSource = {
 	autoApprove?: boolean;
 	settings?: Settings;
+	/** The session acts on another omp session's request (`AgentSession.peerTurn`). */
+	peerTurn?: boolean;
 };
 
 export interface ResolvedExecuteTimeApproval {
@@ -83,7 +85,8 @@ function asPolicyMap(value: unknown): Record<string, unknown> {
  * Missing context (or context with no settings and no `--auto-approve`) is
  * fail-closed: `always-ask` with an empty policy map — no user grant. When
  * settings are present, the configured `tools.approvalMode` is used (schema
- * default remains `yolo`). `--auto-approve` still forces `yolo`.
+ * default remains `yolo`). `--auto-approve` still forces `yolo`. A peer turn
+ * (`context.peerTurn`) is held to `write`, whatever the mode or flag.
  *
  * Shared by `ExtensionToolWrapper.execute`, `refuseByWritePolicy`,
  * `mcpApprovalPreflight`, and eval prelude host calls so those sites cannot
@@ -92,6 +95,14 @@ function asPolicyMap(value: unknown): Record<string, unknown> {
  * configured (schema-default `yolo`) grant.
  */
 export function resolveApprovalFromContext(context?: ApprovalContextSource | null): ResolvedExecuteTimeApproval {
+	const resolved = resolveConfiguredApproval(context);
+	// Another session's request may get work written, never commands run without the user:
+	// a peer turn asks for every exec-tier call, `--auto-approve` included.
+	if (context?.peerTurn === true && resolved.approvalMode === "yolo") return { ...resolved, approvalMode: "write" };
+	return resolved;
+}
+
+function resolveConfiguredApproval(context?: ApprovalContextSource | null): ResolvedExecuteTimeApproval {
 	if (context?.autoApprove === true) {
 		return {
 			approvalMode: "yolo",

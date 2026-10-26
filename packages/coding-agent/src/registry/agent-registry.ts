@@ -355,6 +355,8 @@ export class AgentRegistry {
 			ref.sessionFile = sessionFile;
 		}
 		ref.lastActivity = Date.now();
+		// Observers that follow a live agent (ACP child sessions) subscribe once it has a session.
+		this.#emit({ type: "metadata_changed", ref });
 		return true;
 	}
 

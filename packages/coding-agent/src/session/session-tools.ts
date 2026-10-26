@@ -946,6 +946,7 @@ export class SessionTools {
 						const { approvalMode, userPolicies } = resolveApprovalFromContext({
 							autoApprove: this.#autoApprove,
 							settings: this.#host.settings,
+							peerTurn: ctx?.peerTurn,
 						});
 						const mode = approvalMode === "yolo" && !explicitAutoApprove ? "always-ask" : approvalMode;
 						const resolved = resolveApproval(

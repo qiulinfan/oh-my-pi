@@ -93,6 +93,19 @@ export class IrcBus {
 		return receipt;
 	}
 
+	/**
+	 * Record a direct message `from` sent to another session (`to` is the
+	 * canonical `<agent>@<session>` address its replies come from), so `wait`
+	 * counts the reply as owed. The delivery itself went through the peer
+	 * registry, not this bus.
+	 */
+	recordRemoteSend(from: string, to: string): void {
+		const message = { from, to, ts: Date.now() } as IrcMessage;
+		const mark: SendMark = { ts: message.ts, seq: ++this.#sendSeq };
+		this.#record(this.#lastSent, message, mark);
+		this.#record(this.#lastDirect, message, mark);
+	}
+
 	#record(table: Map<string, Map<string, SendMark>>, message: IrcMessage, mark: SendMark): void {
 		let sent = table.get(message.from);
 		if (!sent) {

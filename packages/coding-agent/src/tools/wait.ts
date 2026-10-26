@@ -13,6 +13,7 @@ import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
 import { buildJobResult, snapshotJobs, undeliveredJobs } from "../async/job-control";
 import { hasLiveOwnedService, listServicesTolerant, waitForOwnedServiceCompletion } from "../launch/services";
 import { drainPendingInbox, messageResult } from "../irc/messaging";
+import { isPeerRequest } from "../peers/host";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
@@ -27,6 +28,12 @@ const PROGRESS_INTERVAL_MS = 500;
 interface WaitMessaging {
 	registry: AgentRegistry;
 	senderId: string;
+}
+
+/** The result for a message `wait` consumed: another session's request read this way holds the reader's approval too. */
+function received(messaging: WaitMessaging, message: IrcMessage): AgentToolResult<CoordinationDetails> {
+	if (isPeerRequest(message)) messaging.registry.get(messaging.senderId)?.session?.notePeerRequest();
+	return messageResult(messaging.senderId, message);
 }
 
 function takeQueuedMessage(messaging: WaitMessaging | undefined): IrcMessage | undefined {
@@ -55,6 +62,11 @@ function pendingReplies(messaging: WaitMessaging): PendingReplies {
 	const replies: PendingReplies = { from: [], blocked: [], stopped: [] };
 	const since = registry.get(senderId)?.session?.runStartedAt ?? 0;
 	for (const { to, sentAt } of IrcBus.global().unansweredSends(senderId, since)) {
+		if (to.includes("@")) {
+			// Another session (`<agent>@<session>`): its turn state lives in another process.
+			replies.from.push(to);
+			continue;
+		}
 		const session = registry.get(to)?.session;
 		if (session && registry.awaits.blocksOn(to, senderId, sentAt)) replies.blocked.push(to);
 		else if (session?.isStreaming) replies.from.push(to);
@@ -114,7 +126,7 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 		const manager = this.session.asyncJobManager;
 
 		const pending = takeQueuedMessage(messaging);
-		if (pending && messaging) return messageResult(messaging.senderId, pending);
+		if (pending && messaging) return received(messaging, pending);
 		// Refreshes owned-service tracking only; jobs are in-process, so a hung
 		// broker must not turn every wait into an error.
 		if (cfgLaunchEnabled.get(this.session.settings)) {
@@ -127,7 +139,7 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 				if (signal?.reason !== TOOL_INTERRUPT_ABORT_REASON) throw error;
 			}
 			const queued = takeQueuedMessage(messaging);
-			if (queued && messaging) return messageResult(messaging.senderId, queued);
+			if (queued && messaging) return received(messaging, queued);
 		}
 		const jobs = manager?.getRunningJobs({ ownerId: senderId }) ?? [];
 		// An accepted completion whose delivery has not reached the transcript
@@ -254,7 +266,7 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 			// A dequeued message wins a photo-finish with a job: the job remains
 			// deliverable, whereas a lost message cannot be recovered from the bus.
 			const message = await busLeg;
-			if (message && messaging) return messageResult(messaging.senderId, message);
+			if (message && messaging) return received(messaging, message);
 			if (signal?.aborted) {
 				// Steering, a peer IRC, or a completion notice cut the wait short:
 				// the designed wake path, so the message injects after a normal
