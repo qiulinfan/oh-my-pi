@@ -1,0 +1,26 @@
+{
+	"name": "@oh-my-pi/gui-spike",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Exploration spike: a browser GUI that hosts omp sessions over the Tern Surface Protocol",
+	"type": "module",
+	"scripts": {
+		"start": "bun server.ts"
+	},
+	"dependencies": {
+		"@oh-my-pi/collab-web": "workspace:*",
+		"@oh-my-pi/pi-coding-agent": "workspace:*",
+		"@oh-my-pi/pi-tui": "workspace:*",
+		"@oh-my-pi/pi-utils": "workspace:*",
+		"@oh-my-pi/pi-wire": "workspace:*",
+		"katex": "catalog:",
+		"lucide-react": "catalog:",
+		"react": "catalog:",
+		"react-dom": "catalog:"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:"
+	}
+}

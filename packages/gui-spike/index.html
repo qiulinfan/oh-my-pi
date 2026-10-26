@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>omp</title>
+		<script>
+			// Resolve the theme before first paint (the app keeps it current afterwards).
+			try {
+				const choice = localStorage.getItem("omp-gui.theme") ?? "system";
+				const dark =
+					choice === "dark" || (choice === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+				document.documentElement.dataset.theme = dark ? "dark" : "light";
+				document.documentElement.dataset.prose = localStorage.getItem("omp-gui.prose") ?? "sans";
+			} catch {}
+		</script>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./src/main.tsx"></script>
+	</body>
+</html>
