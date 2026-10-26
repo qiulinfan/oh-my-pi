@@ -10,6 +10,7 @@
  * sender's qualified address, so it can never pass for the recipient's parent
  * (parent checks compare bare ids) and the reply goes back the same way.
  */
+import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { IrcBus } from "../irc/bus";
 import type { AgentSession } from "../session/agent-session";
 import {
@@ -64,6 +65,14 @@ export function parsePeerAddress(to: string): { agent: string; session: string }
 	const at = to.lastIndexOf("@");
 	if (at <= 0 || at === to.length - 1) return null;
 	return { agent: to.slice(0, at), session: to.slice(at + 1) };
+}
+
+/**
+ * Whether `message` carries another omp session's request: it comes from one
+ * (local agent ids never contain `@`), or a local agent passed it on.
+ */
+export function isPeerRequest(message: Pick<IrcMessage, "from" | "peerRequest">): boolean {
+	return message.from.includes("@") || message.peerRequest === true;
 }
 
 export class PeerHost {

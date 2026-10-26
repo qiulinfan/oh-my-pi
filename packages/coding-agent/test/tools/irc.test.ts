@@ -123,6 +123,26 @@ describe("IRC", () => {
 			expect(bus.take("0-Sub")).toBeUndefined();
 		});
 
+		it("passes another session's request on with what a turn acting on it sends", async () => {
+			// A local agent messaged from such a turn must not do for the peer what the turn itself may not.
+			const sender = { peerTurn: true };
+			registry.register({
+				id: "Main",
+				displayName: "main",
+				kind: "main",
+				session: sender as unknown as AgentSession,
+			});
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
+			await executeSend({ registry, senderId: "Main" }, { to: "0-Sub", message: "run it" });
+			sender.peerTurn = false;
+			await executeSend({ registry, senderId: "Main" }, { to: "0-Sub", message: "status?" });
+			expect(sub.delivered.map(msg => [msg.body, msg.peerRequest === true])).toEqual([
+				["run it", true],
+				["status?", false],
+			]);
+		});
+
 		it("relays only subagent-to-subagent traffic to the main UI", async () => {
 			const main = makeFakeSession();
 			registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });

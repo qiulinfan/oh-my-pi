@@ -95,11 +95,19 @@ export async function executeSend(
 
 	const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
 	const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
+	// A turn acting on another session's request passes it on with what it sends.
+	const peerRequest = registry.get(senderId)?.session?.peerTurn === true;
 	const bus = IrcBus.global();
 	const receipts = await Promise.all(
 		targets.map(target =>
 			bus.send(
-				{ from: senderId, to: target, body: message, ...(isBroadcast ? { broadcast: true } : {}) },
+				{
+					from: senderId,
+					to: target,
+					body: message,
+					...(isBroadcast ? { broadcast: true } : {}),
+					...(peerRequest ? { peerRequest } : {}),
+				},
 				{ suppressRelay },
 			),
 		),

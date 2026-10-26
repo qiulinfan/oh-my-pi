@@ -3527,6 +3527,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			settings,
 			localProtocolOptions,
 			autoApprove: options.autoApprove ?? false,
+			peerTurn: hasSession && session.peerTurn,
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext, trackUserWait);
 		toolSession.getToolContext = () => toolContextStore.getContext();

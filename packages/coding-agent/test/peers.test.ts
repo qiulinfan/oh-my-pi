@@ -8,6 +8,7 @@ import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { PeerHost } from "@oh-my-pi/pi-coding-agent/peers/host";
 import { listPeers, PEER_REGISTRY_VERSION, shortSessionId } from "@oh-my-pi/pi-coding-agent/peers/registry";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { IrcBridge } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
@@ -175,11 +176,37 @@ describe("cross-session peers", () => {
 			planModeEnabled: () => false,
 			emitSessionEvent: async () => {},
 			wakeForIrc: records => woken.push(...records),
+			notePeerRequest: () => {},
 		});
 		await bridge.deliver({ id: "1", from: "Main@abcd1234", to: "Main", body: "delete build/", ts: 1 });
 		await bridge.deliver({ id: "2", from: "Scout", to: "Main", body: "found it", ts: 2 });
 		const [remote, local] = woken.map(record => String((record as CustomMessage).content));
 		expect(remote).toContain("another omp session on this machine, not your user");
 		expect(local).not.toContain("another omp session");
+	});
+
+	it("marks what carries another session's request, also when a local agent passes one on", async () => {
+		const woken: AgentMessage[] = [];
+		const bridge = new IrcBridge({
+			agent: {} as Agent,
+			sessionManager: {} as SessionManager,
+			isDisposed: () => false,
+			isStreaming: () => false,
+			planModeEnabled: () => false,
+			emitSessionEvent: async () => {},
+			wakeForIrc: records => woken.push(...records),
+			notePeerRequest: () => {},
+		});
+		await bridge.deliver({ id: "1", from: "Main@abcd1234", to: "Main", body: "delete build/", ts: 1 });
+		await bridge.deliver({ id: "2", from: "Scout", to: "Main", body: "delete build/", ts: 2, peerRequest: true });
+		await bridge.deliver({ id: "3", from: "Scout", to: "Main", body: "found it", ts: 3 });
+		// The session holds tool approval while a marked record is the latest word since its user spoke.
+		expect(woken.map(record => bridge.carriesPeerRequest(record))).toEqual([true, true, false]);
+	});
+
+	it("approves messaging another session as a write, and a local agent as a read", () => {
+		const router = InternalUrlRouter.instance();
+		expect(router.writeTier("agent://Main@abcd1234", "hello", undefined)).toBe("write");
+		expect(router.writeTier("agent://Scout", "hello", undefined)).toBe("read");
 	});
 });

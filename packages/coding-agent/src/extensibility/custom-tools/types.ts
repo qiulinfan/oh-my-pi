@@ -106,6 +106,8 @@ export interface CustomToolContext {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Whether to auto-approve all destructive tool operations (--auto-approve CLI flag) */
 	autoApprove?: boolean;
+	/** The session acts on another omp session's request (`AgentSession.peerTurn`); approval holds it to `write`. */
+	peerTurn?: boolean;
 }
 
 /** Session event passed to onSession callback */

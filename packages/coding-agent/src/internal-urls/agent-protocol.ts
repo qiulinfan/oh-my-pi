@@ -26,6 +26,7 @@ import { formatDuration, isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { executeSend, isIrcEnabled } from "../irc/messaging";
+import { parsePeerAddress } from "../peers/host";
 import agentPromptDoc from "../prompts/internal-urls/agent.md" with { type: "text" };
 import agentProgressTemplate from "../prompts/tools/agent-url-progress.md" with { type: "text" };
 import agentSupersededTemplate from "../prompts/tools/agent-url-superseded.md" with { type: "text" };
@@ -146,7 +147,14 @@ export class AgentProtocolHandler implements ProtocolHandler {
 		selectors: "lines",
 		immutable: true,
 		linkable: true,
-		write: { via: "handler", payload: "verbatim", scope: "coordination", tier: () => "read" },
+		// Messaging an agent in this process is coordination; messaging another session
+		// (`agent://<id>@<session>`) acts outside it, so it is written, not read.
+		write: {
+			via: "handler",
+			payload: "verbatim",
+			scope: "coordination",
+			tier: url => (parsePeerAddress(url.rawHost || url.hostname) ? "write" : "read"),
+		},
 	};
 
 	promptDoc(): string {

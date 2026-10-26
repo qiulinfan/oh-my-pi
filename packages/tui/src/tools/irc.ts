@@ -27,6 +27,12 @@ export interface IrcMessage {
 	 * the broadcaster, mostly to say the message was not for it.
 	 */
 	broadcast?: boolean;
+	/**
+	 * Sent by a local agent while its turn acted on a message from another omp
+	 * session (`AgentSession.peerTurn`): the recipient then acts on that
+	 * session's request too, and its tool approval is held the same way.
+	 */
+	peerRequest?: boolean;
 }
 
 /** Delivery outcome for one peer recipient. */

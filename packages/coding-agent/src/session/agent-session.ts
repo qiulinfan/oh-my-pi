@@ -394,6 +394,7 @@ import {
 	isUserAuthoredMessage,
 	isUserInterruptAbort,
 	isUserInvokedSkillPrompt,
+	isUserTurnInitiator,
 	logProviderTurnError,
 	normalizeCustomMessagePayload,
 	operatorTitleText,
@@ -932,6 +933,8 @@ export class AgentSession implements SettingsScope {
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
+	/** See {@link peerTurn}. */
+	#peerTurn = false;
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
@@ -1854,6 +1857,7 @@ export class AgentSession implements SettingsScope {
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			wakeForIrc: records => this.#wakeForIrc(records),
+			notePeerRequest: () => this.notePeerRequest(),
 		};
 		this.#irc = new IrcBridge(ircHost);
 		const prewalkHost: PrewalkCoordinatorHost = {
@@ -4179,6 +4183,17 @@ export class AgentSession implements SettingsScope {
 		if (event.type === "message_end" && event.message.role === "toolResult") {
 			this.#todo.onToolResult(event.message.toolName, event.message.isError);
 		}
+		// Whose request the run acts on, also before any await: the next tool call's
+		// approval reads it. A peer's request holds it until the user speaks again.
+		if (event.type === "message_end") {
+			const message = event.message;
+			if (this.#irc.carriesPeerRequest(message)) this.#peerTurn = true;
+			else if (
+				(message.role === "user" && message.attribution !== "agent") ||
+				(message.role === "custom" && isUserTurnInitiator(message))
+			)
+				this.#peerTurn = false;
+		}
 		// Track the settled assistant turn synchronously as well: agent_end
 		// maintenance reads `#lastAssistantMessage`, and when a turn's events all
 		// land in one tick its handler can run before this handler's post-emit
@@ -5574,6 +5589,22 @@ export class AgentSession implements SettingsScope {
 	 */
 	get runStartedAt(): number | undefined {
 		return this.#runStartedAt;
+	}
+
+	/**
+	 * Whether the session acts on another omp session's request: one reached the
+	 * conversation (directly, or passed on by a local agent) after the user last
+	 * spoke. Tool approval then holds the turn to at most the `write` mode
+	 * (`resolveApprovalFromContext`), so a peer can ask for work but not run
+	 * commands on the user's behalf.
+	 */
+	get peerTurn(): boolean {
+		return this.#peerTurn;
+	}
+
+	/** Another session's request reached the conversation outside a `message_end` (a `wait` result, plan mode). */
+	notePeerRequest(): void {
+		this.#peerTurn = true;
 	}
 
 	/**
