@@ -10,7 +10,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Icon } from "./icons";
 import { keyBytes } from "./keys";
-import { N, SurfaceContext, type SurfaceContextValue, Transcript } from "./render";
+import { N, OmpMark, SurfaceContext, type SurfaceContextValue, Transcript } from "./render";
 import { SessionConnection, type SurfaceMeta } from "./session";
 
 const TOKEN = new URLSearchParams(location.search).get("t") ?? "";
@@ -148,8 +148,8 @@ const NO_PALETTE: Record<string, string> = {};
 
 function Surface({ connection, meta }: { connection: SessionConnection; meta: SurfaceMeta }): ReactNode {
 	const surface = connection.surfaces.get(meta.id)!;
-	// Spans may name omp palette tokens; the stylesheet gives every known token this theme's colour.
-	const palette = meta.palette?.dark ?? NO_PALETTE;
+	// Spans may name omp palette tokens; the stylesheet gives every known token this GUI's colour.
+	const palette = meta.palette?.dark ?? meta.palette?.light ?? NO_PALETTE;
 	const ctx = useMemo<SurfaceContextValue>(
 		() => ({ session: connection, store: surface.store, sf: meta.id, palette }),
 		[connection, surface.store, meta.id, palette],
@@ -304,7 +304,8 @@ function StartPage({
 		<div className="start">
 			<div className="start-inner">
 				<h1 className="start-title">
-					<span className="brand-pi">π</span>omp
+					<OmpMark size={40} />
+					omp
 				</h1>
 				<div className="start-box">
 					<textarea
@@ -445,7 +446,8 @@ export function App(): ReactNode {
 			<aside className="sidebar">
 				<div className="side-top">
 					<div className="brand">
-						<span className="brand-pi">π</span>omp
+						<OmpMark size={22} />
+						omp
 					</div>
 					<button
 						type="button"

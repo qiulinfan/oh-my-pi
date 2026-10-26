@@ -1,90 +1,112 @@
-/* omp GUI in Claude Code's desktop idiom: warm paper (light) or charcoal
-   (dark), the system sans for the interface, Charter for names and the
-   optional reading prose, the terminal's Nerd Font for code (it also carries
-   omp's private-use glyphs). Clay marks live work and the send button only.
+/* omp GUI: Claude Code's desktop layout and type, in omp's own web palette.
+   The colours are the tokens omp's collab-web and stats apps share: neutral
+   surfaces, alpha hairlines, soft status colours, pink for links and strokes,
+   cyan for focus, and one gradient that appears in three places only (the π
+   mark, the send button, the context meter). In dark, the surfaces are lifted
+   off collab-web's black and the text dimmed a step (about 11:1 rather than
+   19:1), so long reading does not glare.
    The app sets data-theme="light|dark" on <html> before first paint. */
 :root {
 	color-scheme: light;
-	--bg: #faf9f5;
-	--sidebar: #f3f1ea;
+	/* Surfaces: sidebar chassis, main panel, raised cards, insets, floating overlays. */
+	--sidebar: #f2f2f3;
+	--bg: #ffffff;
 	--surface: #ffffff;
-	--sunken: #f3f1eb;
-	--hover: rgba(31, 30, 29, 0.05);
-	--sel: rgba(31, 30, 29, 0.085);
-	--line: #e8e5dc;
-	--line-2: #d8d4c9;
-	--line-3: #c3beb2;
-	--fg: #1f1e1d;
-	--fg-2: #48463f;
-	--muted: #75726b;
-	--dim: #a19d93;
-	--clay: #d97757;
-	--clay-ink: #b5593a;
-	--clay-wash: rgba(217, 119, 87, 0.12);
-	--on-clay: #ffffff;
-	--focus: #5b8fd9;
-	--green: #3c8a53;
-	--red: #c2463a;
-	--amber: #a5690f;
-	--add-bg: #e5f2e6;
-	--add-fg: #1d6633;
-	--del-bg: #fbe8e5;
-	--del-fg: #a3352a;
-	--shadow-sm: 0 1px 2px rgba(31, 30, 29, 0.05);
-	--shadow-md: 0 1px 2px rgba(31, 30, 29, 0.04), 0 8px 24px rgba(31, 30, 29, 0.06);
-	--shadow-lg: 0 2px 8px rgba(31, 30, 29, 0.06), 0 28px 70px rgba(31, 30, 29, 0.16);
-	--scrim: rgba(243, 241, 234, 0.55);
+	--sunken: #f6f6f7;
+	--overlay: #ffffff;
+	--user-bg: #f2f2f3;
+	--custom-bg: #f2f2f3;
+	--hover: rgba(0, 0, 0, 0.03);
+	--sel: rgba(0, 0, 0, 0.06);
+	--active: rgba(0, 0, 0, 0.06);
+	--line: rgba(0, 0, 0, 0.08);
+	--line-2: rgba(0, 0, 0, 0.14);
+	--line-3: rgba(0, 0, 0, 0.24);
+	--fg: #151518;
+	--fg-2: #34343a;
+	--muted: #5a5a63;
+	--dim: #8b8b94;
+	/* Accent: the gradient (three places), pink for text and strokes, cyan for focus. */
+	--grad: linear-gradient(100deg, #1fa9bb, #d42ea3);
+	--mark-a: oklch(0.7 0.24 340);
+	--mark-b: oklch(0.62 0.21 295);
+	--mark-c: oklch(0.81 0.14 200);
+	--accent: #c42596;
+	--accent-ink: #c42596;
+	--accent-wash: rgba(212, 46, 163, 0.1);
+	--on-accent: #ffffff;
+	--link: #c42596;
+	--custom-label: #c42596;
+	--focus: #1fa9bb;
+	--green: #12a36b;
+	--amber: #c77c02;
+	--red: #dc3a40;
+	--add-bg: rgba(18, 163, 107, 0.1);
+	--add-fg: #0f8a5b;
+	--del-bg: rgba(220, 58, 64, 0.08);
+	--del-fg: #c2343a;
+	--md-code: var(--fg);
+	--md-bullet: var(--dim);
+	--scrim: rgba(0, 0, 0, 0.25);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+	--shadow-md: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+	--shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.16);
 	--sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "JetBrainsMonoNL Nerd Font", sans-serif;
 	--serif: Charter, "Iowan Old Style", "Songti SC", Georgia, "JetBrainsMonoNL Nerd Font", serif;
 	--mono: "JetBrainsMonoNL Nerd Font", Menlo, "PingFang SC", monospace;
+	/* The wordmark follows the icon's rounded sans. */
+	--wordmark: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "PingFang SC", sans-serif;
 	--prose: var(--sans);
 	--column: 760px;
 	--rail: 26px;
 
 	/* Semantic names the components draw with (meters, effort rings, charts). */
 	--border: var(--line-2);
-	--accent: var(--clay);
-	--info: var(--clay-ink);
+	--info: var(--accent-ink);
 	--success: var(--green);
 	--warning: var(--amber);
 	--error: var(--red);
 
-	/* The 16 ANSI colours tool output uses, tuned for paper. */
-	--ansi-0: #1f1e1d;
-	--ansi-1: #b8433a;
-	--ansi-2: #3b7a3e;
-	--ansi-3: #946510;
-	--ansi-4: #3864a8;
-	--ansi-5: #8c4a8f;
-	--ansi-6: #2b7c7d;
-	--ansi-7: #75726b;
-	--ansi-8: #a19d93;
-	--ansi-9: #c9473d;
-	--ansi-10: #448a47;
-	--ansi-11: #a5730f;
-	--ansi-12: #4374bb;
-	--ansi-13: #9b56a0;
-	--ansi-14: #318b8c;
-	--ansi-15: #48463f;
+	/* The 16 ANSI colours tool output uses, tuned to the status colours. */
+	--ansi-0: #151518;
+	--ansi-1: #dc3a40;
+	--ansi-2: #12a36b;
+	--ansi-3: #c77c02;
+	--ansi-4: #2f6fd6;
+	--ansi-5: #c42596;
+	--ansi-6: #1a9aab;
+	--ansi-7: #5a5a63;
+	--ansi-8: #8b8b94;
+	--ansi-9: #e5535a;
+	--ansi-10: #17b87a;
+	--ansi-11: #d98e10;
+	--ansi-12: #4a86e8;
+	--ansi-13: #d23fa6;
+	--ansi-14: #22b3c6;
+	--ansi-15: #34343a;
 
-	/* omp names some span colours by its own palette tokens; give them this theme's meaning. */
-	--p-accent: var(--clay-ink);
+	/* omp names some span colours by its own palette tokens; give them this palette's meaning. */
+	--p-accent: var(--accent-ink);
 	--p-success: var(--green);
 	--p-error: var(--red);
 	--p-warning: var(--amber);
 	--p-muted: var(--muted);
 	--p-dim: var(--dim);
 	--p-border: var(--line-2);
+	--p-link: var(--link);
+	--p-mdLink: var(--link);
+	--p-toolDiffAdded: var(--green);
+	--p-toolDiffRemoved: var(--red);
 	--p-thinkingText: var(--muted);
 	--p-thinkingOff: var(--dim);
 	--p-thinkingMinimal: var(--dim);
 	--p-thinkingLow: var(--muted);
 	--p-thinkingMedium: var(--fg-2);
-	--p-thinkingHigh: var(--clay-ink);
-	--p-thinkingXhigh: var(--red);
-	--p-bashMode: var(--green);
+	--p-thinkingHigh: var(--accent-ink);
+	--p-thinkingXhigh: var(--focus);
+	--p-bashMode: var(--focus);
 	--p-pythonMode: var(--amber);
-	--p-customMessageLabel: var(--clay-ink);
+	--p-customMessageLabel: var(--custom-label);
 	--p-toolOutput: var(--muted);
 	--p-statusLineModel: var(--fg-2);
 	--p-statusLinePath: var(--fg-2);
@@ -97,59 +119,67 @@
 	--p-statusLineSpend: var(--muted);
 	--p-statusLineCost: var(--muted);
 	--p-statusLineOutput: var(--muted);
-	--p-statusLineSubagents: var(--clay-ink);
+	--p-statusLineSubagents: var(--accent-ink);
 	--p-statusLineSep: var(--line-2);
 }
 
 :root[data-theme="dark"] {
 	color-scheme: dark;
-	--bg: #262624;
-	--sidebar: #1f1e1d;
-	--surface: #30302e;
-	--sunken: #2b2b29;
-	--hover: rgba(250, 249, 245, 0.05);
-	--sel: rgba(250, 249, 245, 0.085);
-	--line: #383733;
-	--line-2: #47453f;
-	--line-3: #5c5a53;
-	--fg: #f4f3ee;
-	--fg-2: #d6d3ca;
-	--muted: #a4a097;
-	--dim: #77746c;
-	--clay: #d97757;
-	--clay-ink: #e8906f;
-	--clay-wash: rgba(217, 119, 87, 0.16);
-	--on-clay: #ffffff;
-	--focus: #7aa7e6;
-	--green: #6dbe86;
-	--red: #e7786b;
-	--amber: #dfa64f;
-	--add-bg: rgba(109, 190, 134, 0.13);
-	--add-fg: #a3d9b2;
-	--del-bg: rgba(231, 120, 107, 0.13);
-	--del-fg: #f2aaa0;
-	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-	--shadow-md: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.22);
-	--shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.25), 0 28px 70px rgba(0, 0, 0, 0.45);
-	--scrim: rgba(20, 20, 19, 0.55);
+	--sidebar: #1b1b1f;
+	--bg: #212125;
+	--surface: #27272c;
+	--sunken: #1c1c20;
+	--overlay: #2d2d33;
+	--user-bg: #2d2d33;
+	--custom-bg: #2d2d33;
+	--hover: rgba(255, 255, 255, 0.04);
+	--sel: rgba(255, 255, 255, 0.08);
+	--active: rgba(255, 255, 255, 0.08);
+	--line: rgba(255, 255, 255, 0.08);
+	--line-2: rgba(255, 255, 255, 0.14);
+	--line-3: rgba(255, 255, 255, 0.24);
+	--fg: #d6d6da;
+	--fg-2: #b9b9bf;
+	--muted: #94949c;
+	--dim: #6e6e76;
+	--grad: linear-gradient(100deg, #5ad8e6, #ed4abf);
+	--accent: #f068c8;
+	--accent-ink: #f068c8;
+	--accent-wash: rgba(237, 74, 191, 0.14);
+	--on-accent: #0a0a0b;
+	--link: #f068c8;
+	--custom-label: #f068c8;
+	--focus: #5ad8e6;
+	--green: #3ecf8e;
+	--amber: #f5a524;
+	--red: #ff6166;
+	--add-bg: rgba(62, 207, 142, 0.13);
+	--add-fg: #6fdcaa;
+	--del-bg: rgba(255, 97, 102, 0.13);
+	--del-fg: #ff8f93;
+	--scrim: rgba(0, 0, 0, 0.45);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+	--shadow-md: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.45);
+	--shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 
-	--ansi-0: #77746c;
-	--ansi-1: #e7786b;
-	--ansi-2: #9fcf8a;
-	--ansi-3: #e2b664;
-	--ansi-4: #86b0e8;
-	--ansi-5: #c99ddb;
-	--ansi-6: #80c8c2;
-	--ansi-7: #d6d3ca;
-	--ansi-8: #8b887f;
-	--ansi-9: #f08c80;
-	--ansi-10: #b0e199;
-	--ansi-11: #edc876;
-	--ansi-12: #98c0f2;
-	--ansi-13: #d6b1e5;
-	--ansi-14: #92d6cf;
-	--ansi-15: #f4f3ee;
+	--ansi-0: #6e6e76;
+	--ansi-1: #ff6166;
+	--ansi-2: #3ecf8e;
+	--ansi-3: #f5a524;
+	--ansi-4: #6aa6ff;
+	--ansi-5: #f068c8;
+	--ansi-6: #5ad8e6;
+	--ansi-7: #b9b9bf;
+	--ansi-8: #8b8b94;
+	--ansi-9: #ff8a8e;
+	--ansi-10: #6ee0ac;
+	--ansi-11: #f8bf5a;
+	--ansi-12: #8ab8ff;
+	--ansi-13: #f590d6;
+	--ansi-14: #8ce6f0;
+	--ansi-15: #d6d6da;
 }
+
 
 :root[data-prose="serif"] {
 	--prose: var(--serif);
@@ -179,16 +209,16 @@ select {
 	color: inherit;
 }
 a {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 	text-underline-offset: 2px;
 }
 ::selection {
-	background: var(--clay-wash);
+	background: var(--accent-wash);
 }
 input[type="checkbox"],
 input[type="radio"],
 input[type="range"] {
-	accent-color: var(--clay);
+	accent-color: var(--accent);
 }
 :focus-visible {
 	outline: 2px solid var(--focus);
@@ -230,15 +260,11 @@ kbd {
 }
 .brand {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 8px;
 	padding: 2px 6px;
-	font: 600 19px/1.2 var(--serif);
-	letter-spacing: -0.01em;
-}
-.brand-pi {
-	color: var(--clay);
-	font: 500 22px/1 var(--serif);
+	font: 600 19px/1.2 var(--wordmark);
+	letter-spacing: -0.015em;
 }
 .new-session {
 	display: flex;
@@ -294,7 +320,7 @@ kbd {
 	color: var(--fg);
 }
 .side-item.active {
-	background: var(--sel);
+	background: var(--active);
 	color: var(--fg);
 }
 .side-lead {
@@ -481,11 +507,11 @@ kbd {
 	gap: 14px;
 }
 .start-title {
-	font: 500 34px/1.15 var(--serif);
-	letter-spacing: -0.015em;
+	font: 600 34px/1.15 var(--wordmark);
+	letter-spacing: -0.02em;
 	margin: 0 0 6px 2px;
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 12px;
 }
 .start-title .brand-pi {
@@ -555,8 +581,8 @@ kbd {
 	height: 32px;
 	border-radius: 9px;
 	border: none;
-	background: var(--clay);
-	color: var(--on-clay);
+	background: var(--grad);
+	color: var(--on-accent);
 	display: inline-grid;
 	place-items: center;
 	cursor: pointer;
@@ -725,7 +751,7 @@ kbd {
 	color: var(--fg);
 }
 .k-card:is(.tone-info, .tone-accent) > .card-head {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 }
 .k-card.tone-error > .card-head {
 	color: var(--red);
@@ -781,7 +807,7 @@ kbd {
 }
 .s-accent,
 .s-info {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 }
 .s-success,
 .s-ins {
@@ -809,12 +835,12 @@ kbd {
 	border-radius: 5px;
 }
 .s-link {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 	text-decoration: underline;
 	text-underline-offset: 2px;
 }
 .s-mark {
-	background: var(--clay-wash);
+	background: var(--accent-wash);
 	border-radius: 3px;
 }
 .s-typo {
@@ -852,7 +878,7 @@ kbd {
 /* ── Tones ─────────────────────────────────────────────── */
 .tone-accent,
 .tone-info {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 }
 .tone-success {
 	color: var(--green);
@@ -918,7 +944,7 @@ kbd {
 .tr-md code {
 	font-family: var(--mono);
 	font-size: 0.86em;
-	color: var(--fg);
+	color: var(--md-code);
 	background: var(--sunken);
 	border: 1px solid var(--line);
 	padding: 0.05em 0.35em;
@@ -933,6 +959,7 @@ kbd {
 	line-height: 1.55;
 }
 .tr-md pre code {
+	color: var(--fg);
 	background: none;
 	border: none;
 	padding: 0;
@@ -953,7 +980,7 @@ kbd {
 	margin: 0.2em 0;
 }
 .tr-md li::marker {
-	color: var(--dim);
+	color: var(--md-bullet);
 }
 .tr-md hr {
 	border: none;
@@ -988,7 +1015,7 @@ kbd {
 	font-weight: 600;
 }
 .tr-md a {
-	color: var(--clay-ink);
+	color: var(--link);
 }
 .k-code pre,
 .k-diff pre {
@@ -1125,8 +1152,8 @@ kbd {
 	white-space: nowrap;
 }
 .k-badge.tone-accent {
-	background: var(--clay-wash);
-	color: var(--clay-ink);
+	background: var(--accent-wash);
+	color: var(--accent-ink);
 }
 .k-badge.tone-error {
 	background: var(--del-bg);
@@ -1172,8 +1199,8 @@ kbd {
 	width: 11px;
 	height: 11px;
 	border-radius: 50%;
-	border: 1.5px solid var(--clay-wash);
-	border-top-color: var(--clay);
+	border: 1.5px solid var(--accent-wash);
+	border-top-color: var(--accent);
 	animation: spin 0.9s linear infinite;
 	flex: none;
 	display: inline-block;
@@ -1183,12 +1210,12 @@ kbd {
 		transform: rotate(360deg);
 	}
 }
-/* Claude Code's working mark: a clay starburst cycling through its glyphs. */
+/* Claude Code's working mark: a starburst in the accent cycling through its glyphs. */
 .starburst {
 	display: inline-block;
 	width: 1em;
 	text-align: center;
-	color: var(--clay);
+	color: var(--accent);
 	font-family: var(--sans);
 	font-weight: 600;
 	flex: none;
@@ -1261,7 +1288,7 @@ kbd {
 }
 .bar .fill.indeterminate {
 	width: 35%;
-	background: var(--clay);
+	background: var(--accent);
 	animation: indet 1.2s ease-in-out infinite;
 }
 @keyframes indet {
@@ -1408,7 +1435,7 @@ kbd {
 }
 .k-overlay {
 	pointer-events: auto;
-	background: var(--surface);
+	background: var(--overlay);
 	border: 1px solid var(--line-2);
 	border-radius: 14px;
 	box-shadow: var(--shadow-lg);
@@ -1436,7 +1463,7 @@ kbd {
 	position: absolute;
 	right: 20px;
 	bottom: 130px;
-	background: var(--surface);
+	background: var(--overlay);
 	border: 1px solid var(--line-2);
 	border-radius: 11px;
 	padding: 10px 14px;
@@ -1588,7 +1615,7 @@ kbd {
 [data-role="omp.user"] {
 	align-self: flex-start;
 	max-width: 88%;
-	background: var(--sunken);
+	background: var(--user-bg);
 	border: 1px solid var(--line);
 	border-radius: 12px;
 	padding: 9px 14px;
@@ -1624,7 +1651,7 @@ kbd {
 	align-self: flex-start;
 	max-width: 88%;
 	margin: 0;
-	background: var(--sunken);
+	background: var(--custom-bg);
 	border: 1px solid var(--line);
 	border-radius: 12px;
 	padding: 8px 14px 10px;
@@ -1637,6 +1664,7 @@ kbd {
 }
 [data-role="omp.irc.incoming"] > .card-head .s-strong {
 	font-weight: 500;
+	color: var(--custom-label);
 }
 [data-role="omp.irc.incoming"] .card-body .k-row {
 	display: none;
@@ -1662,7 +1690,7 @@ kbd {
 	height: 26px;
 }
 [data-role="omp.welcome.wordmark"] {
-	font: 600 18px/1 var(--serif);
+	font: 600 18px/1 var(--wordmark);
 	color: var(--fg);
 }
 [data-role="omp.welcome.version"] {
@@ -1715,7 +1743,7 @@ kbd {
 }
 .tool-target.target-pattern,
 .tool-target.target-query {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 }
 .tool-meta,
 .tool-note {
@@ -1836,7 +1864,7 @@ kbd {
 }
 .editor-prompt,
 .editor-mode {
-	color: var(--clay-ink);
+	color: var(--accent-ink);
 	font: 12.5px/1.9 var(--mono);
 }
 .editor-ghost {
@@ -1891,6 +1919,10 @@ kbd {
 	color: var(--dim);
 	font-variant-numeric: tabular-nums;
 }
+/* The context meter is the third place the gradient appears; near the limit it turns amber or red. */
+[data-role="omp.composer.context"] .bar:not(.tone-warning, .tone-error) > .fill:not(.indeterminate) {
+	background: var(--grad);
+}
 [data-role="omp.composer.send"],
 [data-role="omp.composer.stop"] {
 	cursor: pointer;
@@ -1900,8 +1932,8 @@ kbd {
 	height: 30px;
 	border-radius: 9px;
 	border: none;
-	background: var(--clay);
-	color: var(--on-clay);
+	background: var(--grad);
+	color: var(--on-accent);
 	display: inline-grid;
 	place-items: center;
 	cursor: pointer;
@@ -1937,7 +1969,7 @@ kbd {
 	border-color: var(--line-3);
 	color: var(--fg);
 }
-/* omp's working row: the clay starburst, the time, the intent, the stop control. */
+/* omp's working row: the accent starburst, the time, the intent, the stop control. */
 [data-role="omp.working"] {
 	color: var(--muted);
 	font-size: 13.5px;
@@ -1996,7 +2028,7 @@ kbd {
 	color: var(--green);
 }
 .check-active .icon {
-	color: var(--clay);
+	color: var(--accent);
 }
 .check-active {
 	color: var(--fg);
@@ -2026,7 +2058,7 @@ kbd {
 .k-agent.agent-running {
 	border-color: var(--line-2);
 	box-shadow:
-		inset 2px 0 0 var(--clay),
+		inset 2px 0 0 var(--accent),
 		var(--shadow-sm);
 }
 .agent-head {
@@ -2074,7 +2106,7 @@ kbd {
 
 /* ── Picker sheets ─────────────────────────────────────── */
 .k-picker {
-	background: var(--surface);
+	background: var(--overlay);
 	border: 1px solid var(--line-2);
 	border-radius: 14px;
 	box-shadow: var(--shadow-lg);
@@ -2166,7 +2198,7 @@ kbd {
 	background: var(--hover);
 }
 .picker-scope.active {
-	background: var(--sel);
+	background: var(--active);
 	color: var(--fg);
 }
 .picker-list {
@@ -2201,7 +2233,7 @@ kbd {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: var(--clay);
+	background: var(--accent);
 	margin-left: 4px;
 	flex: none;
 }
@@ -2282,7 +2314,7 @@ kbd {
 	place-items: center;
 	font-size: 10px;
 	font-weight: 700;
-	background: var(--sel);
+	background: var(--active);
 	color: var(--fg-2);
 	flex: none;
 }
@@ -2294,8 +2326,8 @@ kbd {
 	color: var(--muted);
 }
 .chip.on {
-	color: var(--clay-ink);
-	border-color: var(--clay);
+	color: var(--accent-ink);
+	border-color: var(--accent);
 }
 .btn {
 	background: var(--surface);
@@ -2314,14 +2346,14 @@ kbd {
 	background: var(--hover);
 }
 .btn.primary {
-	background: var(--clay);
-	color: var(--on-clay);
-	border-color: var(--clay);
+	background: var(--accent);
+	color: var(--on-accent);
+	border-color: var(--accent);
 	font-weight: 500;
 }
 .btn.primary:hover {
 	filter: brightness(1.05);
-	background: var(--clay);
+	background: var(--accent);
 }
 .btn.danger {
 	color: var(--red);
@@ -2392,7 +2424,7 @@ kbd {
 	background: var(--hover);
 }
 .prefs-page.active {
-	background: var(--sel);
+	background: var(--active);
 	color: var(--fg);
 }
 .prefs-sections {
@@ -2444,7 +2476,7 @@ kbd {
 	width: 10px;
 	height: 10px;
 	border-radius: 2px;
-	background: var(--clay);
+	background: var(--accent);
 }
 .k-chart {
 	min-width: 120px;

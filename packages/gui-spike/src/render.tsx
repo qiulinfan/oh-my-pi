@@ -15,6 +15,7 @@ import {
 	type ReactNode,
 	useContext,
 	useEffect,
+	useId,
 	useMemo,
 	useState,
 	useSyncExternalStore,
@@ -539,19 +540,19 @@ const MathNode: R = ({ node }) => {
 	return <span {...useCommon(node)} dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
-/** omp's mark: a clay π set in the interface serif. */
-function OmpMark({ size }: { size: number }): ReactNode {
+/** omp's mark: the π of its icon (as collab-web draws it), in the icon's magenta → iris → cyan gradient. */
+export function OmpMark({ size }: { size: number }): ReactNode {
+	const gradient = `omp-mark-${useId().replace(/:/g, "")}`;
 	return (
-		<svg width={size} height={size} viewBox="0 0 64 64" aria-label="omp">
-			<text
-				x="32"
-				y="50"
-				textAnchor="middle"
-				fontSize="58"
-				style={{ fill: "var(--clay)", fontFamily: "var(--serif)" }}
-			>
-				π
-			</text>
+		<svg className="omp-mark" width={size} height={size} viewBox="0 0 64 64" aria-label="omp">
+			<defs>
+				<linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
+					<stop offset="0" style={{ stopColor: "var(--mark-a)" }} />
+					<stop offset=".5" style={{ stopColor: "var(--mark-b)" }} />
+					<stop offset="1" style={{ stopColor: "var(--mark-c)" }} />
+				</linearGradient>
+			</defs>
+			<path fill={`url(#${gradient})`} d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z" />
 		</svg>
 	);
 }
