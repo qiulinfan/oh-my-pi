@@ -71,9 +71,19 @@ describe("omp read <image>?q=", () => {
 			try {
 				const child = Bun.spawn(["bun", runnerPath, `${pngPath}?q=describe this image`], {
 					cwd: project,
+					// A minimal environment, not this process's: importing
+					// @oh-my-pi/pi-utils merged the developer's ~/.omp/agent/.env
+					// into it, and any credential there (or in their shell) makes a
+					// real provider's vision model the one the question goes to.
 					env: {
-						...process.env,
+						PATH: process.env.PATH,
+						TMPDIR: process.env.TMPDIR,
+						TMP: process.env.TMP,
+						TEMP: process.env.TEMP,
+						SystemRoot: process.env.SystemRoot,
+						WINDIR: process.env.WINDIR,
 						HOME: home,
+						USERPROFILE: home,
 						PI_CODING_AGENT_DIR: agentDir,
 						PI_TEST_RUNTIME: "1",
 					},

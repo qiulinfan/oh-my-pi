@@ -54,10 +54,11 @@ describe("AgentSession advisor provider-options parity", () => {
 	beforeAll(() => {
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		// An isolated discovery cache keeps the bundled catalog authoritative; the
-		// developer's `~/.omp` models.db can drop models these tests select.
+		// An isolated models config and discovery cache keep the bundled catalog
+		// authoritative; the developer's `~/.omp` models.db can drop models these
+		// tests select, and their models.yml can override a provider's credentials.
 		cacheDir = TempDir.createSync("@pi-advisor-parity-cache-");
-		modelRegistry = new ModelRegistry(authStorage, undefined, { cacheDbPath: cacheDir.join("models.db") });
+		modelRegistry = new ModelRegistry(authStorage, cacheDir.join("models.yml"));
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
 		model = bundled;
@@ -379,7 +380,7 @@ describe("AgentSession advisor provider-options parity", () => {
 				agent: mainAgent,
 				sessionManager,
 				settings: settings(),
-				modelRegistry: accountPoolScope.registry(new ModelRegistry(pooledStorage)),
+				modelRegistry: accountPoolScope.registry(new ModelRegistry(pooledStorage, tempDir.join("models.yml"))),
 				advisorTools: [],
 				accountPoolScope,
 			});

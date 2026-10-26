@@ -182,9 +182,22 @@ describe("HTML export template", () => {
 		expect(buildExitCode, `${buildStdout}\n${buildStderr}`).toBe(0);
 		expect(await Bun.file(staleAssetPath).exists()).toBe(false);
 
-		const packDir = path.join(tempRoot, "production-package");
+		// Pack inside a workspace shaped like the monorepo, as the release does: `bun pm pack`
+		// resolves `catalog:` through the workspace root's package.json (Bun 1.4.4+) or its
+		// bun.lock (earlier releases), never from the packed package alone.
+		const workspaceRoot = path.join(tempRoot, "production-workspace");
+		const packDir = path.join(workspaceRoot, "packages", "coding-agent");
+		const rootManifest = await Bun.file(path.resolve(packageDir, "../../package.json")).json();
+		await Bun.write(
+			path.join(workspaceRoot, "package.json"),
+			JSON.stringify({
+				name: rootManifest.name,
+				private: true,
+				workspaces: { packages: ["packages/coding-agent"], catalog: rootManifest.workspaces.catalog },
+			}),
+		);
+		await Bun.write(path.join(workspaceRoot, "bun.lock"), Bun.file(path.resolve(packageDir, "../../bun.lock")));
 		await Bun.write(path.join(packDir, "package.json"), Bun.file(path.join(packageDir, "package.json")));
-		await Bun.write(path.join(packDir, "bun.lock"), Bun.file(path.resolve(packageDir, "../../bun.lock")));
 		for (const entry of await fs.promises.readdir(productionBundleDir)) {
 			await Bun.write(path.join(packDir, "dist", entry), Bun.file(path.join(productionBundleDir, entry)));
 		}

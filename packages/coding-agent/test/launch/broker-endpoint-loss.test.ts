@@ -52,7 +52,13 @@ describe.skipIf(process.platform === "win32")("daemon broker runtime dir loss", 
 			await broker;
 
 			// The same client reconnects: it recreates the token, spawns a fresh broker, and is served.
-			const ping = await client.request({ op: "ping" });
+			// The client learns of the closed connection from the native I/O thread, which a loaded
+			// machine can delay past `await broker`: a request sent before then still goes out on the
+			// dead connection and gets the client's "connection closed" error. The next one must reconnect.
+			const ping = await client.request({ op: "ping" }).catch((error: unknown) => {
+				if (!(error instanceof Error) || error.message !== "Daemon broker connection closed") throw error;
+				return client.request({ op: "ping" });
+			});
 			if (ping.op !== "ping") throw new Error(`unexpected daemon result ${ping.op}`);
 			expect(ping.projectDir).toBe(client.projectDir);
 		} finally {
