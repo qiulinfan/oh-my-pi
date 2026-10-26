@@ -93,6 +93,7 @@ import {
 	mapAgentSessionEventToAcpSessionUpdates,
 	normalizeReplayToolArguments,
 } from "./acp-event-mapper";
+import { AcpSubagentForwarder, clientSupportsSubagents } from "./acp-subagents";
 import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 
 import { cfgDisabledExtensions } from "../../extensibility/settings";
@@ -338,6 +339,8 @@ function steeringQueueFromMeta(meta: unknown): "steering" | "followUp" {
 
 type ManagedSessionRecord = {
 	session: AgentSession;
+	/** Stops forwarding this session's subagents as ACP child sessions (clients with `subagents`). */
+	subagentForwarderStop?: () => void;
 	setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined;
 	mcpManager: MCPManager | undefined;
 	// Ordered queue of MCP tool refreshes for this record. Rebuilt per
@@ -1717,6 +1720,13 @@ export class AcpAgent implements Agent {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
 			this.#sessions.set(session.sessionId, record);
+			if (clientSupportsSubagents(this.#clientCapabilities)) {
+				record.subagentForwarderStop = new AcpSubagentForwarder({
+					rootAgentId: session.getAgentId() ?? `acp:${session.sessionId}`,
+					rootSessionId: session.sessionId,
+					send: notification => this.#connection.sessionUpdate(notification as unknown as SessionNotification),
+				}).start();
+			}
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
@@ -3252,6 +3262,7 @@ export class AcpAgent implements Agent {
 
 	async #disposeSessionRecord(record: ManagedSessionRecord, reason?: postmortem.Reason): Promise<void> {
 		record.lifetimeUnsubscribe?.();
+		record.subagentForwarderStop?.();
 		if (record.mcpManager) {
 			try {
 				await record.mcpManager.disconnectAll();
