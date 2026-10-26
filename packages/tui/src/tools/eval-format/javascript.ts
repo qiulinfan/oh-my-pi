@@ -485,6 +485,18 @@ function splitDisplayObjectProperties(text: string): string[] {
 function formatDisplayObjectLiterals(formatted: string, source: string): string {
 	const roots = collectDisplayBraceNodes(formatted, classifySourceBraces(source));
 
+	// Nodes render in source order, so each lookup resumes the scan where the
+	// previous one stopped. Searching back from every brace instead rescans its
+	// whole line: quadratic when thousands of objects share one line.
+	let scannedTo = 0;
+	let scannedLineStart = 0;
+	function lineStartOf(position: number): number {
+		for (; scannedTo < position; scannedTo++) {
+			if (formatted.charCodeAt(scannedTo) === 10) scannedLineStart = scannedTo + 1;
+		}
+		return scannedLineStart;
+	}
+
 	function renderRange(
 		start: number,
 		end: number,
@@ -504,7 +516,7 @@ function formatDisplayObjectLiterals(formatted: string, source: string): string 
 	}
 
 	function renderNode(node: DisplayBraceNode, parentIndent: string): string {
-		const lineStart = Math.max(0, formatted.lastIndexOf("\n", node.start - 1) + 1);
+		const lineStart = lineStartOf(node.start);
 		const linePrefix = formatted.slice(lineStart, node.start);
 		const ownIndent = /^[ \t]*$/.test(linePrefix) ? linePrefix : parentIndent;
 		const propertyIndent = ownIndent + JS_DISPLAY_INDENT;

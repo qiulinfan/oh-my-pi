@@ -747,18 +747,22 @@ index fb7fe66ecb99fd207b99c1e9a9ae00769f0b9a20..af5284b9ee8226e78fa0243ec2f83a63
          ]
              .filter(feature => {
 diff --git a/lib/puppeteer/node/NodeWebSocketTransport.js b/lib/puppeteer/node/NodeWebSocketTransport.js
-index a1af6472f4fb346978e3bd073ddb34963b129da2..951b5968947edaf24775716ccbab31d3fe98fabe 100644
+index a1af6472f4fb346978e3bd073ddb34963b129da2..b22830dbf30033c5cdfa8d2959e9b05fbb4fedfd 100644
 --- a/lib/puppeteer/node/NodeWebSocketTransport.js
 +++ b/lib/puppeteer/node/NodeWebSocketTransport.js
-@@ -25,7 +25,11 @@ export class NodeWebSocketTransport {
+@@ -25,7 +25,15 @@ export class NodeWebSocketTransport {
              ws.addEventListener('open', () => {
                  return resolve(new NodeWebSocketTransport(ws));
              });
 -            ws.addEventListener('error', reject);
 +            // Reject with an Error carrying the handshake failure: the raw
 +            // ErrorEvent stringifies to "[object ErrorEvent]" wherever it surfaces.
++            // Bun's native WebSocket names the endpoint in its message, but its `ws`
++            // module (Bun 1.4.4+) reports a refused upgrade as only
++            // "Unexpected server response: 404", so name the endpoint here.
 +            ws.addEventListener('error', event => {
-+                reject(new Error(event.message, { cause: event.error }));
++                const message = String(event.message);
++                reject(new Error(message.includes(url) ? message : `WebSocket connection to '${url}' failed: ${message}`, { cause: event.error }));
 +            });
          });
      }

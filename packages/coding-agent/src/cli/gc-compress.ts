@@ -312,7 +312,10 @@ async function compressBatch(
 		scratch = await fs.mkdtemp(path.join(dir, COMPRESS_SCRATCH_PREFIX));
 		await Bun.write(path.join(scratch, SCRATCH_OWNER_MARKER), "");
 		const digests = await sha256Files(batch.map(candidate => candidate.path));
-		const copy = await $`ditto --hfsCompression ${batch.map(candidate => candidate.path)} ${scratch}`
+		// `--noclone`: ditto clones files within an APFS volume when allowed to (the default
+		// on macOS 27), and a clone shares the original's uncompressed blocks, ignoring
+		// `--hfsCompression`; every file would then look incompressible.
+		const copy = await $`ditto --hfsCompression --noclone ${batch.map(candidate => candidate.path)} ${scratch}`
 			.quiet()
 			.nothrow();
 		if (copy.exitCode !== 0) {
