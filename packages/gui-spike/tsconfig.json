@@ -1,6 +1,6 @@
 {
 	"extends": "../tsconfig.workspace.json",
-	"include": ["src", "server.ts"],
+	"include": ["src"],
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"lib": ["ES2024", "DOM", "DOM.Iterable"],

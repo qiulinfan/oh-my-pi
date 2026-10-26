@@ -10,6 +10,7 @@
 	"dependencies": {
 		"@oh-my-pi/collab-web": "workspace:*",
 		"@oh-my-pi/pi-coding-agent": "workspace:*",
+		"@oh-my-pi/pi-natives": "workspace:*",
 		"@oh-my-pi/pi-tui": "workspace:*",
 		"@oh-my-pi/pi-utils": "workspace:*",
 		"@oh-my-pi/pi-wire": "workspace:*",

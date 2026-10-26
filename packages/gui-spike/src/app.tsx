@@ -1,9 +1,10 @@
 /**
  * The app shell, laid out like Claude Code's desktop app: a session sidebar
- * (the sessions this server hosts, other omp sessions on this Mac, recent
- * ones it can resume) and one session at a time beside it, under a header
- * naming it. "New session" opens a start page whose first message becomes
- * omp's positional prompt. Keys typed outside the composer go to omp as pty
+ * (the sessions this server hosts, saved sessions grouped by project and the
+ * no-project chats, other omp sessions on this Mac) and one session at a time
+ * beside it, under a header naming it. "New session" opens a start page whose
+ * first message becomes omp's positional prompt; it runs in the chosen
+ * project, or as a chat in its own empty directory. Keys typed outside the composer go to omp as pty
  * bytes, so every omp shortcut (Ctrl+S agent hub, Shift+Tab effort, Esc)
  * works as in a terminal.
  */
@@ -53,9 +54,11 @@ interface LiveSession {
 }
 
 /** omp's terminal title is "<icon> <session title>" (or "π <dir>" before one exists): keep the words. */
-function sessionTitle(session: LiveSession): string {
+function sessionTitle(session: LiveSession, chat: boolean): string {
 	const title = session.title?.replace(/^[-\u{F0000}-\u{FFFFD}π\s]+/u, "").trim();
-	return title && title !== "omp" ? title : basename(session.cwd);
+	// Before omp names it, a session reads as its directory; a chat's directory name means nothing.
+	if (title && title !== "omp" && title !== basename(session.cwd)) return title;
+	return chat ? "New chat" : basename(session.cwd);
 }
 
 interface PeerSession {
@@ -69,13 +72,24 @@ interface PeerSession {
 	guiId: string | null;
 }
 
-interface RecentSession {
+interface SavedSession {
 	id: string;
+	path: string;
 	cwd: string;
-	timestamp: string;
 	title: string;
 	prompt: string;
+	modified: string;
 }
+
+interface Project {
+	root: string;
+	name: string;
+	modified: string;
+	sessions: SavedSession[];
+}
+
+/** Where a new session runs: a project root, or "" for a chat in its own empty directory. */
+type Target = string;
 
 function basename(path: string): string {
 	return path.split("/").filter(Boolean).pop() ?? path;
@@ -99,6 +113,10 @@ function ago(timestamp: string): string {
 /** Strip omp's leading Nerd Font glyph from a title ("󰒿 SORT: Fix …"). */
 function plainTitle(title: string): string {
 	return title.replace(/^[-\u{F0000}-\u{FFFFD}\s]+/u, "").trim();
+}
+
+function savedLabel(session: SavedSession): string {
+	return plainTitle(session.title) || session.prompt || basename(session.cwd);
 }
 
 type ThemeChoice = "system" | "light" | "dark";
@@ -279,22 +297,98 @@ function SessionView({ connection, active }: { connection: SessionConnection; ac
 	);
 }
 
+function ProjectPicker({
+	target,
+	projects,
+	home,
+	onPick,
+	onChoose,
+}: {
+	target: Target;
+	projects: Project[];
+	home: string;
+	onPick: (target: Target) => void;
+	onChoose: () => void;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!open) return;
+		const close = (event: MouseEvent) => {
+			if (!ref.current?.contains(event.target as Node)) setOpen(false);
+		};
+		addEventListener("mousedown", close);
+		return () => removeEventListener("mousedown", close);
+	}, [open]);
+	const pick = (value: Target) => {
+		setOpen(false);
+		onPick(value);
+	};
+	return (
+		<div className="picker" ref={ref}>
+			<button
+				type="button"
+				className="field-chip project"
+				title={target ? tildePath(target, home) : "A chat in its own empty folder"}
+				onClick={() => setOpen(value => !value)}
+			>
+				<Icon name={target ? "folder" : "message-circle"} size={14} />
+				<span className="chip-label">{target ? basename(target) : "No project"}</span>
+				<Icon name="chev-down" size={12} />
+			</button>
+			{open ? (
+				<div className="picker-menu">
+					<div className={`picker-item ${target ? "" : "on"}`} onClick={() => pick("")}>
+						<Icon name="message-circle" size={14} />
+						<span className="side-label">No project</span>
+						<span className="side-meta">chat</span>
+					</div>
+					{projects.length ? <div className="picker-sep" /> : null}
+					<div className="picker-scroll">
+						{projects.map(project => (
+							<div
+								key={project.root}
+								className={`picker-item ${project.root === target ? "on" : ""}`}
+								title={tildePath(project.root, home)}
+								onClick={() => pick(project.root)}
+							>
+								<Icon name="folder" size={14} />
+								<span className="side-label">{project.name}</span>
+								<span className="side-meta">{project.modified ? ago(project.modified) : "new"}</span>
+							</div>
+						))}
+					</div>
+					<div className="picker-sep" />
+					<div
+						className="picker-item"
+						onClick={() => {
+							setOpen(false);
+							onChoose();
+						}}
+					>
+						<Icon name="folder-open" size={14} />
+						<span className="side-label">Choose folder…</span>
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 function StartPage({
-	cwd,
-	setCwd,
+	picker,
 	model,
 	setModel,
 	recent,
 	onStart,
 	onResume,
 }: {
-	cwd: string;
-	setCwd: (value: string) => void;
+	picker: ReactNode;
 	model: string;
 	setModel: (value: string) => void;
-	recent: RecentSession[];
+	recent: SavedSession[];
 	onStart: (prompt: string) => void;
-	onResume: (session: RecentSession) => void;
+	onResume: (session: SavedSession) => void;
 }): ReactNode {
 	const [prompt, setPrompt] = useState("");
 	const ref = useRef<HTMLTextAreaElement>(null);
@@ -322,16 +416,7 @@ function StartPage({
 						spellCheck={false}
 					/>
 					<div className="start-bar">
-						<label className="field-chip cwd" title="Working directory">
-							<Icon name="folder" size={14} />
-							<input
-								id="new-cwd"
-								value={cwd}
-								onChange={event => setCwd(event.target.value)}
-								spellCheck={false}
-								placeholder="~/project"
-							/>
-						</label>
+						{picker}
 						<label className="field-chip model" title="Model (empty: omp's default)">
 							<Icon name="cpu" size={14} />
 							<input
@@ -361,10 +446,8 @@ function StartPage({
 								<span className="side-lead">
 									<Icon name="history" size={13} />
 								</span>
-								<span className="side-label">
-									{plainTitle(session.title) || session.prompt || basename(session.cwd)}
-								</span>
-								<span className="side-meta">{basename(session.cwd)}</span>
+								<span className="side-label">{savedLabel(session)}</span>
+								<span className="side-meta">{ago(session.modified)}</span>
 							</div>
 						))}
 					</div>
@@ -374,15 +457,28 @@ function StartPage({
 	);
 }
 
+function SavedItem({ session, onResume }: { session: SavedSession; onResume: () => void }): ReactNode {
+	return (
+		<div className="side-item recent" onClick={onResume} title={`${session.cwd}\n${session.prompt}`}>
+			<span className="side-lead" />
+			<span className="side-label">{savedLabel(session)}</span>
+			<span className="side-meta">{ago(session.modified)}</span>
+		</div>
+	);
+}
+
 export function App(): ReactNode {
 	const [live, setLive] = useState<LiveSession[]>([]);
-	const [recent, setRecent] = useState<RecentSession[]>([]);
+	const [projects, setProjects] = useState<Project[]>([]);
+	const [chats, setChats] = useState<SavedSession[]>([]);
+	const [chatsDir, setChatsDir] = useState("");
 	const [peers, setPeers] = useState<PeerSession[]>([]);
 	const [home, setHome] = useState("");
 	const [copied, setCopied] = useState<string | null>(null);
 	const [open, setOpen] = useState<string[]>([]);
 	const [active, setActive] = useState<string | null>(null);
-	const [cwd, setCwd] = useState(() => stored("omp-gui.cwd", "~"));
+	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
+	const [chosen, setChosen] = useState<string | null>(null);
 	const [model, setModel] = useState(() => stored("omp-gui.model", ""));
 	const [error, setError] = useState<string | null>(null);
 	const connections = useRef(new Map<string, SessionConnection>());
@@ -390,9 +486,17 @@ export function App(): ReactNode {
 
 	const refresh = useCallback(async () => {
 		try {
-			const data = await api<{ live: LiveSession[]; recent: RecentSession[]; home: string }>("/api/sessions");
+			const data = await api<{
+				live: LiveSession[];
+				projects: Project[];
+				chats: SavedSession[];
+				chatsDir: string;
+				home: string;
+			}>("/api/sessions");
 			setLive(data.live);
-			setRecent(data.recent);
+			setProjects(data.projects);
+			setChats(data.chats);
+			setChatsDir(data.chatsDir);
 			setHome(data.home);
 			setPeers(await api<PeerSession[]>("/api/peers"));
 		} catch (err) {
@@ -412,15 +516,30 @@ export function App(): ReactNode {
 		setActive(id);
 	};
 
-	const spawn = async (options: { resume?: RecentSession; prompt?: string }) => {
+	const setTarget = (value: Target) => {
+		store("omp-gui.project", value);
+		setTargetState(value);
+	};
+
+	const chooseFolder = async () => {
 		setError(null);
 		try {
-			const target = options.resume ? options.resume.cwd : cwd;
-			if (!options.resume) store("omp-gui.cwd", cwd);
+			const { path } = await api<{ path: string | null }>("/api/choose-folder", {});
+			if (!path) return;
+			setChosen(path);
+			setTarget(path);
+		} catch (err) {
+			setError(String(err));
+		}
+	};
+
+	const spawn = async (options: { resume?: SavedSession; prompt?: string }) => {
+		setError(null);
+		try {
 			store("omp-gui.model", model);
 			const { id } = await api<{ id: string }>("/api/spawn", {
-				cwd: target,
-				resume: options.resume?.id,
+				project: options.resume ? undefined : target || undefined,
+				resume: options.resume ? { path: options.resume.path, cwd: options.resume.cwd } : undefined,
 				model: model.trim() || undefined,
 				prompt: options.prompt?.trim() || undefined,
 			});
@@ -441,6 +560,17 @@ export function App(): ReactNode {
 	};
 
 	const current = live.find(item => item.id === active);
+	const isChat = (cwd: string) => Boolean(chatsDir) && (cwd === chatsDir || cwd.startsWith(`${chatsDir}/`));
+	// A folder just chosen (or remembered from last time) may have no saved session yet, so the store does not list it.
+	const extra = [chosen, target].find(root => root && !projects.some(project => project.root === root));
+	const pickable = extra
+		? [{ root: extra, name: basename(extra), modified: "", sessions: [] }, ...projects]
+		: projects;
+	const recentForTarget = target ? (projects.find(project => project.root === target)?.sessions ?? []) : chats;
+	const newIn = (value: Target) => {
+		setTarget(value);
+		setActive(null);
+	};
 	return (
 		<div className="app">
 			<aside className="sidebar">
@@ -475,7 +605,7 @@ export function App(): ReactNode {
 									<span className={`dot ${session.exited ? "tone-muted" : "tone-success"}`} />
 								)}
 							</span>
-							<span className="side-label">{sessionTitle(session)}</span>
+							<span className="side-label">{sessionTitle(session, isChat(session.cwd))}</span>
 							<button
 								type="button"
 								className="side-stop"
@@ -521,23 +651,43 @@ export function App(): ReactNode {
 								<span className="side-mode">{peer.mode}</span>
 							</div>
 						))}
-					<div className="side-title">Recent</div>
-					{recent.length === 0 ? <div className="side-empty">No saved sessions yet</div> : null}
-					{recent.map(session => (
-						<div
-							key={session.id}
-							className="side-item recent"
-							onClick={() => void spawn({ resume: session })}
-							title={`${session.cwd}\n${session.prompt}`}
-						>
-							<span className="side-lead">
-								<Icon name="history" size={13} />
-							</span>
-							<span className="side-label">
-								{plainTitle(session.title) || session.prompt || basename(session.cwd)}
-							</span>
-							<span className="side-meta">{ago(session.timestamp)}</span>
+					<div className="side-title">Projects</div>
+					{projects.length === 0 ? <div className="side-empty">No projects yet</div> : null}
+					{projects.map(project => (
+						<div key={project.root} className="side-group">
+							<div
+								className={`side-item project ${active === null && target === project.root ? "active" : ""}`}
+								title={`${tildePath(project.root, home)}\nNew session in this project`}
+								onClick={() => newIn(project.root)}
+							>
+								<span className="side-lead">
+									<Icon name="folder" size={13} />
+								</span>
+								<span className="side-label">{project.name}</span>
+								<span className="side-add">
+									<Icon name="plus" size={13} />
+								</span>
+							</div>
+							{project.sessions.slice(0, 3).map(session => (
+								<SavedItem
+									key={session.id}
+									session={session}
+									onResume={() => void spawn({ resume: session })}
+								/>
+							))}
 						</div>
+					))}
+					<div
+						className={`side-title side-title-action ${active === null && !target ? "active" : ""}`}
+						title="New chat without a project"
+						onClick={() => newIn("")}
+					>
+						<span>Chats</span>
+						<Icon name="plus" size={12} />
+					</div>
+					{chats.length === 0 ? <div className="side-empty">No chats yet</div> : null}
+					{chats.slice(0, 8).map(session => (
+						<SavedItem key={session.id} session={session} onResume={() => void spawn({ resume: session })} />
 					))}
 				</div>
 				<div className="side-foot">
@@ -585,8 +735,10 @@ export function App(): ReactNode {
 			<main className="content">
 				{active !== null ? (
 					<header className="session-head">
-						<span className="head-title">{current ? sessionTitle(current) : "Session"}</span>
-						{current ? <span className="head-path">{tildePath(current.cwd, home)}</span> : null}
+						<span className="head-title">{current ? sessionTitle(current, isChat(current.cwd)) : "Session"}</span>
+						{current ? (
+							<span className="head-path">{isChat(current.cwd) ? "Chat" : tildePath(current.cwd, home)}</span>
+						) : null}
 						{current?.busy ? (
 							<span className="head-state">
 								<span className="starburst" /> Working
@@ -601,11 +753,18 @@ export function App(): ReactNode {
 					</header>
 				) : (
 					<StartPage
-						cwd={cwd}
-						setCwd={setCwd}
+						picker={
+							<ProjectPicker
+								target={target}
+								projects={pickable}
+								home={home}
+								onPick={setTarget}
+								onChoose={() => void chooseFolder()}
+							/>
+						}
 						model={model}
 						setModel={setModel}
-						recent={recent}
+						recent={recentForTarget}
 						onStart={prompt => void spawn({ prompt })}
 						onResume={session => void spawn({ resume: session })}
 					/>
