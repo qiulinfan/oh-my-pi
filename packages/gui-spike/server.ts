@@ -465,6 +465,32 @@ async function chooseFolder(): Promise<string | null> {
 	return result.text().trim().replace(/\/$/, "") || null;
 }
 
+interface ModelChoice {
+	selector: string;
+	name: string;
+	provider: string;
+}
+
+/** The chat models omp can use (`omp models --json`), and the `default` role from omp's config. */
+async function listModels(): Promise<{ models: ModelChoice[]; default: string | null }> {
+	const result = await $`${OMP_BIN} models --json`.cwd(os.homedir()).quiet().nothrow();
+	if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || "omp models failed");
+	const { models } = result.json() as { models: ModelChoice[] };
+	let fallback: string | null = null;
+	try {
+		const config = Bun.YAML.parse(await Bun.file(path.join(getAgentDir(), "config.yml")).text()) as {
+			modelRoles?: { default?: string };
+		};
+		fallback = config?.modelRoles?.default ?? null;
+	} catch {}
+	return {
+		models: models.map(({ selector, name, provider }) => ({ selector, name, provider })),
+		default: fallback,
+	};
+}
+
+let models: Promise<{ models: ModelChoice[]; default: string | null }> | null = null;
+
 Bun.serve<{ id: string }>({
 	port: PORT,
 	hostname: "127.0.0.1",
@@ -485,6 +511,16 @@ Bun.serve<{ id: string }>({
 			const live = [...sessions.values()].map(session => session.info);
 			const [projects, chats] = await Promise.all([listProjects(), listChats()]);
 			return Response.json({ live, projects, chats, chatsDir: CHATS_DIR, home: os.homedir() });
+		}
+		if (url.pathname === "/api/models") {
+			// Listing takes about two seconds, so it is fetched once per server run; ?refresh=1 asks again.
+			if (!models || url.searchParams.has("refresh")) models = listModels();
+			try {
+				return Response.json(await models);
+			} catch (err) {
+				models = null;
+				return Response.json({ error: String(err) }, { status: 500 });
+			}
 		}
 		if (url.pathname === "/api/choose-folder" && req.method === "POST") {
 			return Response.json({ path: await chooseFolder() });

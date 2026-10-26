@@ -297,6 +297,18 @@ function SessionView({ connection, active }: { connection: SessionConnection; ac
 	);
 }
 
+/** Closes a popover when the pointer goes down outside `ref`. */
+function useDismiss(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void): void {
+	useEffect(() => {
+		if (!open) return;
+		const onDown = (event: MouseEvent) => {
+			if (!ref.current?.contains(event.target as Node)) close();
+		};
+		addEventListener("mousedown", onDown);
+		return () => removeEventListener("mousedown", onDown);
+	}, [ref, open, close]);
+}
+
 function ProjectPicker({
 	target,
 	projects,
@@ -312,14 +324,11 @@ function ProjectPicker({
 }): ReactNode {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		if (!open) return;
-		const close = (event: MouseEvent) => {
-			if (!ref.current?.contains(event.target as Node)) setOpen(false);
-		};
-		addEventListener("mousedown", close);
-		return () => removeEventListener("mousedown", close);
-	}, [open]);
+	useDismiss(
+		ref,
+		open,
+		useCallback(() => setOpen(false), []),
+	);
 	const pick = (value: Target) => {
 		setOpen(false);
 		onPick(value);
@@ -375,17 +384,125 @@ function ProjectPicker({
 	);
 }
 
+interface ModelChoice {
+	selector: string;
+	name: string;
+	provider: string;
+}
+
+interface ModelList {
+	models: ModelChoice[];
+	/** omp's `default` model role, e.g. "anthropic/claude-opus-5-5:high". */
+	default: string | null;
+}
+
+function modelName(selector: string, list: ModelList | null): string {
+	const [base, effort] = selector.split(":");
+	const name = list?.models.find(model => model.selector === base)?.name ?? base!.split("/").pop()!;
+	return effort ? `${name} · ${effort}` : name;
+}
+
+function ModelPicker({
+	value,
+	list,
+	onPick,
+}: {
+	/** A model selector, or "" for omp's default. */
+	value: string;
+	list: ModelList | null;
+	onPick: (value: string) => void;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const ref = useRef<HTMLDivElement>(null);
+	useDismiss(
+		ref,
+		open,
+		useCallback(() => setOpen(false), []),
+	);
+	const pick = (selector: string) => {
+		setOpen(false);
+		setQuery("");
+		onPick(selector);
+	};
+	const needle = query.trim().toLowerCase();
+	const matches = (list?.models ?? []).filter(
+		model => !needle || model.name.toLowerCase().includes(needle) || model.selector.toLowerCase().includes(needle),
+	);
+	const providers = [...new Set(matches.map(model => model.provider))];
+	const fallback = list?.default ? modelName(list.default, list) : "omp's default";
+	return (
+		<div className="picker model-picker" ref={ref}>
+			<button
+				type="button"
+				className="field-chip project"
+				title={value || `Default model: ${list?.default ?? "omp's default"}`}
+				onClick={() => setOpen(current => !current)}
+			>
+				<Icon name="cpu" size={14} />
+				<span className="chip-label">{value ? modelName(value, list) : fallback}</span>
+				<Icon name="chev-down" size={12} />
+			</button>
+			{open ? (
+				<div className="picker-menu">
+					<input
+						className="picker-search"
+						autoFocus
+						value={query}
+						placeholder="Search models"
+						spellCheck={false}
+						onChange={event => setQuery(event.target.value)}
+						onKeyDown={event => {
+							if (event.key === "Escape") setOpen(false);
+							if (event.key === "Enter" && matches[0]) pick(matches[0].selector);
+						}}
+					/>
+					{needle ? null : (
+						<>
+							<div className={`picker-item ${value ? "" : "on"}`} onClick={() => pick("")}>
+								<Icon name="sparkles" size={14} />
+								<span className="side-label">{fallback}</span>
+								<span className="side-meta">default</span>
+							</div>
+							<div className="picker-sep" />
+						</>
+					)}
+					<div className="picker-scroll">
+						{list === null ? <div className="side-empty">Loading models…</div> : null}
+						{list && matches.length === 0 ? <div className="side-empty">No model matches</div> : null}
+						{providers.map(provider => (
+							<div key={provider}>
+								<div className="picker-group">{provider}</div>
+								{matches
+									.filter(model => model.provider === provider)
+									.map(model => (
+										<div
+											key={model.selector}
+											className={`picker-item ${model.selector === value ? "on" : ""}`}
+											title={model.selector}
+											onClick={() => pick(model.selector)}
+										>
+											<span className="side-label">{model.name}</span>
+										</div>
+									))}
+							</div>
+						))}
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 function StartPage({
 	picker,
-	model,
-	setModel,
+	modelPicker,
 	recent,
 	onStart,
 	onResume,
 }: {
 	picker: ReactNode;
-	model: string;
-	setModel: (value: string) => void;
+	modelPicker: ReactNode;
 	recent: SavedSession[];
 	onStart: (prompt: string) => void;
 	onResume: (session: SavedSession) => void;
@@ -417,16 +534,7 @@ function StartPage({
 					/>
 					<div className="start-bar">
 						{picker}
-						<label className="field-chip model" title="Model (empty: omp's default)">
-							<Icon name="cpu" size={14} />
-							<input
-								id="new-model"
-								value={model}
-								onChange={event => setModel(event.target.value)}
-								spellCheck={false}
-								placeholder="default model"
-							/>
-						</label>
+						{modelPicker}
 						<button type="button" className="send-btn" onClick={start} title="Start session  ⏎">
 							<Icon name="arrow-up" size={16} />
 						</button>
@@ -479,7 +587,8 @@ export function App(): ReactNode {
 	const [active, setActive] = useState<string | null>(null);
 	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
 	const [chosen, setChosen] = useState<string | null>(null);
-	const [model, setModel] = useState(() => stored("omp-gui.model", ""));
+	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
+	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const connections = useRef(new Map<string, SessionConnection>());
 	const appearance = useAppearance();
@@ -516,6 +625,15 @@ export function App(): ReactNode {
 		setActive(id);
 	};
 
+	useEffect(() => {
+		api<ModelList>("/api/models").then(setModelList, err => setError(String(err)));
+	}, []);
+
+	const setModel = (value: string) => {
+		store("omp-gui.model", value);
+		setModelState(value);
+	};
+
 	const setTarget = (value: Target) => {
 		store("omp-gui.project", value);
 		setTargetState(value);
@@ -536,11 +654,10 @@ export function App(): ReactNode {
 	const spawn = async (options: { resume?: SavedSession; prompt?: string }) => {
 		setError(null);
 		try {
-			store("omp-gui.model", model);
 			const { id } = await api<{ id: string }>("/api/spawn", {
 				project: options.resume ? undefined : target || undefined,
 				resume: options.resume ? { path: options.resume.path, cwd: options.resume.cwd } : undefined,
-				model: model.trim() || undefined,
+				model: model || undefined,
 				prompt: options.prompt?.trim() || undefined,
 			});
 			await refresh();
@@ -762,8 +879,7 @@ export function App(): ReactNode {
 								onChoose={() => void chooseFolder()}
 							/>
 						}
-						model={model}
-						setModel={setModel}
+						modelPicker={<ModelPicker value={model} list={modelList} onPick={setModel} />}
 						recent={recentForTarget}
 						onStart={prompt => void spawn({ prompt })}
 						onResume={session => void spawn({ resume: session })}
