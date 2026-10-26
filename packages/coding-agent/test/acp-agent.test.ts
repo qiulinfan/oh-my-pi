@@ -37,6 +37,8 @@ import type {
 	CreateElicitationRequest,
 	CreateElicitationResponse,
 	PromptRequest,
+	RequestPermissionRequest,
+	RequestPermissionResponse,
 	SessionNotification,
 	Validator,
 } from "@oh-my-pi/pi-utils/acp";
@@ -528,6 +530,8 @@ afterEach(async () => {
 async function createHarness(
 	options: {
 		elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse>;
+		/** Answers `session/request_permission`; without it the request fails like an unwired client. */
+		permissionHandler?: (req: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
 		clientCapabilities?: ClientCapabilities;
 		/** Runs before a notification is recorded, so a test can delay one delivery. */
 		sessionUpdateHook?: (notification: SessionNotification) => Promise<void> | void;
@@ -565,6 +569,10 @@ async function createHarness(
 		unstable_createElicitation: options.elicitationHandler
 			? async (req: CreateElicitationRequest) => options.elicitationHandler!(req)
 			: undefined,
+		requestPermission: async (req: RequestPermissionRequest) => {
+			if (!options.permissionHandler) throw new Error("unexpected session/request_permission");
+			return await options.permissionHandler(req);
+		},
 		signal: abortController.signal,
 		closed: Promise.withResolvers<void>().promise,
 	} as unknown as AgentSideConnection;
@@ -613,6 +621,13 @@ async function createHarness(
 		sessionDir,
 		findSession: (sessionId: string) => sessions.find(session => session.sessionId === sessionId),
 	};
+}
+
+/** A client without form elicitation that approves the plan it is asked about. */
+async function approvePlan(req: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+	const approve = req.options.find(option => option.kind === "allow_once");
+	if (!approve) throw new Error("plan approval offered no approve option");
+	return { outcome: { outcome: "selected", optionId: approve.optionId } };
 }
 
 /** Fire `#scheduleBootstrapUpdates`'s guard without paying wall-clock time. */
@@ -764,7 +779,13 @@ describe("ACP agent", () => {
 	});
 
 	it("plan-proposal handler approves the agent-named plan and exits plan mode on submit", async () => {
-		const harness = await createHarness();
+		const requests: RequestPermissionRequest[] = [];
+		const harness = await createHarness({
+			permissionHandler: async req => {
+				requests.push(req);
+				return await approvePlan(req);
+			},
+		});
 		cfgPlanEnabled.set(Settings.instance, true);
 
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
@@ -800,6 +821,15 @@ describe("ACP agent", () => {
 		expect(session.planProposalHandler).toBeUndefined();
 		expect(session.planReferencePath).toBe("local://words-counter-plan.md");
 		const approvalUpdates = harness.updates.slice(updatesBefore);
+		// The approval call the client answered is settled, not left pending.
+		expect(
+			approvalUpdates.some(
+				notification =>
+					notification.update.sessionUpdate === "tool_call_update" &&
+					notification.update.toolCallId === requests[0]?.toolCall.toolCallId &&
+					notification.update.status === "completed",
+			),
+		).toBe(true);
 		// Mode-change notifications reached the client so Zed's UI and config
 		// selector both reflect the approval-driven exit.
 		expect(
@@ -824,7 +854,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 	it("plan-proposal handler autosaves the approved plan without leaking the path", async () => {
-		const harness = await createHarness();
+		const harness = await createHarness({ permissionHandler: approvePlan });
 		cfgPlanEnabled.set(Settings.instance, true);
 		cfgPlanAutosave.set(Settings.instance, true);
 
@@ -859,7 +889,7 @@ describe("ACP agent", () => {
 	});
 
 	it("plan-proposal handler approves and notes autosave failure without the path", async () => {
-		const harness = await createHarness();
+		const harness = await createHarness({ permissionHandler: approvePlan });
 		cfgPlanEnabled.set(Settings.instance, true);
 		const blocker = path.join(harness.cwdA, "blocker");
 		await Bun.write(blocker, "x");
@@ -943,6 +973,71 @@ describe("ACP agent", () => {
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
+
+	it.each([
+		{ answer: "rejects", response: { outcome: { outcome: "selected", optionId: "refine" } } },
+		{ answer: "cancels", response: { outcome: { outcome: "cancelled" } } },
+	] satisfies Array<{ answer: string; response: RequestPermissionResponse }>)(
+		"plan-proposal handler keeps planning when a client without form elicitation $answer the switch_mode request",
+		async ({ response }) => {
+			// Regression: a client without form elicitation used to get the plan
+			// approved without being asked. The plan must go through
+			// `session/request_permission`, and only the approve option exits.
+			const requests: RequestPermissionRequest[] = [];
+			const harness = await createHarness({
+				permissionHandler: async req => {
+					requests.push(req);
+					return response;
+				},
+			});
+			cfgPlanEnabled.set(Settings.instance, true);
+
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId)!;
+			await harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" });
+
+			const localOptions = {
+				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+				getSessionId: () => session.sessionManager.getSessionId(),
+			};
+			cleanupRoots.push(resolveLocalUrlToPath("local://", localOptions));
+			await Bun.write(resolveLocalUrlToPath("local://PLAN.md", localOptions), "# Words Counter\n\nFile contents.");
+
+			const updatesBefore = harness.updates.length;
+			const result = (await session.planProposalHandler!("words-counter")) as {
+				content: Array<{ type: string; text: string }>;
+			};
+
+			expect(requests).toHaveLength(1);
+			const request = requests[0]!;
+			expect(request.sessionId).toBe(created.sessionId);
+			expect(request.toolCall.kind).toBe("switch_mode");
+			expect(request.options.find(option => option.kind === "allow_once")?.name).toContain("Default mode");
+			expect(result.content[0]?.text).toMatch(/refinement requested/i);
+			expect(session.planModeState?.enabled).toBe(true);
+			expect(session.planReferencePath).toBeUndefined();
+			// The call the client was asked about was announced first and settled after.
+			const proposalUpdates = harness.updates.slice(updatesBefore).map(notification => notification.update);
+			const callUpdates = proposalUpdates.filter(
+				update => "toolCallId" in update && update.toolCallId === request.toolCall.toolCallId,
+			);
+			expect(
+				callUpdates.map(update => [update.sessionUpdate, "status" in update ? update.status : undefined]),
+			).toEqual([
+				["tool_call", "pending"],
+				["tool_call_update", "failed"],
+			]);
+			expect(
+				proposalUpdates.some(
+					update => update.sessionUpdate === "current_mode_update" && update.currentModeId === "default",
+				),
+			).toBe(false);
+			expectAcpNotifications(harness.updates);
+
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		},
+	);
 
 	it("pushes config_option_update when thinking level changes internally", async () => {
 		// Internal callers (slash commands, model auto-adjust, extension UI) call

@@ -27,6 +27,7 @@ import {
 	type McpServer,
 	type NewSessionRequest,
 	type NewSessionResponse,
+	type PermissionOption,
 	PROTOCOL_VERSION,
 	type PromptRequest,
 	type PromptResponse,
@@ -42,6 +43,7 @@ import {
 	type SetSessionConfigOptionResponse,
 	type SetSessionModeRequest,
 	type SetSessionModeResponse,
+	type ToolCallContent,
 	type Usage,
 } from "@oh-my-pi/pi-utils/acp";
 import { disableProvider, enableProvider } from "../../capability";
@@ -103,6 +105,13 @@ const ACP_PLAN_MODE_ID = "plan";
 const DEFAULT_PLAN_FILE_URL = "local://PLAN.md";
 const APPROVE_OPTION = "Approve and execute";
 const REFINE_OPTION = "Refine plan";
+/** Plan approval through `session/request_permission`; approving names the mode the session lands in. */
+const PLAN_APPROVE_PERMISSION: PermissionOption = {
+	optionId: "approve",
+	name: "Approve plan and switch to Default mode",
+	kind: "allow_once",
+};
+const PLAN_REFINE_PERMISSION: PermissionOption = { optionId: "refine", name: "Keep planning", kind: "reject_once" };
 const MODE_CONFIG_ID = "mode";
 const MODEL_CONFIG_ID = "model";
 const THINKING_CONFIG_ID = "thinking";
@@ -2312,13 +2321,12 @@ export class AcpAgent implements Agent {
 	 * submits the finalized plan by writing its `<slug>`/title to
 	 * `xd://propose`; this handler validates the plan file, normalizes the
 	 * title, asks the ACP client to confirm (via `unstable_createElicitation`
-	 * when supported), and on approval keeps the chosen plan path, exits plan
-	 * mode, and notifies the client so the agent regains full tools.
+	 * when supported, `session/request_permission` otherwise), and on approval
+	 * keeps the chosen plan path, exits plan mode, and notifies the client so
+	 * the agent regains full tools.
 	 *
 	 * Mirrors `InteractiveMode.#handlePlanProposal` for the parts the agent sees
-	 * (same `PlanApprovalDetails` shape). Clients without form-mode elicitation
-	 * get an auto-approve so plan mode is never stranded — the agent always has
-	 * a way out.
+	 * (same `PlanApprovalDetails` shape).
 	 */
 	async #handleAcpPlanProposal(session: AgentSession, title: string): Promise<AgentToolResult<unknown>> {
 		const state = session.getPlanModeState();
@@ -2448,21 +2456,21 @@ export class AcpAgent implements Agent {
 
 	/**
 	 * Ask the ACP client to confirm plan approval. Returns `true` only on an
-	 * explicit `APPROVE_OPTION` selection. Refine, dismissal (`undefined`), or
-	 * any unrecognized value falls through to refine semantics — the caller
-	 * keeps plan mode active and surfaces guidance text to the agent. Clients
-	 * without `elicitation.form` support auto-approve because there is no
-	 * confirmation surface available; without that, plan mode would strand
-	 * the agent (the bug this method exists to fix).
+	 * explicit approve selection. Refine, dismissal (`undefined`), or any
+	 * unrecognized value falls through to refine semantics — the caller keeps
+	 * plan mode active and surfaces guidance text to the agent. Clients without
+	 * `elicitation.form` support get the same choice as a permission request,
+	 * which every ACP client answers.
 	 */
 	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
-		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
-		if (!supportsForm) return true;
 		// Include a short preview of the plan so the user has context in the
 		// dialog. Keep the body bounded — Zed renders elicitation messages
 		// inline and a multi-thousand-line plan blows out the dialog.
 		const previewLines = planContent.split("\n").slice(0, 12).join("\n");
 		const ellipsis = planContent.split("\n").length > 12 ? "\n…" : "";
+		if (this.#clientCapabilities?.elicitation?.form == null) {
+			return await this.#requestAcpPlanApprovalPermission(sessionId, title, `${previewLines}${ellipsis}`);
+		}
 		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}`;
 		const value = await elicitFromAcpClient(
 			this.#connection,
@@ -2476,6 +2484,42 @@ export class AcpAgent implements Agent {
 		// timeout, or any other non-approve response falls through to refine
 		// semantics so closing the dialog can never grant write access.
 		return value === APPROVE_OPTION;
+	}
+
+	/**
+	 * Plan approval as a `switch_mode` permission request on a call of its own:
+	 * announced first so the client knows the call it is asked about, and
+	 * settled afterwards so it does not stay pending. A rejected or cancelled
+	 * request keeps planning.
+	 */
+	async #requestAcpPlanApprovalPermission(sessionId: string, title: string, preview: string): Promise<boolean> {
+		const toolCallId = `plan-approval-${crypto.randomUUID()}`;
+		const call = {
+			toolCallId,
+			title: `Approve plan "${title}"`,
+			kind: "switch_mode" as const,
+			status: "pending" as const,
+			content: [{ type: "content", content: { type: "text", text: preview } }] satisfies ToolCallContent[],
+		};
+		await this.#connection.sessionUpdate({ sessionId, update: { sessionUpdate: "tool_call", ...call } });
+		let approved = false;
+		try {
+			const response = await this.#connection.requestPermission({
+				sessionId,
+				toolCall: call,
+				options: [PLAN_APPROVE_PERMISSION, PLAN_REFINE_PERMISSION],
+			});
+			approved =
+				response.outcome.outcome === "selected" && response.outcome.optionId === PLAN_APPROVE_PERMISSION.optionId;
+		} finally {
+			await this.#connection
+				.sessionUpdate({
+					sessionId,
+					update: { sessionUpdate: "tool_call_update", toolCallId, status: approved ? "completed" : "failed" },
+				})
+				.catch(error => logger.warn("Failed to settle the plan approval call", { sessionId, error }));
+		}
+		return approved;
 	}
 
 	#buildModeState(session: AgentSession): SessionModeState {
