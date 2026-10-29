@@ -1,0 +1,17 @@
+{
+	"name": "omp-desktop",
+	"private": true,
+	"description": "macOS desktop app for omp: an Electron window onto this machine's omp gui server",
+	"type": "module",
+	"scripts": {
+		"fetch-electron": "bun node_modules/electron/install.js",
+		"check": "../node_modules/.bin/tsgo -p tsconfig.json --noEmit && bun test ./test",
+		"test": "bun test ./test",
+		"package": "bun scripts/package.ts",
+		"package-dev": "bun scripts/package.ts --dev",
+		"install-app": "bun scripts/package.ts --install"
+	},
+	"devDependencies": {
+		"electron": "44.9.3"
+	}
+}

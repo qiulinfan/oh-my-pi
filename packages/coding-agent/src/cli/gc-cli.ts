@@ -30,7 +30,12 @@ import { BLOB_HASH_RE, BLOB_STAGING_RE, blobStagingPath } from "../session/blob-
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { parseTerminalBreadcrumb } from "../session/session-paths";
 import { readSessionHeaderId } from "../session/session-loader";
-import { FileSessionStorage, SESSION_STAGING_RE, tryAcquireSessionLease } from "../session/session-storage";
+import {
+	FileSessionStorage,
+	SESSION_STAGING_RE,
+	tryAcquireSessionFileLease,
+	tryAcquireSessionLease,
+} from "../session/session-storage";
 import {
 	type CompressCandidate,
 	type CompressMethod,
@@ -792,7 +797,7 @@ async function runStaleGc(options: ResolvedGcOptions): Promise<StaleGcResult> {
 		errors: [],
 	};
 	for (const candidate of candidates) {
-		const lease = candidate.ownedSession ? await tryAcquireSessionFileLease(candidate.ownedSession) : undefined;
+		const lease = candidate.ownedSession ? tryAcquireOwnedSessionLease(candidate.ownedSession) : undefined;
 		if (lease === null) continue;
 		try {
 			result[candidate.kind] += 1;
@@ -814,17 +819,14 @@ async function runStaleGc(options: ResolvedGcOptions): Promise<StaleGcResult> {
 }
 
 /**
- * Take the ownership lease of the session in `sessionFile`, or null while a
- * running process holds it (or the lease cannot be probed: an unknown owner is
- * treated as live). The lease is keyed by the header's session id. Undefined
- * when the file has no session header: omp writes the header with the first
- * bytes of a session, so no running writer owns such a file (and candidates
- * are past the write grace, so none is mid-write).
+ * The owned session's lease, or null while a running process holds it or the
+ * lease cannot be probed (an unknown owner is treated as live). Undefined when
+ * the file has no session header: candidates are past the write grace, so no
+ * writer is mid-way through creating it.
  */
-async function tryAcquireSessionFileLease(sessionFile: string): Promise<FileLockHandle | null | undefined> {
+function tryAcquireOwnedSessionLease(sessionFile: string): FileLockHandle | null | undefined {
 	try {
-		const sessionId = await readSessionHeaderId(sessionFile);
-		return sessionId === undefined ? undefined : tryAcquireSessionLease(sessionId);
+		return tryAcquireSessionFileLease(sessionFile);
 	} catch {
 		return null;
 	}

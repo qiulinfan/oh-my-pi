@@ -8,6 +8,8 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils/stream";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
+import { hasRestorableTurn } from "./exit-diagnostics";
+import type { SessionEntry } from "./session-entries";
 import { computeDefaultSessionDir } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./session-index";
@@ -18,8 +20,9 @@ import { lookupSessionTitle, recordSessionTitle } from "./session-index";
  * - `complete` — the last assistant turn ended with no unanswered tool calls, i.e.
  *   the agent yielded control back to the user.
  * - `interrupted` — work was cut off mid-flight: a trailing assistant turn with
- *   pending tool calls, a trailing tool result the agent never continued from, or
- *   a length-truncated turn.
+ *   pending tool calls, a trailing tool result the agent never continued from, a
+ *   length-truncated turn, or a reply aborted by a signal or crash rather than the
+ *   user (see `hasRestorableTurn`).
  * - `aborted` — the last assistant turn was cancelled by the user.
  * - `error` — the last assistant turn ended in an error.
  * - `pending` — a trailing user message with no assistant reply persisted after it.
@@ -50,6 +53,14 @@ export interface SessionInfo {
 	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
 	 */
 	status?: SessionStatus;
+	/**
+	 * Whether `omp --restore` has a turn to go on with (`hasRestorableTurn`), as the
+	 * tail window shows it; set with a known {@link status}. Narrower than `interrupted`
+	 * and `pending`, which also cover a turn the user stopped while its tool calls
+	 * streamed, a length stop and a prompt left before a normal exit. A session still
+	 * open in a running omp reads as restorable too: nothing recorded its exit.
+	 */
+	restorable?: boolean;
 }
 
 export interface ResolvedSessionMatch {
@@ -154,31 +165,32 @@ export function sessionDisplayName(info: SessionInfo): string {
 }
 
 /**
- * Derive a {@link SessionStatus} from a tail window of a session file. Entries are
- * newline-terminated on write, so within the window only the first line can be a
- * partial fragment — it simply fails to parse and is skipped. We walk backwards to
- * the last `message` entry and classify by its role / stop reason.
+ * Derive a {@link SessionStatus}, and whether `omp --restore` would go on with a
+ * turn, from a tail window of a session file. We classify the last `message` entry
+ * by its role / stop reason; an aborted reply `omp --restore` would go on with (the
+ * interrupted-turn record) counts as interrupted.
  */
-function deriveSessionStatus(suffix: string): SessionStatus {
-	if (!suffix) return "unknown";
-	const lines = suffix.split("\n");
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const line = lines[i];
-		// Every persisted entry is `JSON.stringify(obj)` → starts with `{`. This
-		// cheaply rejects blank lines and the leading partial fragment without
-		// attempting to parse a multi-KB tail of a truncated line.
-		if (line.charCodeAt(0) !== 123) continue;
-		let entry: { type?: string; message?: TailMessage };
+function deriveTailState(suffix: string): Pick<SessionInfo, "status" | "restorable"> {
+	// Entries are newline-terminated on write, so within the window only the first
+	// line can be a partial fragment (for a file the window holds whole, it is the
+	// header). Drop it: a fragment can start at a nested object the lenient parser
+	// would take for an entry.
+	const firstLineEnd = suffix.indexOf("\n");
+	if (firstLineEnd === -1) return { status: "unknown" };
+	const entries = parseJsonlLenient<SessionEntry>(suffix.slice(firstLineEnd + 1));
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i]!;
+		if (entry.type !== "message" || !entry.message) continue;
+		let restorable: boolean | undefined;
 		try {
-			entry = JSON.parse(line);
+			restorable = hasRestorableTurn(entries);
 		} catch {
-			continue;
+			// A malformed entry leaves it unknown rather than dropping the session from the listing.
 		}
-		if (entry.type === "message" && entry.message) {
-			return statusFromTailMessage(entry.message);
-		}
+		const status = statusFromTailMessage(entry.message);
+		return { status: status === "aborted" && restorable ? "interrupted" : status, restorable };
 	}
-	return "unknown";
+	return { status: "unknown" };
 }
 
 interface TailMessage {
@@ -480,6 +492,7 @@ async function scanSessionFile(
 				// Backend unreadable: keep the bounded-window evidence.
 			}
 		}
+		const tail = withStatus ? deriveTailState(suffix) : undefined;
 		const info: SessionInfo = {
 			path: file,
 			id: header.id,
@@ -493,7 +506,8 @@ async function scanSessionFile(
 			size,
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
-			status: withStatus ? deriveSessionStatus(suffix) : undefined,
+			status: tail?.status,
+			restorable: tail?.restorable,
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.

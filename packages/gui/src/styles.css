@@ -180,7 +180,6 @@
 	--ansi-15: #d6d6da;
 }
 
-
 :root[data-prose="serif"] {
 	--prose: var(--serif);
 }
@@ -400,6 +399,43 @@ kbd {
 	color: var(--red);
 	background: var(--hover);
 }
+/* An ended session's Dismiss: taking it off the list ends nothing. */
+.side-dismiss:hover {
+	color: var(--fg);
+}
+/* A saved session whose last turn was cut off: the mark, and its own Restore. */
+.side-mark {
+	flex: none;
+	font-size: 11.5px;
+	color: var(--amber);
+}
+.side-restore {
+	flex: none;
+	display: inline-flex;
+	padding: 3px;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.side-restore:hover {
+	color: var(--fg);
+	background: var(--sel);
+}
+.side-restore:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.side-note {
+	flex: none;
+	font-size: 11.5px;
+	color: var(--muted);
+}
+/* A session is starting: the items that would start another wait. */
+.side-item.waiting {
+	cursor: progress;
+}
 .side-foot {
 	border-top: 1px solid var(--line);
 	padding: 8px 12px 10px;
@@ -445,6 +481,7 @@ kbd {
 	color: var(--red);
 	font-size: 12.5px;
 	padding: 6px 8px;
+	white-space: pre-line;
 }
 
 .content {
@@ -513,6 +550,11 @@ kbd {
 .ghost-btn.danger:hover {
 	color: var(--red);
 }
+.ghost-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+	background: none;
+}
 .session-view {
 	flex: 1;
 	min-height: 0;
@@ -525,6 +567,92 @@ kbd {
 	padding: 10px 24px;
 	color: var(--muted);
 	font-size: 13px;
+}
+.banner.ended {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	border-bottom: 1px solid var(--line);
+}
+.ended-line {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+/* What omp printed outside the GUI protocol before it ended (a crash's error), folded away. */
+.ended-output summary {
+	width: fit-content;
+	cursor: pointer;
+	font-size: 12px;
+	color: var(--muted);
+}
+.ended-output summary:hover {
+	color: var(--fg-2);
+}
+.ended-output pre {
+	max-height: 260px;
+	overflow: auto;
+	margin: 6px 0 2px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--sunken);
+	color: var(--fg-2);
+	font: 12px/1.45 var(--mono);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* App-wide lines: the GUI server's reachability and version, the window's environment. */
+.notices {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	border-bottom: 1px solid var(--line);
+	background: var(--sunken);
+}
+.notice {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 38px;
+	padding: 5px 18px 5px 22px;
+	color: var(--fg-2);
+	font-size: 13px;
+}
+.notice + .notice {
+	border-top: 1px solid var(--line);
+}
+.notice > .icon {
+	flex: none;
+	color: var(--muted);
+}
+.notice.warn > .icon {
+	color: var(--amber);
+}
+.notice-text {
+	flex: 1;
+	min-width: 0;
+}
+.notice code {
+	font: 12px var(--mono);
+}
+.notice .btn {
+	padding: 3px 10px;
+	font-size: 12.5px;
+}
+.notice-close {
+	display: inline-flex;
+	padding: 3px;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.notice-close:hover {
+	color: var(--fg);
+	background: var(--hover);
 }
 
 /* ── Start screen ──────────────────────────────────────── */
@@ -721,6 +849,68 @@ kbd {
 }
 .start-recent .side-item {
 	color: var(--fg-2);
+}
+.interrupted-head {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding-right: 0;
+}
+.interrupted-head .ghost-btn {
+	padding: 2px 8px;
+	font-size: 12px;
+}
+.side-item.interrupted-item {
+	cursor: default;
+}
+/* An interrupted entry: its label over why it is listed. */
+.side-text {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+.side-cause {
+	font-size: 11.5px;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.side-cause.failed {
+	color: var(--amber);
+}
+/* Restore all asks before it starts several sessions. */
+.restore-confirm {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 2px 0 6px;
+	padding: 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--sunken);
+	color: var(--fg-2);
+	font-size: 12.5px;
+}
+.restore-confirm-text {
+	flex: 1 1 260px;
+	min-width: 0;
+}
+.restore-confirm .btn {
+	padding: 3px 10px;
+	font-size: 12.5px;
+}
+.item-actions {
+	flex: none;
+	display: inline-flex;
+	gap: 2px;
+	margin: -3px -4px -3px 0;
+}
+.item-actions .ghost-btn {
+	padding: 3px 8px;
 }
 
 /* ── Surfaces ──────────────────────────────────────────── */
@@ -2619,4 +2809,28 @@ kbd {
 		animation-iteration-count: 1 !important;
 		transition: none !important;
 	}
+}
+
+/* ── Desktop app ───────────────────────────────────────── */
+/* The window has no title bar: the sidebar top clears the traffic lights, and the bars drag the window. */
+[data-shell="desktop"] .side-top {
+	padding-top: 46px;
+	-webkit-app-region: drag;
+}
+[data-shell="desktop"] .session-head,
+[data-shell="desktop"] .notices {
+	-webkit-app-region: drag;
+}
+[data-shell="desktop"] .start {
+	position: relative;
+}
+[data-shell="desktop"] .start::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 auto;
+	height: 40px;
+	-webkit-app-region: drag;
+}
+[data-shell="desktop"] :is(button, input, textarea, select, a, .side-item, .picker-menu) {
+	-webkit-app-region: no-drag;
 }

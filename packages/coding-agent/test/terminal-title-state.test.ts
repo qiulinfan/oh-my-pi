@@ -412,4 +412,23 @@ describe("reporting the session to Tern", () => {
 		setSessionTerminalTitle("my-project");
 		expect(writes).not.toContain("\x1b]7;");
 	});
+
+	// The GUI server restores a session from the last file it heard, so it hears each
+	// new file and never a removal, even at exit; Tern's restore flag and OSC 7 stay Tern's.
+	it.skipIf(process.platform === "win32")("reports each session file, and only the file, to the GUI server", () => {
+		Bun.env.TERM_PROGRAM = "omp-gui";
+		const userVar = (file: string) =>
+			`\x1b]1337;SetUserVar=omp_session_file=${Buffer.from(file).toString("base64")}\x07`;
+		let file = "/work/sessions/first.jsonl";
+		setTerminalSessionSource({ file: () => file, cwd: () => "/work" });
+		setSessionTerminalTitle("my-project");
+		file = "/work/sessions/second.jsonl";
+		setSessionTerminalTitle("my-project");
+		disposeTerminalTitleState();
+		expect(writes.match(/\x1b\]1337;[^\x07]*\x07/g)).toEqual([
+			userVar("/work/sessions/first.jsonl"),
+			userVar("/work/sessions/second.jsonl"),
+		]);
+		expect(writes).not.toContain("\x1b]7;");
+	});
 });

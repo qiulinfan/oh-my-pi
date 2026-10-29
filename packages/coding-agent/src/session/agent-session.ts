@@ -362,6 +362,7 @@ import {
 	createInterruptedToolResults,
 	createInterruptedTurnAbortMessage,
 	hasRestorableTurn,
+	INTERRUPTED_TURN_ERROR,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -801,6 +802,26 @@ function captureLiveDumpState(ref: AgentRef): SessionDumpLiveState | undefined {
 	};
 }
 
+/** The `session_exit` kind a teardown for `reason` records. */
+function sessionExitKind(reason: postmortem.Reason | "dispose"): SessionExitData["kind"] {
+	if (reason === "dispose" || reason === postmortem.Reason.MANUAL) return "normal";
+	if (reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION) {
+		return "fatal";
+	}
+	return reason === postmortem.Reason.EXIT ? "process_exit" : "signal";
+}
+
+/**
+ * Whether a teardown for `reason` cuts the turn in flight off, so the reply it aborts
+ * is the interrupted-turn record `omp --restore` goes on with: a signal (SIGTERM from
+ * a GUI stop, SIGHUP from a closed terminal), a crash or a process exit. A dispose, a
+ * quit and SIGINT (Ctrl+C where omp's terminal is not raw, as in `omp -p`) are the
+ * user stopping the turn.
+ */
+function teardownCutsOffTurn(reason: postmortem.Reason | "dispose"): boolean {
+	return sessionExitKind(reason) !== "normal" && reason !== postmortem.Reason.SIGINT;
+}
+
 /**
  * Why {@link AgentSession.runEphemeralTurn} would reject a `maxTokens` cap on `model`, or
  * `undefined` when it honors one.
@@ -920,6 +941,12 @@ export class AgentSession implements SettingsScope {
 	#cancelExitRecorder?: () => void;
 	#cancelFatalRecoveryHint?: () => void;
 	#exitRecorded = false;
+	/**
+	 * The recorded exit cuts the turn in flight off ({@link teardownCutsOffTurn}):
+	 * every later abort of it, by this session's dispose or by a parent's teardown of
+	 * this subagent, ends the reply as the interrupted-turn record.
+	 */
+	#exitCutsOffTurn = false;
 	/** Last observed `workspace.additionalDirectories`, diffed on change to add/remove only settings-seeded roots. */
 	#settingsWorkspaceDirectories: readonly string[] = [];
 	/** Last observed auto-QA gate; the system prompt advertises `xd://report_issue` only while it holds. */
@@ -3490,21 +3517,23 @@ export class AgentSession implements SettingsScope {
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		// Known before the early return below: a session with no conversation records no exit.
+		this.#exitCutsOffTurn = teardownCutsOffTurn(reason);
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
+		// A first prompt counts: a SIGINT recorded under it stays the user's stop even
+		// when the process dies before its teardown has written the aborted reply.
 		if (
 			pendingToolCalls.length === 0 &&
-			!this.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")
+			!this.sessionManager
+				.getEntries()
+				.some(
+					entry =>
+						entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "user"),
+				)
 		) {
 			return;
 		}
-		const kind: SessionExitData["kind"] =
-			reason === "dispose" || reason === postmortem.Reason.MANUAL
-				? "normal"
-				: reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION
-					? "fatal"
-					: reason === postmortem.Reason.EXIT
-						? "process_exit"
-						: "signal";
+		const kind = sessionExitKind(reason);
 		const data: SessionExitData = {
 			reason,
 			kind,
@@ -3941,6 +3970,35 @@ export class AgentSession implements SettingsScope {
 			const message = messages[index];
 			if (message.role !== "toolResult" || !knownCalls.has(message.toolCallId)) continue;
 			if (!message.isError && semanticToolResult(message.toolName, message)?.toolName === "rewind") continue;
+			this.#persistSessionMessageIfMissing(message);
+		}
+	}
+
+	/**
+	 * Dispose unsubscribes from the agent before the turn its abort cut off has ended:
+	 * the abort crosses the agent loop and the provider stream first, and a teardown
+	 * whose terminal is gone (a closed PTY, a killed GUI server) gets to the unsubscribe
+	 * sooner. The reply that abort ends (the interrupted-turn record after a signal or
+	 * crash, a plain abort after a quit) and the results of its tool calls then reach no
+	 * persisting handler. Record them from the agent's state once it is idle, before the
+	 * session manager is sealed, as that handler would have: on a first turn nothing
+	 * else creates the session file, so the prompt would be lost with the reply and
+	 * `omp --restore` would have nothing to go on.
+	 */
+	#persistTurnEndedWhileDisposing(): void {
+		const start = this.#disconnectedMessageCount;
+		if (start === undefined) return;
+		this.#disconnectedMessageCount = undefined;
+		const messages = this.agent.state.messages;
+		for (let index = start; index < messages.length; index++) {
+			const message = messages[index];
+			if (message.role !== "assistant" && message.role !== "toolResult") continue;
+			if (message.role === "assistant" && !this.#sessionMessageAlreadyPersisted(message)) {
+				// No handler saw this reply end: do what the `message_end` handler does
+				// before it persists one, so the record matches a reply it saved.
+				message.completedAt = Date.now();
+				this.#tools.bindReplyToCapturedPrompt(message);
+			}
 			this.#persistSessionMessageIfMissing(message);
 		}
 	}
@@ -6104,7 +6162,10 @@ export class AgentSession implements SettingsScope {
 		this.abortRetry();
 		this.abortCompaction();
 		const postPromptDrain = this.#cancelPostPromptTasks();
-		this.agent.abort();
+		// A signal or crash cuts the turn in flight off: the reply this abort ends is
+		// the interrupted-turn record, which `omp --restore` goes on with. Quitting
+		// mid-reply leaves the turn as the user stopped it.
+		this.agent.abort(this.#exitCutsOffTurn ? INTERRUPTED_TURN_ERROR : undefined);
 		try {
 			await withTimeout(
 				postPromptDrain,
@@ -6187,6 +6248,7 @@ export class AgentSession implements SettingsScope {
 		} catch (error) {
 			logger.warn("Active agent run still settling at dispose deadline", { error: String(error) });
 		}
+		this.#persistTurnEndedWhileDisposing();
 
 		// Event handlers can reopen the append writer while they persist their
 		// terminal message; that pipeline has drained (or hit the deadline).
@@ -10632,7 +10694,9 @@ export class AgentSession implements SettingsScope {
 	 * `reason` (e.g. `USER_INTERRUPT_LABEL`) rides the agent's `AbortController`
 	 * and surfaces verbatim on the aborted assistant message's `errorMessage`, so
 	 * the transcript can distinguish a deliberate user interrupt from an opaque
-	 * abort. Omit it for internal/lifecycle aborts.
+	 * abort. Omit it for internal/lifecycle aborts: once this session's process is
+	 * going down on a signal or crash, those end the reply as the interrupted-turn
+	 * record instead.
 	 */
 	async abort(options?: {
 		goalReason?: "interrupted" | "internal";
@@ -10684,7 +10748,8 @@ export class AgentSession implements SettingsScope {
 			this.abortEval();
 			const computerControlRevocation = revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
 			const postPromptDrain = this.#cancelPostPromptTasks();
-			this.agent.abort(options?.reason);
+			// A parent's signal teardown aborts its subagents' turns here, with no reason.
+			this.agent.abort(options?.reason ?? (this.#exitCutsOffTurn ? INTERRUPTED_TURN_ERROR : undefined));
 			await Promise.all([postPromptDrain, computerControlRevocation]);
 			await this.agent.waitForIdle();
 			this.#persistToolResultsEndedWhileDisconnected();

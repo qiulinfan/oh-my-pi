@@ -12,6 +12,8 @@ const defaultOutDir = path.join(packageDir, "dist");
 const shebang = "#!/usr/bin/env bun\n";
 const htmlExportAssetPattern =
 	/^(?:template-[^.]+\.(?:css|html|js)|tool-views\.generated-[^.]+\.js|(?:marked|highlight)\.min-[^.]+\.js)$/;
+/** The `omp gui` page (an HTML import of @oh-my-pi/gui) and the client chunks it loads. */
+const guiAssetPattern = /^(?:index\.html|chunk-[^.]+\.(?:css|js))$/;
 
 // Native / optional / platform-specific deps are loaded from installed files.
 const ALWAYS_EXTERNAL = ["@oh-my-pi/pi-natives", "@huggingface/transformers", "fastembed", "onnxruntime-node"];
@@ -67,7 +69,8 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry.endsWith(".js.map") ||
 					/\.json-[^/]+\.zst$/.test(entry) ||
 					(entry.startsWith("CHANGELOG-") && entry.endsWith(".md")) ||
-					htmlExportAssetPattern.test(entry),
+					htmlExportAssetPattern.test(entry) ||
+					guiAssetPattern.test(entry),
 			)
 			.map(entry => fs.rm(path.join(outDir, entry), { force: true })),
 	);
@@ -95,6 +98,9 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
+			// Entries land flat in dist/: the GUI's HTML import would otherwise keep its path
+			// relative to this package (dist/_.._/_.._/gui/index.html).
+			naming: { entry: "[name].[ext]" },
 			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin()],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {

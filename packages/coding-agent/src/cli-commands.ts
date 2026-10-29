@@ -125,6 +125,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.gcHelp,
 	},
 	{
+		name: "gui",
+		load: () => import("./commands/gui").then(m => m.default),
+		help: commandHelp.guiHelp,
+	},
+	{
 		name: "grep",
 		load: () => import("./commands/grep").then(m => m.default),
 		help: commandHelp.grepHelp,

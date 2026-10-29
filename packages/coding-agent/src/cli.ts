@@ -165,6 +165,20 @@ async function runSmokeTest(): Promise<void> {
 		statsServer.stop();
 	}
 
+	// The GUI page and its bundled client are embedded through an HTML import; serve both once.
+	const { startGuiServer } = await import("./gui/server");
+	const guiServer = await startGuiServer({ port: 0 });
+	try {
+		const base = `http://127.0.0.1:${guiServer.port}/`;
+		const html = await (await fetch(base)).text();
+		const script = html.match(/<script[^>]+src="([^"]+\.js)"/)?.[1];
+		if (!script) throw new Error("gui smoke failed: the page names no client script");
+		const response = await fetch(new URL(script, base));
+		if (!response.ok) throw new Error(`gui smoke failed: client script HTTP ${response.status}`);
+	} finally {
+		await guiServer.stop();
+	}
+
 	await smokeTestTinyTitleWorker();
 	await smokeTestSttWorker();
 	await smokeTestJsEvalWorker();

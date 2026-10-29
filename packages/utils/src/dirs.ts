@@ -1118,6 +1118,20 @@ export function getMnemopiEmbedRuntimeDir(): string {
 	return dirs.rootSubdir(path.join("run", "mnemopi"), "state");
 }
 
+/**
+ * Directory holding everything the `omp gui` server persists: its address, lock, token and
+ * hosted-session roster (~/.omp/run/gui; XDG default: $XDG_STATE_HOME/omp/run/gui). The
+ * absolute `OMP_GUI_RUNTIME_DIR` replaces it, to run a separate GUI server (development, tests).
+ * A value that is not absolute throws: falling back would attach to the owner's own server.
+ */
+export function getGuiRuntimeDir(): string {
+	const override = process.env.OMP_GUI_RUNTIME_DIR;
+	if (!override?.trim()) return dirs.rootSubdir(path.join("run", "gui"), "state");
+	const dir = resolveAbsoluteDir(override);
+	if (!dir) throw new Error(`OMP_GUI_RUNTIME_DIR must be an absolute path, not ${JSON.stringify(override)}`);
+	return dir;
+}
+
 /** Root directory containing every per-project daemon runtime scope (~/.omp/run/daemons; XDG default: $XDG_STATE_HOME/omp/run/daemons). */
 export function getDaemonRuntimeRoot(): string {
 	return dirs.rootSubdir(path.join("run", "daemons"), "state");

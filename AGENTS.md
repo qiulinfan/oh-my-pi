@@ -344,3 +344,11 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+## GUI development (fork-only)
+
+- If `OMP_GUI_SERVER_PID` is set, this session runs inside that `omp gui` server. Stopping it ends this turn and every session it hosts: never signal it (kill, pkill, Ctrl+C) or quit the desktop app, and never read or write `~/.omp/run/gui` (it holds the token).
+- Client edits under `packages/gui` show after a page reload only when the server runs from source (`ps -o command= -p "$OMP_GUI_SERVER_PID"` names `src/cli.ts`); a compiled server embeds its page.
+- Server edits (`packages/coding-agent/src/gui/`, `packages/gui/src/kinds.ts`) and binary installs need a server restart, which ends every hosted session: verify with `bun check` and focused tests, then ask the user to restart it; sessions that were mid-turn can be restored afterwards.
+- Test GUI changes against a separate server: `OMP_GUI_RUNTIME_DIR=<absolute temp dir>` and `--port 0` (see [docs/gui.md](docs/gui.md)). Without it, `omp gui` attaches to the running server.
+- Try desktop changes with the development build, never an installed one: `bun run package-dev` in `desktop/`, then run `out/omp-dev.app/Contents/MacOS/Electron` with `OMP_DESKTOP_OMP` set to an absolute wrapper that sets `OMP_GUI_RUNTIME_DIR` and adds `--port 0`, and `OMP_DESKTOP_DATA_DIR` set to a temp dir (see [desktop/README.md](desktop/README.md)).

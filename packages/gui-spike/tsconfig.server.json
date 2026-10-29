@@ -1,7 +1,0 @@
-{
-	"extends": "../tsconfig.workspace.json",
-	"include": ["server.ts"],
-	"compilerOptions": {
-		"noEmit": true
-	}
-}

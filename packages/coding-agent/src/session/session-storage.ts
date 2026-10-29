@@ -572,6 +572,18 @@ const SESSION_HEADER_PREFIX_BYTES = 64 * 1024;
  * when there is no readable file or no header in that prefix.
  */
 function readSessionHeaderIdSync(sessionPath: string): string | undefined {
+	try {
+		return readSessionHeaderIdStrictSync(sessionPath);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * {@link readSessionHeaderIdSync}, but a file that exists and cannot be read
+ * throws instead of reading as headerless.
+ */
+function readSessionHeaderIdStrictSync(sessionPath: string): string | undefined {
 	let prefix: string;
 	try {
 		const fd = fs.openSync(sessionPath, "r");
@@ -581,8 +593,9 @@ function readSessionHeaderIdSync(sessionPath: string): string | undefined {
 		} finally {
 			fs.closeSync(fd);
 		}
-	} catch {
-		return undefined;
+	} catch (err) {
+		if (isEnoent(err) || hasFsCode(err, "ENOTDIR") || hasFsCode(err, "EISDIR")) return undefined;
+		throw err;
 	}
 	if (parseTitleSlotFromContent(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
 	const end = prefix.indexOf("\n");
@@ -629,6 +642,20 @@ export function tryAcquireSessionLease(sessionId: string): FileLockHandle | null
 		}
 	}
 	return tryAcquireFileLock(lockPath);
+}
+
+/**
+ * Take the ownership lease of the session in `sessionFile` without waiting, or
+ * null while a running process holds it. Keyed by the header's session id, read
+ * the way {@link FileSessionStorage.claimSession} reads it. Undefined when the
+ * file has no session header: omp writes the header with the first bytes of a
+ * session, so no running writer owns such a file. Throws when the file cannot
+ * be read or the lease cannot be probed; the caller decides what an unknown
+ * owner means.
+ */
+export function tryAcquireSessionFileLease(sessionFile: string): FileLockHandle | null | undefined {
+	const sessionId = readSessionHeaderIdStrictSync(sessionFile);
+	return sessionId === undefined ? undefined : tryAcquireSessionLease(sessionId);
 }
 
 /** Approximate size (UTF-16 units synchronously, bytes through a sink) buffered per staging-file write when streaming a body. */

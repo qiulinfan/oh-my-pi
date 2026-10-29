@@ -12,6 +12,9 @@
 					choice === "dark" || (choice === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
 				document.documentElement.dataset.theme = dark ? "dark" : "light";
 				document.documentElement.dataset.prose = localStorage.getItem("omp-gui.prose") ?? "sans";
+				// The desktop app loads this page with ?shell=desktop: it draws its own title bar.
+				if (new URLSearchParams(location.search).get("shell") === "desktop")
+					document.documentElement.dataset.shell = "desktop";
 			} catch {}
 		</script>
 	</head>
