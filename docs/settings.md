@@ -734,6 +734,9 @@ read:
 | `edit.recoverInlineEdits` | boolean | `true` | Recover recognized edit snippets from assistant text. |
 | `edit.autoRepair.enabled` | boolean | `false` | Ask the `smol` model to repair an introduced AST parse regression; accept only a reparsed repair, otherwise warn. |
 | `edit.blackbox.enabled`   | boolean | `false`    | Append full source for AST parse regressions.      |
+| `fileCheckpoints.enabled` | boolean | `true` | Save each file's prior state before omp's file tools change it, so a rewind can restore code. See [File checkpoints](tree.md#file-checkpoints). |
+| `fileCheckpoints.maxSizeMb` | number | `500` | Per-session cap on saved file states; the oldest turns are removed first. |
+| `fileCheckpoints.maxAgeDays` | number | `30` | Checkpoints of turns older than this are removed the next time the session is used. |
 | `read.defaultLimit`       | number  | `300`      | Default line count for `read` without a selector. |
 | `read.summarize.enabled`  | boolean | `true`     | Structural summaries for code reads.              |
 | `read.summarize.prose`    | boolean | `false`    | Summarize prose files too.                        |

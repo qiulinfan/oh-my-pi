@@ -732,6 +732,57 @@ export const cfgCheckpointEnabled = register({
 	},
 });
 
+// File checkpoints (code rewind)
+export const cfgFileCheckpointsEnabled = register({
+	id: "fileCheckpoints.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoints",
+		description:
+			"Save each file's prior state before omp's file tools change it, so rewind can restore code as well as the conversation. Bash and eval changes are not tracked",
+	},
+});
+
+export const cfgFileCheckpointsMaxSizeMb = register({
+	id: "fileCheckpoints.maxSizeMb",
+	type: "number",
+	default: 500,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoint Size Cap (MB)",
+		description: "Per-session cap on saved file states; the oldest turns' checkpoints are removed first",
+		options: [
+			{ value: "100", label: "100 MB" },
+			{ value: "250", label: "250 MB" },
+			{ value: "500", label: "500 MB", description: "Default" },
+			{ value: "1000", label: "1 GB" },
+			{ value: "2000", label: "2 GB" },
+		],
+	},
+});
+
+export const cfgFileCheckpointsMaxAgeDays = register({
+	id: "fileCheckpoints.maxAgeDays",
+	type: "number",
+	default: 30,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoint Retention (days)",
+		description: "Checkpoints of turns older than this are removed when the session is next used",
+		options: [
+			{ value: "7", label: "7 days" },
+			{ value: "14", label: "14 days" },
+			{ value: "30", label: "30 days", description: "Default" },
+			{ value: "90", label: "90 days" },
+		],
+	},
+});
+
 // Fetching and browser
 export const cfgFetchEnabled = register({
 	id: "fetch.enabled",

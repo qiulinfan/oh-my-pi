@@ -303,6 +303,22 @@ export interface WorkspaceEditResult {
 	executed: ExecutedWorkspaceChange[];
 }
 
+/** Every file path a workspace edit may write, create, rename (both ends) or delete. */
+export function workspaceEditFilePaths(edit: WorkspaceEdit): string[] {
+	const uris = new Set<string>(flattenWorkspaceTextEdits(edit).keys());
+	for (const change of edit.documentChanges ?? []) {
+		if (!("kind" in change) || !change.kind) continue;
+		if (change.kind === "rename") {
+			const renameOp = change as RenameFile;
+			uris.add(renameOp.oldUri);
+			uris.add(renameOp.newUri);
+		} else {
+			uris.add((change as CreateFile | DeleteFile).uri);
+		}
+	}
+	return [...uris].map(uri => uriToFile(uri));
+}
+
 /**
  * Apply a workspace edit (collection of file changes).
  * All text-edit batches are overlap-validated before anything is written so a

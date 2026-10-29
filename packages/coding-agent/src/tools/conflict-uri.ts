@@ -166,6 +166,7 @@ async function resolveConflict(
 	const splice = spliceConflict(originalText, entry, expanded);
 	const newContent = splice.text;
 
+	await session.fileCheckpoints?.recordBefore(absolutePath);
 	await writethroughNoop(absolutePath, newContent, signal);
 	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);
@@ -441,6 +442,7 @@ async function resolveAllConflicts(
 			continue;
 		}
 
+		await session.fileCheckpoints?.recordBefore(absolutePath);
 		await writethroughNoop(absolutePath, text, signal);
 		invalidateFsScanAfterWrite(absolutePath);
 		session.bumpFileMutationVersion?.(absolutePath);

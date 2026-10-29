@@ -200,6 +200,11 @@ import {
 } from "./session/credential-disabled-notice";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
+import {
+	FILE_CHECKPOINT_MAX_FILE_BYTES,
+	type FileCheckpointRecorder,
+	FileCheckpointStore,
+} from "./session/file-checkpoints";
 import { recoverInlineSloppyEdit } from "./session/inline-edit-recovery";
 import {
 	type CustomMessage,
@@ -304,6 +309,8 @@ import { createComputerPrelude } from "./tools/computer";
 import { createRatchetPrelude } from "./ratchet/prelude-definition";
 import { createArchivePrelude } from "./archive/prelude-definition";
 import { ToolContextStore } from "./tools/context";
+import { invalidateFsScanAfterWrite } from "./tools/fs-cache-invalidation";
+import { getEditStore } from "./edit/store";
 import { isIrcEnabled } from "./irc/messaging";
 import { imageGenTool } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -328,6 +335,9 @@ import {
 	cfgAsyncMaxJobs,
 	cfgAsyncWidgets,
 	cfgComputerEnabled,
+	cfgFileCheckpointsEnabled,
+	cfgFileCheckpointsMaxAgeDays,
+	cfgFileCheckpointsMaxSizeMb,
 	cfgRatchetEnabled,
 	cfgGenerateImageEnabled,
 	cfgSecurityEnabled,
@@ -824,6 +834,12 @@ export interface CreateAgentSessionOptions {
 	bindProcessState?: boolean;
 	/** Task recursion depth (for subagent sessions). Default: 0 */
 	taskDepth?: number;
+	/**
+	 * Parent's file checkpoint recorder for a subagent editing the parent's checkout, so its
+	 * edits are restorable from the parent's rewind. Subagents without one record nothing;
+	 * a top-level session always owns its own store.
+	 */
+	fileCheckpoints?: FileCheckpointRecorder;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
 	/** Parent Mnemopi state: subagents alias it; a top-level fork (`/tan`) inherits its delivered recall. */
@@ -2354,10 +2370,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeToolNames.add(name);
 			}
 		};
+		// A top-level session owns its file checkpoints; a subagent only records into
+		// the parent's store when it edits the parent's checkout.
+		const ownFileCheckpoints = isSubagentSession
+			? undefined
+			: new FileCheckpointStore(sessionManager, {
+					enabled: () => cfgFileCheckpointsEnabled.get(settings),
+					limits: () => ({
+						maxBytes: cfgFileCheckpointsMaxSizeMb.get(settings) * 1024 * 1024,
+						maxAgeMs: cfgFileCheckpointsMaxAgeDays.get(settings) * 24 * 60 * 60 * 1000,
+						maxFileBytes: FILE_CHECKPOINT_MAX_FILE_BYTES,
+					}),
+					onRestored: restoredPath => {
+						getEditStore(toolSession).invalidate(restoredPath);
+						invalidateFsScanAfterWrite(restoredPath);
+						toolSession.bumpFileMutationVersion?.(restoredPath);
+					},
+				});
+		const fileCheckpoints: FileCheckpointRecorder | undefined = ownFileCheckpoints ?? options.fileCheckpoints;
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			fileCheckpoints,
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			toolRegistry,
@@ -4794,6 +4829,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			extensionRunner,
 			getEvalPreludes,
 			evalToolSession: toolSession,
+			fileCheckpoints: ownFileCheckpoints,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillDescriptions,

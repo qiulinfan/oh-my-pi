@@ -75,7 +75,7 @@ You are in an active checkpoint. You MUST call rewind with your investigation fi
 - The tool body has no local `try/catch`; unexpected exceptions propagate.
 
 ## Notes
-- Despite the summary string `Create a git-based checkpoint to save and restore session state`, the implementation does not call git and does not snapshot filesystem state.
+- This is a context checkpoint: it does not call git and does not snapshot filesystem state. File changes made through omp's file tools are restored separately by code rewind (see [File checkpoints](../tree.md#file-checkpoints)).
 - Captured state is conversation/session metadata only:
   - in-memory message count
   - persisted checkpoint tool-result entry ID in the session tree

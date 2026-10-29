@@ -47,6 +47,7 @@ import type { JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { ToolSession } from "../tools";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
+import type { FileCheckpointStore } from "./file-checkpoints";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { SessionManager } from "./session-manager";
 
@@ -238,6 +239,8 @@ export interface AgentSessionConfig {
 	getEvalPreludes?: () => readonly EvalPreludeDefinition[];
 	/** Tool bridge context used by user-initiated Python cells to project enabled eval preludes. */
 	evalToolSession?: ToolSession;
+	/** File checkpoints this session's tools record into; restored by code rewind. Top-level sessions only. */
+	fileCheckpoints?: FileCheckpointStore;
 	/** Loaded skills already discovered by the SDK. */
 	skills?: Skill[];
 	/** Frozen routing hints shared with the system prompt and later skillful notices. */

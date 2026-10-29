@@ -356,6 +356,7 @@ import {
 } from "./codex-auto-reset";
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
+import type { FileCheckpointStore } from "./file-checkpoints";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
@@ -1040,6 +1041,8 @@ export class AgentSession implements SettingsScope {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	/** File checkpoints recorded by this session's file tools; code rewind restores from them. */
+	readonly fileCheckpoints: FileCheckpointStore | undefined;
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Manager of this session's root, used for its own job queries and deliveries. */
@@ -1862,6 +1865,7 @@ export class AgentSession implements SettingsScope {
 			kernelOwnerId: config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`,
 		});
 		this.#evalToolSession = config.evalToolSession;
+		this.fileCheckpoints = config.fileCheckpoints;
 		const initialEvalStateContext = this.#buildEvalStateContextMessage(this.agent.state.messages);
 		if (initialEvalStateContext) {
 			// Persist the startup snapshot at the slot this process sends it from, so

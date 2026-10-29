@@ -31,6 +31,7 @@ import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
+import type { FileCheckpointRecorder } from "../session/file-checkpoints";
 import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
@@ -542,6 +543,9 @@ export interface ToolSession {
 	bumpFileMutationVersion?(path: string): number;
 	/** Read the current session-global mutation counter for `path` (0 if never mutated). */
 	getFileMutationVersion?(path: string): number;
+	/** Saves a file's prior state before a tool changes it, for code rewind. Shared with
+	 *  non-isolated subagents so their edits land in the parent's turn. */
+	fileCheckpoints?: FileCheckpointRecorder;
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
