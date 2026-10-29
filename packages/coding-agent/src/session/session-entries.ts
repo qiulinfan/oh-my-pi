@@ -12,6 +12,7 @@ import type { CompactionMethod } from "./compaction-methods";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { RetryFallbackRole } from "./retry-fallback-chains";
 import type { RuntimeIdentity } from "./runtime-identity";
+import type { SessionOrigin } from "./session-origin";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -62,6 +63,8 @@ export interface SessionHeader {
 	continuationOf?: string;
 	/** Prior absolute JSONL locations recorded by successful session moves. */
 	previousSessionFiles?: string[];
+	/** The front end whose process created this session; absent on sessions an SDK embedder or older omp wrote. */
+	origin?: SessionOrigin;
 	/** Local-only provider prompt-cache identity inherited by exact-route full forks; omitted from shares and HTML. */
 	providerPromptCacheKey?: string;
 	/** Local-only Task candidate, gated by the actual request model's cache policy; omitted from shares and HTML. */

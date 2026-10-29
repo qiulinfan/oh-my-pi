@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Saved sessions record the front end that started them in their header (`origin`): the TUI, omp gui, print/RPC runs, or the ACP client by name (`zed`, `iina`).
+
 ## [18.14.0] - 2026-10-29
 
 ### Breaking Changes

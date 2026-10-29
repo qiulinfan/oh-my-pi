@@ -90,6 +90,7 @@ import {
 	TTS_SPEED_OPTIONS,
 } from "../../tts/models";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
+import { setSessionOriginClient } from "../../session/session-origin";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	extractAssistantMessageText,
@@ -835,6 +836,7 @@ export class AcpAgent implements Agent {
 	async initialize(params: InitializeRequest): Promise<InitializeResponse> {
 		this.#registerConnectionCleanup();
 		this.#clientCapabilities = params.clientCapabilities;
+		setSessionOriginClient(params.clientInfo?.name);
 		const authMethods: AuthMethod[] = [
 			{
 				id: "agent",

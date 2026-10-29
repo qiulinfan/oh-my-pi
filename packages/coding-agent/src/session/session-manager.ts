@@ -105,6 +105,7 @@ import {
 	visitEntriesFromFile,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
+import { getSessionOrigin } from "./session-origin";
 import {
 	computeDefaultSessionDir,
 	hasPositiveMovedProjectEvidence,
@@ -2045,6 +2046,7 @@ export class SessionManager {
 			parentSession: options?.parentSession,
 			providerPromptCacheKey: options?.providerPromptCacheKey,
 			taskPromptCacheKey: options?.taskPromptCacheKey,
+			origin: getSessionOrigin(),
 		};
 		const workspace = normalizeSessionWorkspace({
 			cwd: this.#cwd,
@@ -2509,6 +2511,7 @@ export class SessionManager {
 			parentSession: parentSessionId,
 			providerPromptCacheKey: SessionManager.getInheritedProviderPromptCacheKey(this.#header),
 			taskPromptCacheKey: this.#header.taskPromptCacheKey,
+			origin: getSessionOrigin(),
 		};
 		this.#sessionName = this.#header.title;
 		this.#titleSource = this.#header.titleSource;
@@ -4101,6 +4104,7 @@ export class SessionManager {
 			titleSource: this.#titleSource,
 			parentSession: this.#persist ? sourceSessionFile : undefined,
 			additionalDirectories: this.#additionalDirectories.length > 0 ? [...this.#additionalDirectories] : undefined,
+			origin: getSessionOrigin(),
 		};
 
 		const labels: LabelEntry[] = [];

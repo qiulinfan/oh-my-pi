@@ -202,6 +202,7 @@ import { cfgDisabledProviders, cfgEnabledModels, cfgModelExactMatch } from "./co
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
+import { setSessionOrigin } from "./session/session-origin";
 
 type RunAcpMode = (
 	createSession: AcpSessionFactory,
@@ -1961,6 +1962,10 @@ export async function runRootCommand(
 			stopPendingStartupComposer();
 		}
 		// Account routing must use the effective settings, including `--config` and
+		setSessionOrigin({
+			mode: isInteractive ? "tui" : mode === "acp" ? "acp" : mode === "rpc" || mode === "rpc-ui" ? "rpc" : "print",
+			client: isInteractive && process.env.OMP_GUI_SERVER_PID ? "omp-gui" : undefined,
+		});
 		// `PI_CONFIG_FILES` overlays, rather than independently re-reading only the
 		// main config file during auth discovery.
 		const settingsPromise = deps.settings
