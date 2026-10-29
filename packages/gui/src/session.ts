@@ -1,6 +1,6 @@
 /**
  * One live omp session as seen by a browser view: the WebSocket to the
- * server, a store per surface, the palette, and blob URLs. Components read
+ * server, a store per surface, and blob URLs. Components read
  * it through React context and send keys/events back through it.
  *
  * The view is `connected` from the server's `init` (a full snapshot) until
@@ -20,7 +20,6 @@ export interface SurfaceMeta {
 	mode: "inline" | "screen";
 	title?: string;
 	role?: string;
-	palette?: { dark?: Record<string, string>; light?: Record<string, string> };
 	closed?: boolean;
 }
 
@@ -91,7 +90,7 @@ export class SessionConnection {
 	synced = false;
 	/** The server no longer lists the session: there is nothing to reconnect to. */
 	gone = false;
-	/** Bumps on surface open/close/palette/exit and connection changes: the session shell re-renders. */
+	/** Bumps on surface open/close/exit and connection changes: the session shell re-renders. */
 	version = 0;
 	#ws: WebSocket | null = null;
 	#listeners = new Set<Listener>();
@@ -198,7 +197,7 @@ export class SessionConnection {
 				for (const surface of message.surfaces as (SurfaceMeta & { root: TspNode })[]) {
 					const { root, ...meta } = surface;
 					this.surfaces.set(meta.id, {
-						meta: { ...meta, palette: (meta as any).palette },
+						meta,
 						store: new SurfaceStore(meta.id, root),
 					});
 				}
@@ -213,12 +212,6 @@ export class SessionConnection {
 			case "open": {
 				const { root, ...meta } = message.surface as SurfaceMeta & { root: TspNode };
 				this.surfaces.set(meta.id, { meta, store: new SurfaceStore(meta.id, root) });
-				this.#changed();
-				return;
-			}
-			case "palette": {
-				const surface = this.surfaces.get(message.sf);
-				if (surface) surface.meta = { ...surface.meta, palette: message.palette };
 				this.#changed();
 				return;
 			}

@@ -10,7 +10,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
-// `--model` with a typo used to run the nearest model with no word to the user.
+// `--model` with an approximate selector used to run the model it matched with no word to the user.
 describe("--model approximate match", () => {
 	let tempDir: string;
 	let authStorage: AuthStorage;
@@ -49,17 +49,14 @@ describe("--model approximate match", () => {
 		return { options, warnings };
 	}
 
-	test("a typo starts on the nearest model and reports the substitution", async () => {
-		const { options, warnings } = await startWith("anthropic/claude-haku-4-5", Settings.isolated());
-		expect(options.model?.id).toBe("claude-haiku-4-5");
-		expect(warnings).toEqual(['"anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5']);
+	test("an approximate selector starts on the model it matched and reports the substitution", async () => {
+		const { options, warnings } = await startWith("sonnet-4", Settings.isolated());
+		expect(options.model?.id).toBe("claude-sonnet-4-5");
+		expect(warnings).toEqual(['"sonnet-4" is not a known model; using anthropic/claude-sonnet-4-5']);
 	});
 
 	test("model.exactMatch refuses the substitution", async () => {
-		const { options, warnings } = await startWith(
-			"anthropic/claude-haku-4-5",
-			Settings.isolated({ "model.exactMatch": true }),
-		);
+		const { options, warnings } = await startWith("sonnet-4", Settings.isolated({ "model.exactMatch": true }));
 		expect(options.model).toBeUndefined();
 		expect(warnings).toEqual([]);
 	});

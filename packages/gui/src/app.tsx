@@ -308,15 +308,11 @@ function useSession(connection: SessionConnection): number {
 	);
 }
 
-const NO_PALETTE: Record<string, string> = {};
-
 function Surface({ connection, meta }: { connection: SessionConnection; meta: SurfaceMeta }): ReactNode {
 	const surface = connection.surfaces.get(meta.id)!;
-	// Spans may name omp palette tokens; the stylesheet gives every known token this GUI's colour.
-	const palette = meta.palette?.dark ?? meta.palette?.light ?? NO_PALETTE;
 	const ctx = useMemo<SurfaceContextValue>(
-		() => ({ session: connection, store: surface.store, sf: meta.id, palette }),
-		[connection, surface.store, meta.id, palette],
+		() => ({ session: connection, store: surface.store, sf: meta.id }),
+		[connection, surface.store, meta.id],
 	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const innerRef = useRef<HTMLDivElement>(null);

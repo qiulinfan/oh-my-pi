@@ -30,7 +30,7 @@ function draw(node: TspNode): string {
 	const store = new SurfaceStore(SF, { id: SF, k: "col", c: [node] });
 	const session = {} as unknown as SessionConnection;
 	return renderToStaticMarkup(
-		<SurfaceContext.Provider value={{ store, sf: SF, session, palette: {} }}>
+		<SurfaceContext.Provider value={{ store, sf: SF, session }}>
 			<N id={node.id} />
 		</SurfaceContext.Provider>,
 	);
@@ -122,5 +122,29 @@ describe("disclosure heads from the keyboard", () => {
 			expect(toggle).not.toHaveBeenCalled();
 			expect(event.stopPropagation).not.toHaveBeenCalled();
 		}
+	});
+});
+
+// omp sends eval's printed JSON as a `json` node; without a renderer the page drew an empty box.
+describe("json", () => {
+	const value = {
+		name: "omp",
+		nested: { list: Array.from({ length: 30 }, (_, i) => `item-${i}`) },
+		small: [1, 2],
+	};
+
+	test("lists the root's entries, folds long containers below them, and keeps short ones on one line", () => {
+		const html = draw({ id: "j", k: "json", p: { value } });
+		expect(html).toContain('<details class="json-node" open="">');
+		expect(html).toContain("&quot;omp&quot;");
+		expect(html).toContain("[1,2]");
+		// `nested` and the long `list` inside it start folded.
+		expect(html.match(/<details class="json-node">/g)?.length).toBe(2);
+	});
+
+	test("open: 1 also opens the containers one level down", () => {
+		const html = draw({ id: "j", k: "json", p: { value, open: 1 } });
+		expect(html.match(/<details class="json-node" open="">/g)?.length).toBe(2);
+		expect(html).toContain("item-29");
 	});
 });

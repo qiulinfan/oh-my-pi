@@ -127,7 +127,6 @@ type ServerMessage =
 	  }
 	| { t: "open"; surface: SurfaceState }
 	| { t: "frame"; sf: string; ops: TspFrame["ops"] }
-	| { t: "palette"; sf: string; palette: unknown }
 	| { t: "close"; sf: string; keep: boolean }
 	| { t: "blob"; id: string; url: string }
 	| ({ t: "exit"; endedBy?: EndedBy; restorable: boolean; lastOutput?: string } & ExitStatus)
@@ -150,7 +149,6 @@ interface SurfaceState {
 	mode: "inline" | "screen";
 	title?: string;
 	role?: string;
-	palette?: unknown;
 	root: TspNode;
 	closed?: boolean;
 }
@@ -651,12 +649,6 @@ class PtySession {
 				const doc = new TspDocument(body.id);
 				this.#surfaces.set(body.id, { meta, doc });
 				this.#broadcast({ t: "open", surface: { ...meta, root: doc.snapshot() } });
-				return;
-			}
-			case "t": {
-				const surface = this.#surfaces.get(body.sf);
-				if (surface) surface.meta.palette = body;
-				this.#broadcast({ t: "palette", sf: body.sf, palette: body });
 				return;
 			}
 			case "f": {

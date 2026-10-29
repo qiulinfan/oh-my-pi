@@ -906,6 +906,45 @@ describe("role priorities and chains", () => {
 		]);
 	});
 
+	test("marks the candidate that runs in place of an unresolved configured selector", () => {
+		const exa = roleChainModel("web", "exa");
+		const parallel = roleChainModel("web", "parallel");
+		const settings = Settings.isolated({ modelRoles: { web: "web/exa-pro" } });
+
+		const chain = resolveRoleChain("web", settings, [exa, parallel]);
+
+		expect(chain[0]?.replaces).toBe("web/exa-pro");
+		expect(chain.slice(1).some(candidate => candidate.replaces !== undefined)).toBe(false);
+	});
+
+	test("leaves a resolved configured selector unmarked", () => {
+		const exa = roleChainModel("web", "exa");
+		const settings = Settings.isolated({ modelRoles: { web: "web/exa" } });
+
+		expect(resolveRoleChain("web", settings, [exa])[0]?.replaces).toBeUndefined();
+	});
+
+	test("marks the replacement when a configured comma list matched on a later entry", () => {
+		const exa = roleChainModel("web", "exa");
+		const settings = Settings.isolated({ modelRoles: { web: "web/exa-pro,web/exa" } });
+
+		expect(resolveRoleChain("web", settings, [exa])[0]?.replaces).toBe("web/exa-pro");
+	});
+
+	test("marks the replacement when a configured role alias expands to a missing selector", () => {
+		const parallel = roleChainModel("web", "parallel");
+		const settings = Settings.isolated({ modelRoles: { web: "@search", search: "web/exa-pro" } });
+
+		expect(resolveRoleChain("web", settings, [parallel])[0]?.replaces).toBe("web/exa-pro");
+	});
+
+	test("marks the first qualified entry a list skipped before matching", () => {
+		const exa = roleChainModel("web", "exa");
+		const settings = Settings.isolated({ modelRoles: { web: "missing,web/exa-pro,web/exa" } });
+
+		expect(resolveRoleChain("web", settings, [exa])[0]?.replaces).toBe("web/exa-pro");
+	});
+
 	test("upgrades a default primary when a configured fallback resolves the same route", () => {
 		const parallel = roleChainModel("web", "parallel");
 		const settings = Settings.isolated({
@@ -1444,6 +1483,8 @@ describe("resolveModelOverride", () => {
 	});
 });
 describe("resolveCliModel", () => {
+	const allModelsRegistry = { getAll: () => allModels, getAvailable: () => allModels };
+
 	test("resolves --model provider/id without --provider", () => {
 		const registry = { getAll: () => allModels, getAvailable: () => allModels } as unknown as Parameters<
 			typeof resolveCliModel
@@ -1786,20 +1827,28 @@ describe("resolveCliModel", () => {
 		expect(abbreviated.thinkingLevel).toBe(Effort.High);
 	});
 
-	test("resolves fuzzy patterns within an explicit provider", () => {
-		const registry = { getAll: () => allModels, getAvailable: () => allModels } as unknown as Parameters<
-			typeof resolveCliModel
-		>[0]["modelRegistry"];
-
+	test("rejects a near miss within an explicit --provider and suggests the sibling", () => {
 		const result = resolveCliModel({
 			cliProvider: "openai",
 			cliModel: "4o",
-			modelRegistry: registry,
+			modelRegistry: allModelsRegistry,
 		});
 
-		expect(result.error).toBeUndefined();
-		expect(result.model?.provider).toBe("openai");
-		expect(result.model?.id).toBe("gpt-4o");
+		expect(result.model).toBeUndefined();
+		expect(result.error).toContain("not found");
+		expect(result.error).toContain("Did you mean openai/gpt-4o");
+		expect(resolveCliModel({ cliModel: "openai/4o", modelRegistry: allModelsRegistry }).error).toContain(
+			"openai/gpt-4o",
+		);
+		expect(resolveCliModel({ cliModel: "openai/4o:high", modelRegistry: allModelsRegistry }).error).toContain(
+			"Did you mean openai/gpt-4o",
+		);
+	});
+
+	test("offers no suggestion when nothing in the provider is close", () => {
+		expect(resolveCliModel({ cliModel: "openai/zzzz", modelRegistry: allModelsRegistry }).error).not.toContain(
+			"Did you mean",
+		);
 	});
 
 	test("supports --model <pattern>:<thinking> (without explicit --thinking)", () => {
@@ -1953,19 +2002,23 @@ describe("resolveCliModel", () => {
 		expect(result.error).toContain("No models available");
 	});
 
-	test("resolves provider-prefixed fuzzy patterns (openrouter/qwen -> openrouter model)", () => {
-		const registry = { getAll: () => allModels, getAvailable: () => allModels } as unknown as Parameters<
-			typeof resolveCliModel
-		>[0]["modelRegistry"];
+	test("rejects a provider-prefixed near miss instead of fuzzy-matching a sibling", () => {
+		for (const cliModel of ["openrouter/qwen", "anthropic/claude-sonnet-5", "openai-codex/gpt-5.3-spark"]) {
+			const result = resolveCliModel({ cliModel, modelRegistry: allModelsRegistry });
+			expect(result.model).toBeUndefined();
+			expect(result.error).toContain("not found");
+		}
+	});
 
-		const result = resolveCliModel({
-			cliModel: "openrouter/qwen",
-			modelRegistry: registry,
-		});
+	test("provider-prefixed exact ids resolve while bare selectors keep fuzzy matching", () => {
+		const exact = resolveCliModel({ cliModel: "openai-codex/gpt-5.3-codex-spark", modelRegistry: allModelsRegistry });
+		expect(exact.error).toBeUndefined();
+		expect(exact.model?.provider).toBe("openai-codex");
+		expect(exact.model?.id).toBe("gpt-5.3-codex-spark");
 
-		expect(result.error).toBeUndefined();
-		expect(result.model?.provider).toBe("openrouter");
-		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
+		const bare = resolveCliModel({ cliModel: "spark", modelRegistry: allModelsRegistry });
+		expect(bare.error).toBeUndefined();
+		expect(bare.model?.id).toBe("gpt-5.3-codex-spark");
 	});
 
 	test("prefers decomposed provider+id over flat id match when ambiguous", () => {
@@ -2511,7 +2564,7 @@ describe("provider routing selector (@upstream)", () => {
 		expect(openRouterOnly(result.model)).toBeUndefined();
 	});
 
-	test("keeps fuzzy matching a non-aggregator provider id that ends in @ (Vertex)", () => {
+	test("resolves an exact non-aggregator provider id that ends in @ (Vertex)", () => {
 		const vertexModel: Model<"anthropic-messages"> = buildModel({
 			id: "claude-opus-4-8@default",
 			name: "Claude Opus 4.8",
@@ -2524,13 +2577,97 @@ describe("provider routing selector (@upstream)", () => {
 			contextWindow: 200000,
 			maxTokens: 32000,
 		});
-		// `opus@default` is a fuzzy provider-qualified pattern: the `@upstream` bypass must not
-		// swallow it, because google-vertex is not an aggregator and the routing fallback would
-		// never resolve it, leaving the selector unmatched.
-		const result = parseModelPattern("google-vertex/opus@default", [vertexModel]);
+		// The `@upstream` bypass must not swallow an exact provider-qualified id ending in `@`,
+		// because google-vertex is not an aggregator and the routing fallback would never
+		// resolve it, leaving the selector unmatched.
+		const result = parseModelPattern("google-vertex/claude-opus-4-8@default", [vertexModel]);
 		expect(result.model?.id).toBe("claude-opus-4-8@default");
 		expect(result.upstream).toBeUndefined();
 		expect(openRouterOnly(result.model)).toBeUndefined();
+	});
+
+	test("resolves a Vertex id written without the catalog's declared @revision only", () => {
+		const vertexModel = (id: string, provider = "google-vertex"): Model<Api> =>
+			buildModel({
+				id,
+				name: "Claude Opus 4.8",
+				api: "anthropic-messages",
+				provider,
+				baseUrl: "https://us-aiplatform.googleapis.com",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+				contextWindow: 200000,
+				maxTokens: 32000,
+			});
+		expect(
+			parseModelPattern("google-vertex/claude-opus-4-8", [vertexModel("claude-opus-4-8@default")]).model?.id,
+		).toBe("claude-opus-4-8@default");
+		// `@bar` is part of a literal id, not a declared revision.
+		expect(parseModelPattern("google-vertex/foo", [vertexModel("foo@bar")]).model).toBeUndefined();
+		// Other providers declare no revision suffix.
+		expect(
+			parseModelPattern("custom/claude-opus-4-8", [vertexModel("claude-opus-4-8@default", "custom")]).model,
+		).toBeUndefined();
+	});
+
+	test("a selector naming a catalog provider missing from the pool never matches another provider's raw ids", () => {
+		const openRouterGemini = buildModel({
+			id: "google/gemini-openrouter-only",
+			name: "Gemini 2.5 Pro",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 65_536,
+		});
+		expect(parseModelPattern("google/gemini-openrouter", [openRouterGemini]).model).toBeUndefined();
+		// The exact raw id, which the google catalog does not carry, still resolves.
+		expect(parseModelPattern("google/gemini-openrouter-only", [openRouterGemini]).model?.provider).toBe("openrouter");
+	});
+
+	test("a catalog provider with no bundled rows still locks its prefix", () => {
+		const customOllamaId = buildModel({
+			id: "ollama/llama3-latest",
+			name: "Llama 3",
+			api: "openai-completions",
+			provider: "custom-gateway",
+			baseUrl: "https://gateway.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		});
+		expect(parseModelPattern("ollama/llama3", [customOllamaId]).model).toBeUndefined();
+	});
+
+	test("a registry provider with no models yet still locks its prefix", () => {
+		const routedProxyId = buildModel({
+			id: "proxy/foo-latest",
+			name: "Foo",
+			api: "openai-completions",
+			provider: "custom-gateway",
+			baseUrl: "https://gateway.example/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		});
+		// `proxy` is a discovery provider whose cache is still empty: no model and no catalog entry name it.
+		const registry = {
+			getAll: () => [routedProxyId],
+			getAvailable: () => [routedProxyId],
+			hasProvider: (provider: string) => provider === "proxy",
+		};
+		expect(resolveCliModel({ cliModel: "proxy/foo", modelRegistry: registry }).model).toBeUndefined();
+		expect(resolveCliModel({ cliModel: "proxy/foo-latest", modelRegistry: registry }).model?.provider).toBe(
+			"custom-gateway",
+		);
 	});
 
 	test("ignores @slug on a non-aggregator model (no silent routing)", () => {
@@ -2909,13 +3046,18 @@ describe("approximate model matches", () => {
 	const withHaiku55 = [...preHaiku55, fixtureModel("anthropic", "claude-haiku-5-5")];
 	const registry = (models: Model<Api>[]) => ({ getAll: () => models, getAvailable: () => models });
 
-	test("a provider-qualified typo runs the nearest model with a warning naming both", () => {
-		const resolved = resolveCliModel({ cliModel: "anthropic/claude-haku-4-5", modelRegistry: registry(withHaiku55) });
-		expect(resolved.model?.id).toBe("claude-haiku-4-5");
-		expect(resolved.warning).toBe(
-			'"anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5',
-		);
+	test("a bare substring selector runs the model it matched with a warning naming both", () => {
+		const resolved = resolveCliModel({ cliModel: "sonnet-4", modelRegistry: registry(withHaiku55) });
+		expect(resolved.model?.id).toBe("claude-sonnet-4-5");
+		expect(resolved.warning).toBe('"sonnet-4" is not a known model; using anthropic/claude-sonnet-4-5');
 		expect(resolved.error).toBeUndefined();
+	});
+
+	test("a provider-qualified typo is a not-found error that names the provider's close ids", () => {
+		const resolved = resolveCliModel({ cliModel: "anthropic/claude-haku-4-5", modelRegistry: registry(withHaiku55) });
+		expect(resolved.model).toBeUndefined();
+		expect(resolved.error).toContain('Model "anthropic/claude-haku-4-5" not found.');
+		expect(resolved.error).toContain("claude-haiku-4-5");
 	});
 
 	test("an exact id resolves without a warning", () => {
@@ -2926,28 +3068,26 @@ describe("approximate model matches", () => {
 		}
 	});
 
-	test("a version missing from the catalog warns instead of silently running its neighbour", () => {
-		const resolved = resolveCliModel({ cliModel: "anthropic/claude-haiku-5-5", modelRegistry: registry(preHaiku55) });
-		expect(resolved.model?.id).toBe("claude-haiku-4-5");
-		expect(resolved.warning).toBe(
-			'"anthropic/claude-haiku-5-5" is not a known model; using anthropic/claude-haiku-4-5',
-		);
+	test("a version missing from the catalog is not found instead of silently running its neighbour", () => {
+		for (const selector of ["claude-haiku-5-5", "anthropic/claude-haiku-5-5"]) {
+			const resolved = resolveCliModel({ cliModel: selector, modelRegistry: registry(preHaiku55) });
+			expect(resolved.model).toBeUndefined();
+			expect(resolved.error).toContain(`Model "${selector}" not found.`);
+		}
 	});
 
 	test("the substitution warning survives a thinking suffix and keeps the level", () => {
-		const parsed = parseModelPattern("anthropic/claude-haku-4-5:high", withHaiku55);
-		expect(parsed.model?.id).toBe("claude-haiku-4-5");
+		const parsed = parseModelPattern("sonnet-4:high", withHaiku55);
+		expect(parsed.model?.id).toBe("claude-sonnet-4-5");
 		expect(parsed.thinkingLevel).toBe(Effort.High);
 		expect(parsed.explicitThinkingLevel).toBe(true);
-		expect(parsed.warning).toBe(
-			'"anthropic/claude-haku-4-5:high" is not a known model; using anthropic/claude-haiku-4-5',
-		);
+		expect(parsed.warning).toBe('"sonnet-4:high" is not a known model; using anthropic/claude-sonnet-4-5');
 	});
 
 	test("exact matching turns a near miss into a not-found error", () => {
 		for (const [selector, models] of [
-			["anthropic/claude-haku-4-5", withHaiku55],
-			["anthropic/claude-haiku-5-5", preHaiku55],
+			["sonnet-4", withHaiku55],
+			["sonnet-4-", preHaiku55],
 		] as const) {
 			const resolved = resolveCliModel({
 				cliModel: selector,
@@ -2994,17 +3134,17 @@ describe("approximate model matches", () => {
 
 	test("configured roles that only approximately match are reported at startup", () => {
 		const settings = Settings.isolated({
-			modelRoles: { slow: "anthropic/claude-haku-4-5", smol: "claude-haiku-4-5", plan: "@slow" },
+			modelRoles: { slow: "sonnet-4", smol: "claude-haiku-4-5", plan: "@slow" },
 		});
 		expect(modelRoleSelectorWarnings(settings, registry(withHaiku55))).toEqual([
-			'modelRoles.slow: "anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5',
+			'modelRoles.slow: "sonnet-4" is not a known model; using anthropic/claude-sonnet-4-5',
 		]);
 		const exact = Settings.isolated({
 			"model.exactMatch": true,
-			modelRoles: { slow: "anthropic/claude-haku-4-5" },
+			modelRoles: { slow: "sonnet-4" },
 		});
 		expect(modelRoleSelectorWarnings(exact, registry(withHaiku55))).toEqual([
-			'modelRoles.slow: "anthropic/claude-haku-4-5" matches no model exactly (model.exactMatch is on)',
+			'modelRoles.slow: "sonnet-4" matches no model exactly (model.exactMatch is on)',
 		]);
 	});
 });

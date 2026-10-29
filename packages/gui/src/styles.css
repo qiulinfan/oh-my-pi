@@ -1464,6 +1464,38 @@ button.picker-item:focus-visible {
 	padding-left: 14px;
 	margin: 2px 0;
 }
+.k-json {
+	font: 12px/1.5 var(--mono);
+	overflow-x: auto;
+}
+.k-json summary {
+	cursor: pointer;
+	list-style: none;
+	color: var(--muted);
+}
+.k-json summary::-webkit-details-marker {
+	display: none;
+}
+.json-count {
+	margin: 0 6px;
+	color: var(--dim);
+}
+.json-entries {
+	padding-left: 14px;
+}
+.json-key {
+	color: var(--accent-ink);
+}
+.json-string {
+	color: var(--green);
+}
+.json-number,
+.json-boolean {
+	color: var(--amber);
+}
+.json-null {
+	color: var(--dim);
+}
 .k-badge {
 	display: inline-flex;
 	align-items: center;

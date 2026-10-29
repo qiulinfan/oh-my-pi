@@ -23,7 +23,8 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 
 export function formatIncoming(msg: IrcMessage): string {
 	const replyTag = msg.replyTo ? ` (reply to ${msg.replyTo})` : "";
-	return `[${msg.id}] ${msg.from}${replyTag}: ${msg.body}`;
+	const progressTag = msg.progress ? " (progress; reply follows)" : "";
+	return `[${msg.id}] ${msg.from}${replyTag}${progressTag}: ${msg.body}`;
 }
 
 /** Session-buffered inbox drain used before parking a bus waiter. */
@@ -61,7 +62,7 @@ function rootSessionId(registry: AgentRegistry, senderId: string): string | unde
 /** Send a direct message or broadcast; delivery never waits for a reply. */
 export async function executeSend(
 	deps: { registry: AgentRegistry; senderId: string; sessionFileHint?: string | null },
-	params: { to: string; message: string },
+	params: { to: string; message: string; progress?: boolean },
 ): Promise<AgentToolResult<CoordinationDetails>> {
 	const { registry, senderId, sessionFileHint } = deps;
 	const to = params.to.trim();
@@ -107,6 +108,7 @@ export async function executeSend(
 					body: message,
 					...(isBroadcast ? { broadcast: true } : {}),
 					...(peerRequest ? { peerRequest } : {}),
+					...(params.progress ? { progress: true } : {}),
 				},
 				{ suppressRelay },
 			),

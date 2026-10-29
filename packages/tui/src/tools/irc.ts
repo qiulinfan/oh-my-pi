@@ -33,6 +33,12 @@ export interface IrcMessage {
 	 * session's request too, and its tool approval is held the same way.
 	 */
 	peerRequest?: boolean;
+	/**
+	 * Interim acknowledgement or progress on something the recipient asked
+	 * (`agent://<id>?progress`): it neither answers that request nor asks one,
+	 * so the recipient's `wait` keeps waiting for the actual reply.
+	 */
+	progress?: boolean;
 }
 
 /** Delivery outcome for one peer recipient. */

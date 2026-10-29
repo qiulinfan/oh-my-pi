@@ -35,7 +35,6 @@ export interface SurfaceContextValue {
 	session: SessionConnection;
 	store: SurfaceStore;
 	sf: string;
-	palette: Record<string, string>;
 }
 
 export const SurfaceContext = createContext<SurfaceContextValue | null>(null);
@@ -80,18 +79,22 @@ const SPAN_TOKENS = new Set([
 	"hide",
 ]);
 
-function spanStyle(tokens: string[], palette: Record<string, string>): { className: string; style?: CSSProperties } {
+/**
+ * Classes for span effects; any other token names an omp theme token, drawn in this GUI's
+ * `--p-<token>` colour. A token the stylesheet does not define leaves `color` invalid at
+ * computed-value time, so the span inherits its colour as if it named none.
+ */
+function spanStyle(tokens: string[]): { className: string; style?: CSSProperties } {
 	const classes: string[] = [];
 	let color: string | undefined;
 	for (const token of tokens) {
 		if (SPAN_TOKENS.has(token)) classes.push(`s-${token}`);
-		else if (palette[token]) color = `var(--p-${token})`;
+		else if (/^[A-Za-z][\w-]*$/.test(token)) color = `var(--p-${token})`;
 	}
 	return { className: classes.join(" "), style: color ? { color } : undefined };
 }
 
 export function Spans({ text }: { text: unknown }): ReactNode {
-	const { palette } = useSurface();
 	if (text === undefined || text === null) return null;
 	if (typeof text === "string") return text;
 	if (!Array.isArray(text)) return String(text);
@@ -100,7 +103,6 @@ export function Spans({ text }: { text: unknown }): ReactNode {
 			String(span.s ?? "")
 				.split(/\s+/)
 				.filter(Boolean),
-			palette,
 		);
 		const fx = span.fx && span.fx !== "none" ? ` fx-${span.fx}` : "";
 		if (span.href)
@@ -879,6 +881,52 @@ function TreeItems({ nodes }: { nodes: any[] }): ReactNode {
 const Tree: R = ({ node }) => (
 	<div {...useCommon(node)}>
 		<TreeItems nodes={node.p.nodes ?? []} />
+	</div>
+);
+
+/** A JSON scalar as source text, coloured by type. */
+function JsonScalar({ value }: { value: unknown }): ReactNode {
+	const kind = value === null ? "null" : typeof value;
+	return <span className={`json-${kind}`}>{JSON.stringify(value) ?? "null"}</span>;
+}
+
+/**
+ * One JSON value: scalars and short containers on one line, longer containers as a
+ * disclosure whose entries list below it. `open` is how many levels below this one start open.
+ */
+function JsonValue({ value, open }: { value: unknown; open: number }): ReactNode {
+	if (value === null || typeof value !== "object") return <JsonScalar value={value} />;
+	const inline = JSON.stringify(value);
+	if (inline.length <= 80) return <span className="json-inline">{inline}</span>;
+	const entries: [string, unknown][] = Array.isArray(value)
+		? value.map((item, i) => [String(i), item])
+		: Object.entries(value as Record<string, unknown>);
+	const [lead, close] = Array.isArray(value) ? ["[", "]"] : ["{", "}"];
+	return (
+		<details className="json-node" open={open >= 0}>
+			<summary>
+				{lead}
+				<span className="json-count">
+					{entries.length} {Array.isArray(value) ? "items" : "keys"}
+				</span>
+				{close}
+			</summary>
+			<div className="json-entries">
+				{entries.map(([key, item]) => (
+					<div key={key} className="json-entry">
+						<span className="json-key">{Array.isArray(value) ? key : JSON.stringify(key)}</span>:{" "}
+						<JsonValue value={item} open={open - 1} />
+					</div>
+				))}
+			</div>
+		</details>
+	);
+}
+
+/** `json`: the root's entries listed, containers below folded beyond `open` levels. */
+const Json: R = ({ node }) => (
+	<div {...useCommon(node)}>
+		<JsonValue value={node.p.value ?? null} open={typeof node.p.open === "number" ? node.p.open : 0} />
 	</div>
 );
 
@@ -1934,6 +1982,7 @@ const RENDERERS: Record<string, R> = {
 	kv: Kv,
 	table: Table,
 	tree: Tree,
+	json: Json,
 	badge: Badge,
 	kbd: Kbd,
 	icon: IconNode,
