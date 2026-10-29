@@ -239,3 +239,14 @@ the app stops it, and so does the app crashing. A server the app started that
 stops on its own is restarted at most twice a minute; each such stop writes a
 crash log to `~/Library/Logs/omp`. Building, installing and the rest of its
 behavior are described in [desktop/README.md](../desktop/README.md).
+
+## Obsidian sidebar
+
+The Obsidian plugin in `obsidian/` shows the same page in an Obsidian sidebar.
+Like the desktop app, it attaches to the running server or starts one, and a
+server it started stops with Obsidian. Building, installing and its behavior
+are described in [obsidian/README.md](../obsidian/README.md).
+
+Below 640 px the page takes the whole width: the session list slides over it
+from the left (the button at the top left shows it), and the composer's
+controls wrap onto further lines.

@@ -1,0 +1,9 @@
+{
+	"id": "omp-sidebar",
+	"name": "omp",
+	"version": "0.1.0",
+	"minAppVersion": "1.8.0",
+	"description": "Shows this machine's omp gui in a sidebar.",
+	"author": "qiulinfan",
+	"isDesktopOnly": true
+}

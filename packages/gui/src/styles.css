@@ -238,9 +238,15 @@ kbd {
 
 /* ── Shell ─────────────────────────────────────────────── */
 .app {
+	position: relative;
 	display: grid;
 	grid-template-columns: 264px 1fr;
 	height: 100%;
+}
+/* Shown only where the window is too narrow for the sidebar (see the end of the file). */
+.drawer-toggle,
+.drawer-backdrop {
+	display: none;
 }
 .sidebar {
 	background: var(--sidebar);
@@ -2985,6 +2991,87 @@ button.picker-item:focus-visible {
 	}
 	.head-path {
 		display: none;
+	}
+}
+
+/* An editor's side panel (the Obsidian plugin) or a narrow window: the page takes the whole width and the
+   session list slides over it from the left. */
+@media (max-width: 640px) {
+	.app {
+		grid-template-columns: 1fr;
+	}
+	.sidebar {
+		position: absolute;
+		inset: 0 auto 0 0;
+		z-index: 30;
+		width: min(280px, 86%);
+		transform: translateX(-100%);
+		visibility: hidden;
+		transition:
+			transform 0.18s ease,
+			visibility 0.18s;
+		box-shadow: var(--shadow-sm);
+	}
+	.app.drawer-open .sidebar {
+		transform: none;
+		visibility: visible;
+	}
+	.drawer-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 29;
+		background: rgb(0 0 0 / 0.25);
+	}
+	.app.drawer-open .drawer-backdrop {
+		display: block;
+	}
+	.drawer-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		z-index: 31;
+		width: 28px;
+		height: 28px;
+		border: 1px solid transparent;
+		border-radius: 7px;
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.drawer-toggle:hover {
+		color: var(--fg);
+		background: var(--surface);
+	}
+	.app.drawer-open .drawer-toggle {
+		left: calc(min(280px, 86%) - 38px);
+	}
+	.session-head {
+		padding-left: 46px;
+	}
+	.start {
+		padding: 12vh 14px 32px;
+	}
+	.start-bar {
+		flex-wrap: wrap;
+	}
+	.start-bar > * {
+		flex: none;
+		max-width: 100%;
+	}
+	[data-role="omp.composer.bar"] {
+		flex-wrap: wrap;
+		row-gap: 6px;
+	}
+	[data-role="omp.composer.bar"] > * {
+		flex-shrink: 0;
+	}
+	.main-inner,
+	.dock > .k-col {
+		padding-left: 14px;
+		padding-right: 14px;
 	}
 }
 
