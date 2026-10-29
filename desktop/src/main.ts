@@ -99,9 +99,9 @@ const offeredRestart = new Set<string>();
 function statusPage(text: string): string {
 	const html = `<!doctype html><meta charset="utf-8"><title>omp</title><style>
 :root { color-scheme: light dark; }
-html, body { margin: 0; height: 100%; background: #f5f4ed; color: #5c5b56; font: 13px -apple-system, system-ui, sans-serif; }
+html, body { margin: 0; height: 100%; background: #f3f3f0; color: #52514e; font: 13px -apple-system, system-ui, sans-serif; }
 body { display: grid; place-items: center; -webkit-app-region: drag; -webkit-user-select: none; cursor: default; }
-@media (prefers-color-scheme: dark) { html, body { background: #1f1e1d; color: #a8a69d; } }
+@media (prefers-color-scheme: dark) { html, body { background: #111111; color: #b0afa5; } }
 </style><body>${text}</body>`;
 	return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
@@ -500,7 +500,7 @@ function createWindow(): BrowserWindow {
 		title: "omp",
 		titleBarStyle: "hiddenInset",
 		trafficLightPosition: { x: 16, y: 17 },
-		backgroundColor: nativeTheme.shouldUseDarkColors ? "#1f1e1d" : "#f5f4ed",
+		backgroundColor: nativeTheme.shouldUseDarkColors ? "#111111" : "#f3f3f0",
 		show: true,
 		webPreferences: {
 			contextIsolation: true,
