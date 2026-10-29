@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { AsyncJobManager } from "../../src/async";
@@ -37,6 +38,7 @@ const SMOL: Model<Api> = {
 	cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
 	contextWindow: 128000,
 	maxTokens: 4096,
+	identity: classifyModel("p", "smol"),
 } as Model<Api>;
 const VISION: Model<Api> = {
 	...SMOL,

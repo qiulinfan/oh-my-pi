@@ -42,6 +42,12 @@ export interface BuildDirectoryTreeOptions {
 export interface BuildWorkspaceTreeOptions {
 	/** Abort the native workspace scan after this many milliseconds. */
 	timeoutMs?: number;
+	/**
+	 * Collect only the nested AGENTS.md index: the walk skips tree entries and
+	 * their metadata, and `rendered` stays empty. The index lists files, not
+	 * mtimes, so it changes only when an AGENTS.md is added or removed.
+	 */
+	indexOnly?: boolean;
 }
 
 /**
@@ -90,19 +96,21 @@ export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTre
 /**
  * Build the workspace tree shown in the system prompt. Returns the rendered
  * tree plus the AGENTS.md files surfaced by the same native walk so callers
- * never need to do a second filesystem scan.
+ * never need to do a second filesystem scan. With `indexOnly`, returns just
+ * the AGENTS.md index.
  */
 export async function buildWorkspaceTree(cwd: string, options: BuildWorkspaceTreeOptions = {}): Promise<WorkspaceTree> {
 	const rootPath = path.resolve(cwd);
 	try {
 		const result = await listWorkspace({
 			path: rootPath,
-			maxDepth: WORKSPACE_DEFAULTS.maxDepth,
+			maxDepth: options.indexOnly ? 0 : WORKSPACE_DEFAULTS.maxDepth,
 			hidden: false,
 			gitignore: true,
 			collectAgentsMd: true,
 			timeoutMs: options.timeoutMs,
 		});
+		if (options.indexOnly) return { ...emptyTree(rootPath), agentsMdFiles: result.agentsMdFiles };
 		const tree = assembleTree(rootPath, result.entries, {
 			perDirLimit: WORKSPACE_DEFAULTS.perDirLimit,
 			rootLimit: WORKSPACE_DEFAULTS.perDirLimit,

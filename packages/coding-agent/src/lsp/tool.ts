@@ -56,6 +56,7 @@ import {
 	type RenameReferenceEdit,
 	rangesOverlap,
 	sortAndValidateTextEdits,
+	workspaceEditFilePaths,
 } from "./edits";
 import { detectLspmux } from "./lspmux";
 import {
@@ -204,6 +205,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 	static createIf(session: ToolSession): LspTool | null {
 		return session.enableLsp === false ? null : new LspTool(session);
+	}
+
+	/** Apply a workspace edit after checkpointing every file it touches. */
+	async #applyWorkspaceEdit(edit: WorkspaceEdit, signal: AbortSignal | undefined): Promise<string[]> {
+		if (this.session.fileCheckpoints) {
+			for (const filePath of workspaceEditFilePaths(edit)) {
+				await this.session.fileCheckpoints.recordBefore(filePath);
+			}
+		}
+		return applyWorkspaceEditWithLsp(edit, this.session.cwd, signal);
 	}
 
 	async execute(
@@ -794,6 +805,11 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			// Apply the reference edits and move as one unit: a failed move rolls
 			// the reference edits back so the source, destination, and every
 			// reference file are left unchanged.
+			if (this.session.fileCheckpoints) {
+				for (const filePath of [...referenceEdits.map(edit => edit.filePath), source, dest]) {
+					await this.session.fileCheckpoints.recordBefore(filePath);
+				}
+			}
 			await applyEditsThenRename(referenceEdits, source, dest);
 			summary.push(`  Renamed ${sourceLabel} → ${destLabel}`);
 
@@ -1432,7 +1448,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						const appliedAction = await applyCodeAction(selectedAction, {
 							resolveCodeAction: async actionItem =>
 								(await sendRequest(client, "codeAction/resolve", actionItem, signal)) as CodeAction,
-							applyWorkspaceEdit: async edit => applyWorkspaceEditWithLsp(edit, this.session.cwd, signal),
+							applyWorkspaceEdit: async edit => this.#applyWorkspaceEdit(edit, signal),
 							executeCommand: async commandItem => {
 								await sendRequest(
 									client,
@@ -1537,7 +1553,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					} else {
 						const shouldApply = apply !== false;
 						if (shouldApply) {
-							const applied = await applyWorkspaceEditWithLsp(result, this.session.cwd, signal);
+							const applied = await this.#applyWorkspaceEdit(result, signal);
 							output = `Applied rename:\n${applied.map(a => `  ${a}`).join("\n")}`;
 						} else {
 							const preview = formatWorkspaceEdit(result, this.session.cwd);

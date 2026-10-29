@@ -914,6 +914,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					}`,
 					resolvedArchivePath.absolutePath,
 				);
+				await this.session.fileCheckpoints?.recordBefore(resolvedArchivePath.absolutePath);
 				const archiveResult = await this.#writeArchiveEntry(cleanContent, cleanBytes, content, resolvedArchivePath);
 				if (stripped) {
 					const firstText = archiveResult.content.find(
@@ -932,6 +933,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				await enforcePlanModeWrite(this.session, resolvedSqlitePath.sqlitePath, { op: "update", signal });
 
 				emitWriteProgress(onUpdate, cleanBytes, path, resolvedSqlitePath.absolutePath);
+				await this.session.fileCheckpoints?.recordBefore(resolvedSqlitePath.absolutePath);
 				const sqliteResult = await this.#writeSqliteRow(path, cleanContent, resolvedSqlitePath);
 				if (stripped) {
 					const firstText = sqliteResult.content.find(
@@ -974,6 +976,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			);
 
 			emitWriteProgress(onUpdate, cleanBytes, displayPath, absolutePath);
+			await this.session.fileCheckpoints?.recordBefore(absolutePath);
 
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
 			// artifacts such as local:// plans are owned by OMP, not the editor.

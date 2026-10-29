@@ -287,6 +287,22 @@ describe("compat compiler grammar", () => {
 		).toThrow(/duplicate override glob/);
 	});
 
+	test("a family selector word may belong to one class only", () => {
+		const compiled = compileTaxonomy(
+			taxonomySources('class "one" { bounded "one"\nfamily "fast" glob="*fast*" selector=#true }'),
+		);
+		expect(compiled.classes[0]?.families[0]).toMatchObject({ id: "fast", selector: true });
+		expect(() =>
+			compileTaxonomy([
+				...taxonomySources('class "one" { bounded "one"\nfamily "fast" glob="*fast*" selector=#true }'),
+				{
+					file: "taxonomy/other.kdl",
+					text: 'class "two" { bounded "two"\nfamily "Fast" glob="*fast*" selector=#true }',
+				},
+			]),
+		).toThrow(/family selector `Fast` is declared by both `one` and `two`/);
+	});
+
 	test("missing collapse definition is rejected", () => {
 		expect(() => compileTaxonomy([{ file: "taxonomy/test.kdl", text: 'class "solo" { bounded "solo" }' }])).toThrow(
 			/collapse/,

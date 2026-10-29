@@ -56,8 +56,18 @@ function exitOf(view: View): Record<string, unknown> | undefined {
 interface DocNode {
 	id: string;
 	k: string;
-	p?: { text?: string };
+	p?: { text?: string; role?: string };
 	c?: DocNode[];
+}
+
+function findNode(node: DocNode | null | undefined, match: (node: DocNode) => boolean): DocNode | undefined {
+	if (!node) return undefined;
+	if (match(node)) return node;
+	for (const child of node.c ?? []) {
+		const found = findNode(child, match);
+		if (found) return found;
+	}
+	return undefined;
 }
 
 function findEditor(node: DocNode | null | undefined): DocNode | undefined {
@@ -698,6 +708,94 @@ describe("omp gui: hosted-session roster", () => {
 			"say hi",
 		]);
 	}, 60_000);
+
+	test("a session runs in the work-detail mode picked, a restore comes back in its recorded mode, and an unknown mode is refused", async () => {
+		const gui = await setup();
+		const hosted = path.join(gui.runtimeDir, "hosted");
+		const { file } = await writeSessionFixture(gui.project, gui.project);
+		// Sessions of a previous server: one omp saved, started in Verbose, and one that died before omp wrote
+		// its file, started with a thinking level by a server that recorded no mode.
+		await Bun.write(
+			path.join(hosted, "0000000d.json"),
+			JSON.stringify({
+				guiId: "0000000d",
+				sessionFile: file,
+				startedAt: 1,
+				cwd: gui.project,
+				chat: false,
+				workDetail: "verbose",
+			}),
+		);
+		await Bun.write(
+			path.join(hosted, "0000000e.json"),
+			JSON.stringify({
+				guiId: "0000000e",
+				prompt: "say hi",
+				thinking: "low",
+				startedAt: 1,
+				cwd: gui.project,
+				chat: false,
+			}),
+		);
+		const served = await gui.start();
+		const unknown = await gui.api<{ code: string }>(served, "/api/spawn", {
+			project: gui.project,
+			workDetail: "terse",
+		});
+		expect({ status: unknown.status, code: unknown.body.code }).toEqual({ status: 400, code: "bad-request" });
+
+		const fresh = await gui.spawn(served, { project: gui.project, workDetail: "compact" });
+		expect(await gui.args(served, fresh.id)).toEqual(["--work-detail", "compact"]);
+		// omp takes the mode and gets past its startup, rather than refusing the flag and exiting.
+		await gui.waitForSessionFile(served, fresh.id);
+		// Recorded with the session, so the next server restores it in the same mode.
+		expect((await Bun.file(path.join(hosted, `${fresh.id}.json`)).json()).workDetail).toBe("compact");
+		// The page sends its current pick on every spawn; a restore still comes back in the recorded mode.
+		const continued = await gui.spawn(served, { from: "0000000d", workDetail: "compact" });
+		expect(await gui.args(served, continued.id)).toEqual(["--restore", file, "--work-detail", "verbose"]);
+		// With no mode recorded, the page's pick applies.
+		const restarted = await gui.spawn(served, { from: "0000000e", workDetail: "standard" });
+		expect(await gui.args(served, restarted.id)).toEqual([
+			"--thinking",
+			"low",
+			"--work-detail",
+			"standard",
+			"--",
+			"say hi",
+		]);
+	}, 60_000);
+	test("a mode switched with the session's chip is recorded, and a restore comes back in it", async () => {
+		const gui = await setup();
+		await gui.skipSetupWizard();
+		const { file } = await writeSessionFixture(gui.project, gui.project);
+		const first = await gui.start();
+		const session = await gui.spawn(first, { resume: { path: file, cwd: gui.project }, workDetail: "compact" });
+		const doc = async () => (await gui.api<DocNode | null>(first, `/api/doc?id=${session.id}&sf=s:1`)).body;
+		const isChip = (node: DocNode) => node.p?.role === "omp.composer.detail";
+		await waitFor(async () => findNode(await doc(), isChip) !== undefined, 30_000);
+		const chip = findNode(await doc(), isChip)!;
+		const ws = new WebSocket(`ws://127.0.0.1:${first.port}/pty?id=${session.id}&t=${first.token}`);
+		const opened = Promise.withResolvers<void>();
+		ws.addEventListener("open", () => opened.resolve());
+		ws.addEventListener("error", () => opened.reject(new Error("the session socket did not open")));
+		await opened.promise;
+		const entryFile = path.join(gui.runtimeDir, "hosted", `${session.id}.json`);
+		try {
+			// Click the chip, as the page does; omp opens its picker on Compact. Two rows down is Verbose.
+			ws.send(JSON.stringify({ t: "ev", ev: { ev: "action", sf: "s:1", id: chip.id, act: "detail.select" } }));
+			await waitFor(async () => findNode(await doc(), node => node.k === "picker") !== undefined);
+			ws.send(JSON.stringify({ t: "keys", data: "\x1b[B\x1b[B\r" }));
+			await waitFor(async () => (await Bun.file(entryFile).json()).workDetail === "verbose");
+		} finally {
+			ws.close();
+		}
+		expect(await gui.stop(first)).toBe(143);
+
+		const second = await gui.start();
+		// The page sends its own pick; the restore still takes the mode the session last ran in.
+		const restored = await gui.spawn(second, { from: session.id, workDetail: "compact" });
+		expect(await gui.args(second, restored.id)).toEqual(["--restore", file, "--work-detail", "verbose"]);
+	}, 90_000);
 });
 
 describe("omp gui: sessions that outlive or leave their server", () => {

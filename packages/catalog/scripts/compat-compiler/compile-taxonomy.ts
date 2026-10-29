@@ -62,11 +62,13 @@ function parseMatcher(node: KdlNodeView): CompiledMatcher {
 }
 
 function parseFamily(node: KdlNodeView): CompiledFamily {
-	validateProps(node, ["glob", "priority"]);
+	validateProps(node, ["glob", "priority", "selector"]);
 	const args = positionalStrings(node);
 	const glob = propString(node, "glob");
 	if (args.length !== 1 || !args[0] || !glob || node.children) malformed(node);
-	return { id: args[0], glob: glob.toLowerCase(), priority: propInt(node, "priority") ?? 0 };
+	const family: CompiledFamily = { id: args[0], glob: glob.toLowerCase(), priority: propInt(node, "priority") ?? 0 };
+	if (propBool(node, "selector")) family.selector = true;
+	return family;
 }
 
 function parseRevisionRule(node: KdlNodeView, cls: CompiledClass): void {
@@ -539,6 +541,9 @@ export function compileTaxonomy(sources: readonly { file: string; text: string }
 	const classNames = new Set<string>();
 	const overrideIds = new Set<string>();
 	const overrideKeys = new Set<string>();
+	// A family selector names one product line; the same word on two classes
+	// would make a bare `--model <word>` ambiguous.
+	const selectorFamilies = new Map<string, string>();
 
 	for (const { file, text } of sources) {
 		for (const node of parseKdl(file, text)) {
@@ -562,6 +567,19 @@ export function compileTaxonomy(sources: readonly { file: string; text: string }
 							throw new CompatCompileError(file, node.line, `duplicate override ${label} for \`${selector}\``);
 						}
 						overrideKeys.add(key);
+					}
+					for (const family of cls.families) {
+						if (!family.selector) continue;
+						const word = family.id.toLowerCase();
+						const owner = selectorFamilies.get(word);
+						if (owner !== undefined && owner !== cls.id) {
+							throw new CompatCompileError(
+								file,
+								node.line,
+								`family selector \`${family.id}\` is declared by both \`${owner}\` and \`${cls.id}\``,
+							);
+						}
+						selectorFamilies.set(word, cls.id);
 					}
 					classes.push(cls);
 					break;

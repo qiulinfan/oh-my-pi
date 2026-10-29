@@ -33,6 +33,30 @@ Double-escape on an empty editor follows `doubleEscapeAction`: `rewind` (default
 Rewind opens on the latest ~600 entries, keeping whole user turns (which may exceed the limit). Press `a` for all earlier history without changing the selected point or branch.
 Press `f` to filter the replayed transcript (loading the whole branch); Left/Right navigate the rewind selector's sibling-branch strip when available. These controls belong to transcript rewind, not the tree selector below.
 
+## File checkpoints
+
+Before omp's own file tools change a file, omp saves that file's prior state (its content, or "did not exist") once per user turn. The covered tools are `write` (including archive members and SQLite rows), `edit` in every mode (hashline, patch, `apply_patch`, replace, notebook edits), `ast_edit` when its preview is applied, the `lsp` tool's rename and code-action edits, and `conflict://` resolutions. Subagents that edit your checkout through the same tools record into the parent session, so their edits belong to the parent's turn.
+
+When you rewind to a user message (Esc Esc, `/rewind`, `/branch`, or `/tree`) and files changed since that message, a dialog lists them (`M` modify, `A` re-create, `D` delete) and offers:
+
+- **Restore conversation only** (default): today's rewind; files stay as they are.
+- **Restore code only**: write every listed file back to its state before that message, deleting files that did not exist then. The conversation does not move.
+- **Restore conversation and code**: both.
+
+Rewinding to anything other than a user message moves the conversation only.
+
+Snapshots live in the session's artifacts directory (`<session>/file-checkpoints/`, content deduplicated by SHA-256), so they survive `/resume` and are copied by `/fork`. Retention removes whole turns, oldest first, past `fileCheckpoints.maxAgeDays` (default 30) or `fileCheckpoints.maxSizeMb` per session (default 500). A rewind that would need a removed turn restores the conversation only and says why. `fileCheckpoints.enabled: false` turns recording off.
+
+Not tracked, as in Claude Code:
+
+- changes made by `bash`, `eval`, or other commands (`rm`, `mv`, scripts, formatters run from the shell)
+- edits made outside the session (your editor, other processes, other sessions)
+- subagents running in isolated worktrees (`task.isolation`), whose changes return through the isolation merge
+- files larger than 32 MB, generated media (`tts`, image generation), and empty directories left behind after a created file is deleted
+- sessions with no session file (`--no-session`)
+
+File checkpoints are a safety net for omp's own edits, not a replacement for version control.
+
 ## Tree UI model
 
 The tree is rendered from session-entry parent pointers (`id` / `parentId`).

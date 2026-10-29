@@ -25,6 +25,7 @@ import {
 import { code, span } from "../native/describe";
 import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
 import { Memo } from "../native/memo";
+import { currentToggle, rowExpanded, type WorkDetailToggle, workDetailEpoch } from "./work-detail";
 
 export type EvalExecutionLanguage = "python" | "js";
 
@@ -35,6 +36,10 @@ export class EvalExecutionComponent extends Container {
 	#truncation?: TruncationMeta;
 	#artifactError?: OutputArtifactError;
 	#expanded = false;
+	/** What the host last set through {@link setExpanded} (`Ctrl+O`, the transcript-wide state). */
+	#hostExpanded = false;
+	/** The user's own toggle of this card on a TSP surface; it wins until the work-detail mode changes. */
+	#toggle: WorkDetailToggle | undefined;
 	// Post-finalize mutation counter (FinalizableBlock.getTranscriptBlockVersion):
 	// a completed cell's block still mutates on expansion toggles, and the
 	// transcript's width-epoch resolution and committed-render bypass must
@@ -106,6 +111,12 @@ export class EvalExecutionComponent extends Container {
 	}
 
 	setExpanded(expanded: boolean): void {
+		this.#hostExpanded = expanded;
+		this.#toggle = undefined;
+		this.#applyExpanded(expanded);
+	}
+
+	#applyExpanded(expanded: boolean): void {
 		if (this.#expanded !== expanded) this.#blockVersion++;
 		this.#expanded = expanded;
 		this.#outputPane.setExpanded(expanded);
@@ -117,9 +128,15 @@ export class EvalExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/**
+	 * The user's click on the card head: it wins over the work-detail mode until the mode changes or
+	 * `Ctrl+O` sets every row, and is mirrored into the terminal state like an agent tool row's.
+	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
-		if (expanded !== undefined) this.setExpanded(expanded);
+		if (expanded === undefined) return;
+		this.#toggle = { expanded, epoch: workDetailEpoch() };
+		this.#applyExpanded(expanded);
 	}
 
 	/**
@@ -129,14 +146,22 @@ export class EvalExecutionComponent extends Container {
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
-		const key = [dataFirst, this.#outputVersion, this.#status, this.#expanded];
+		const key = [
+			dataFirst,
+			this.#outputVersion,
+			this.#status,
+			this.#expanded,
+			this.#hostExpanded,
+			currentToggle(this.#toggle),
+			workDetailEpoch(),
+		];
 		return this.#native.get(key, () => {
 			const title = this.#language === "js" ? "JavaScript" : "Python";
 			const common = {
 				role: "omp.eval",
 				status: this.#status,
 				startedAt: this.#startedAt,
-				expanded: this.#expanded,
+				expanded: rowExpanded(this.#toggle, this.#hostExpanded),
 				output: this.#outputPane.getText(),
 				exitCode: this.#exitCode,
 				truncation: this.#truncation,

@@ -7,7 +7,7 @@ Tool approval has three inputs:
    - `write`: mutates workspace/session state but does not execute arbitrary code.
    - `exec`: executes code, shells out, drives a browser, spawns agents, or performs similarly broad actions.
 2. **Tool policy** — object-form declarations may set `policy: allow | deny | prompt`, optionally with `override`, a reason, and a `policyKey` for a dispatched sub-tool. This is used for argument-dependent safety/pattern rules.
-3. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the active mode, but cannot bypass a tool's own deny/prompt policy or a non-yolo safety override.
+3. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the active mode, but cannot bypass a tool's own deny/prompt policy or, outside `yolo`, a safety override.
 
 Tools without an `approval` declaration, and decisions without a valid tier, use `exec`. This is the safe default for unknown custom tools. MCP server tools declare `write`, regardless of their MCP annotations.
 
@@ -17,16 +17,40 @@ When an execute-time caller supplies neither settings nor `autoApprove`, approva
 
 Configure with `tools.approvalMode`:
 
-| Mode                | Auto-approves                                          | Prompts for                 |
-| ------------------- | ------------------------------------------------------ | --------------------------- |
-| `always-ask`        | `read`                                                 | `write`, `exec`             |
-| `always-ask-cached` | `read` without file targets, granted files and folders | file reads, `write`, `exec` |
-| `write`             | `read`, `write`                                        | `exec`                      |
-| `yolo` (default)    | `read`, `write`, `exec`                                | none                        |
+| Mode                | Auto-approves                                           | Prompts for                 |
+| ------------------- | ------------------------------------------------------- | --------------------------- |
+| `always-ask`        | `read`                                                  | `write`, `exec`             |
+| `always-ask-cached` | `read` without file targets, granted files and folders  | file reads, `write`, `exec` |
+| `write`             | `read`, `write`                                         | `exec`                      |
+| `auto`              | `read`, `write`, `exec` calls the approval judge allows | other `exec` calls          |
+| `yolo` (default)    | `read`, `write`, `exec`                                 | none                        |
 
-`--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies and explicit tool prompt policies still apply.
+Every mode, `yolo` included, asks before a critical command (see [Safety overrides](#safety-overrides)). Where no user can answer (print mode, subagents, an RPC or ACP host without a prompt), such a call is refused with its reason instead of run.
+
+`--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies, explicit tool prompt policies, and critical-command prompts still apply.
+
+| Call                                                    | `always-ask` | `write` | `auto`                   | `yolo` | No user can answer  |
+| ------------------------------------------------------- | ------------ | ------- | ------------------------ | ------ | ------------------- |
+| `read` tier                                             | allow        | allow   | allow                    | allow  | allow               |
+| `write` tier                                            | prompt       | allow   | allow                    | allow  | as the mode         |
+| ordinary `exec` (`bash ls`, `eval`)                     | prompt       | prompt  | judge: allow/prompt/deny | allow  | a prompt is refused |
+| critical command (`rm -rf ~`, `curl … \| sh`)           | prompt       | prompt  | prompt                   | prompt | refused             |
+| critical command with `tools.approval.bash: allow`      | prompt       | prompt  | prompt                   | allow  | as the mode         |
+| `tools.approval.<tool>: deny` or a `bash.patterns` deny | deny         | deny    | deny                     | deny   | deny                |
 
 A session acting on another omp session's request runs in `write` mode at most, whatever the configured mode or flags, from the moment that session's message (or one a local agent passes on from such a turn) enters the conversation until you send your next message: it may read and write, and asks before every `exec` call. Messaging another session (`agent://<id>@<session>`) is a `write`; messaging an agent in the same process stays a `read`.
+
+### Auto (`auto`)
+
+`auto` resolves every call as `write` does: the same tool and user policies, `bash.patterns` rules, critical-command prompts, and read/write tiers. The difference is an `exec`-tier call that `write` would prompt for. Before asking you, omp puts it to the approval judge, a model from the `judge` role chain (the chain auto-thinking and `find` use; the session model is the last resort). The judge sees the tool, the call as the approval prompt would show it, the working directory, and your latest message, and answers one of:
+
+- **allow**: routine and safe in context (inspecting, building, testing, project scripts, local version control). The call runs without a prompt.
+- **prompt**: plausible but worth a confirmation (deleting beyond build outputs, pushing or rewriting history, installing software, network uploads, running downloaded code, or an unclear effect). You are asked, as in `write`, and the prompt's reason says the judge asked.
+- **deny**: clearly destructive or exfiltrating (wiping a home directory or disk, sending secrets to a remote host, opening a remote shell). The call is refused, and the agent sees why.
+
+An `allow` or `deny` given with less than 60% probability counts as `prompt`. If no judge answers (none configured or credentialed, a 20-second timeout, an unusable answer), the call prompts; where no user can answer, it is refused. A verdict is remembered for the rest of the session for the same tool and exact arguments, so a repeated call does not ask the judge again; `/new` and a session switch start afresh. Judge requests are billed to the session like other judgments.
+
+The judge only relaxes a prompt the mode raised. It never overrides a `deny`, a `tools.approval.<tool>: prompt`, a `bash.patterns` rule, a critical command, or a provider safety check, and it is not consulted for `read`/`write` calls, eval prelude host calls, or a peer turn (which runs as `write`). It is a classifier, not a sandbox: a call it allows runs with your full permissions.
 
 ### Ask and remember (`always-ask-cached`)
 
@@ -74,14 +98,14 @@ Resolution per tool call:
 
 1. Evaluate `tool.approval(args)`; omitted/malformed decisions default to tier `exec`.
 2. A tool-declared `policy: deny` always denies. A user `deny` is checked next and also always denies.
-3. In `yolo`, an explicit tool `allow`/`prompt` policy wins; otherwise the valid user policy wins, or the call is allowed. The `override` flag alone does not force a prompt in `yolo`.
-4. In non-yolo modes, an `override: true` decision allows only an accompanying tool `policy: allow`; every other non-denied case prompts.
+3. In `yolo`, an explicit tool `allow`/`prompt` policy wins, then a valid user policy. Otherwise a bare `override: true` (a critical command) prompts, and anything else is allowed.
+4. In other modes, an `override: true` decision allows only an accompanying tool `policy: allow`; every other non-denied case prompts.
 5. Without an override, an explicit tool `allow`/`prompt` policy wins, then a valid user policy wins.
-6. With no explicit policy, the active mode auto-approves or prompts by tier. In `always-ask-cached`, a call whose `approvalCacheTargets` are all granted is allowed instead.
+6. With no explicit policy, the active mode auto-approves or prompts by tier. In `always-ask-cached`, a call whose `approvalCacheTargets` are all granted is allowed instead. In `auto`, an `exec` call this step would prompt for goes to the approval judge first.
 
 Policy strings are trimmed and case-normalized. Invalid user values are ignored.
 
-Approval is resolved again after extension `tool_call` handlers revise the input, against the arguments that will actually execute. A deny blocks execution before a prompt; a call that still requires a prompt fails rather than silently allowing it when no interactive UI is available.
+Approval is resolved again after extension `tool_call` handlers revise the input, against the arguments that will actually execute. A deny blocks execution before a prompt; a call that still requires a prompt fails rather than silently allowing it when no interactive UI is available. For a forced prompt (a critical command or a `bash.patterns` prompt rule) the error gives the reason and says that no approval mode lifts it.
 
 ## Safety overrides
 
@@ -91,7 +115,19 @@ A tool can force a prompt with object-form approval:
 approval: { tier: "exec", override: true, reason: "Critical pattern detected" }
 ```
 
-`bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. It also supports configured `bash.patterns` rules: `deny` is absolute, `prompt` forces a prompt, and `allow` explicitly allows a matching simple command at the `write` tier. Reasons appear in the approval prompt. In `yolo`, a bare critical override is ignored, but an explicit tool/user `prompt` or `deny` policy is still enforced.
+`bash` uses this for critical commands. A critical command is confirmed by the user in every approval mode, `yolo` included, and is never covered by an "approve for this session" answer or an ACP "Always allow"; where no user can answer, it is refused. The classifier flags:
+
+- recursive deletes (`rm -r`, `-R`, `--recursive`, also behind `sudo`, `env`, `command`, a path such as `/bin/rm`, or quoting such as `r\m`) whose target is `/`, a top-level directory, a path two levels down (`/usr/local`, `/Users/me`) other than an entry of a temporary root (`/tmp`, `/private/tmp`, `/var/tmp`, `/var/folders`), the home directory (`~`, `~user`, `$HOME`, `${HOME}`, alone or with `/`, `/*`, `/.*`), or everything in or above the working directory (`*`, `.`, `./*`, `.*`, `..`, `../*`); any `sudo rm`; `rm --no-preserve-root`;
+- `find` that starts at one of those absolute or home targets and deletes (`-delete`, `-exec rm`);
+- `chmod`/`chown -R` on an absolute path or on the home directory;
+- fork bombs of any name (`:(){ :|:& };:`, `f(){ f|f& };f`, `function f { f|f & }`);
+- disk and filesystem destruction (`mkfs`, `dd` to a device, `shred /dev/…`, `cryptsetup`, `wipefs`, `diskutil eraseDisk` and similar) and writes to `/etc/passwd`, `/etc/shadow`, `/etc/sudoers`;
+- running downloaded code: `curl`/`wget` piped into a shell (also through `sudo` or `env`), `bash <(curl …)`, `eval "$(curl …)"`, `bash -c "$(curl …)"` and other interpreters' `-c`/`-e`, `bash <<< "$(curl …)"`, and a download saved to a file and then run (`wget -O x … && sh x`, `curl -o x …; bash x`, `curl … > x.sh && sh x.sh`, `curl -O …/i.sh && ./i.sh`);
+- host control (`shutdown`, `reboot`, `halt`, `poweroff`, `init 0`, `kill -9 1`, `kill -9 -1`) and `nc -e`/`-c`.
+
+Ordinary cleanup stays unflagged: `rm -rf ./build`, `rm -rf node_modules`, `rm -rf ~/.cache/x`, `rm -rf /tmp/x`, a deep absolute path such as `/Users/me/proj/build`, `rm -rf *.log`, and `find . -name x -delete`.
+
+`bash` also supports configured `bash.patterns` rules: `deny` is absolute, `prompt` forces a prompt, and `allow` explicitly allows a matching simple command at the `write` tier. Reasons appear in the approval prompt. In `yolo`, an explicit `tools.approval.bash` policy decides a critical command (`allow` runs it, `prompt` asks, `deny` blocks); in every other mode the critical prompt holds against `tools.approval.bash: allow` too.
 For standalone bash commands, critical detection takes precedence over matching `allow`/`prompt` pattern returns (but not `deny`), replacing them with that bare safety override.
 
 `bash.allowCompoundCommands` is off by default. When enabled, it recognizes only flat chains joined by `&&` whose segments consist of literal arguments. Rules remain ordered within each segment: the first matching rule wins for that segment. Explicit restrictions are combined conservatively across the chain: any matching `deny` wins, otherwise any matching `prompt` wins. A restriction matching the complete chain but no individual segment remains a whole-chain veto.
@@ -100,7 +136,7 @@ All matching whole-chain restrictions are considered, so a later whole-chain den
 
 These explicit chain and segment restrictions are resolved before the existing raw and canonical critical-command checks. After those checks, a chain whose segments all explicitly resolve to `allow` receives the `write`-tier allow; if any segment is unmatched, bash instead retains its standalone `exec` approval tier with no explicit policy. The generic resolver then applies `tools.approval.bash`, followed by the active approval mode, exactly as it would for a standalone command. An unmatched segment therefore prompts only when that existing tool-wide policy or mode requires it. Expansions, assignments, other control flow, redirections, globbing, newlines, malformed syntax, and shell-state-changing builtins do not qualify and retain legacy approval behavior.
 
-This pattern policy controls approval for the `bash` tool; it is not process or filesystem containment. An approved command retains the shell's ambient filesystem, network, and subprocess access. The `eval` tool also declares the `exec` tier and can spawn a shell via subprocess, so a `bash.patterns` `deny` rule does not apply to the same command run through `eval` — under `yolo`, that `exec` call resolves to `allow`. To gate the shell `eval` can reach, add a `tools.approval.eval` policy (`prompt` or `deny`) alongside `bash.patterns`.
+This pattern policy controls approval for the `bash` tool; it is not process or filesystem containment. An approved command retains the shell's ambient filesystem, network, and subprocess access. The `eval` tool also declares the `exec` tier and can spawn a shell via subprocess, so a `bash.patterns` `deny` rule does not apply to the same command run through `eval` — under `yolo`, that `exec` call resolves to `allow`. The critical-command check does apply to a Python cell's shell escapes (`!cmd`, `name = !cmd`, and a `%%bash` cell body): a critical one gives the `eval` call the same override and prompt. Shell commands a cell builds in code (`subprocess`, `os.system`, Bun's `$` in JavaScript) are not inspected. To gate the shell `eval` can reach, add a `tools.approval.eval` policy (`prompt` or `deny`) alongside `bash.patterns`.
 
 ### Computer safety
 
@@ -192,12 +228,12 @@ omp acp --config ./acp-yolo.yml   # file contains tools.approvalMode: yolo
 
 Precedence is the normal settings precedence: runtime flags (`--approval-mode`, `--auto-approve`, `--yolo`) override `--config` overlays, which override project config, which overrides global config. ACP does not currently define a `session/new`, `session/load`, or `session/resume` approval-policy field, so ACP clients that need per-session yolo should launch a separate `omp acp` process with one of the flags above or with a session-specific `--config` overlay.
 
-`tools.approvalMode: yolo` fully applies to ACP when explicitly configured or supplied by a runtime flag: it skips ordinary tier-based OMP prompts and the ACP client gate unless the resolved tool or user policy requires a prompt or denies the call. The schema default is also `yolo`, but without an explicit opt-in, unmatched bash commands and destructive file operations still require an ACP client grant.
+`tools.approvalMode: yolo` fully applies to ACP when explicitly configured or supplied by a runtime flag: it skips ordinary tier-based OMP prompts and the ACP client gate unless the resolved tool or user policy requires a prompt, the call is a critical command, or the call is denied. The schema default is also `yolo`, but without an explicit opt-in, unmatched bash commands and destructive file operations still require an ACP client grant.
 
-For `bash`, ACP resolves `bash.patterns`, critical-command overrides, per-tool policies, and the approval mode before requesting permission: `allow` runs without a card, `deny` blocks without a card, and `prompt` uses `session/request_permission`. An “Always allow” choice covers later ordinary `bash` calls in the session; critical commands and explicit prompt patterns still require a card on every call.
+For `bash`, ACP resolves `bash.patterns`, critical-command overrides, per-tool policies, and the approval mode before requesting permission: `allow` runs without a card, `deny` blocks without a card, and `prompt` uses `session/request_permission`. In `auto`, the approval judge answers first; only a call it neither allows nor refuses gets a card. An “Always allow” choice covers later ordinary `bash` calls in the session; critical commands and explicit prompt patterns still require a card on every call.
 
 For `delete`, `move`, and `edit` patches containing deletion or rename operations, the additional editor-side gate remains operation-category scoped. Ordinary file-content edits do not use that extra gate. Generic approval prompts use form elicitation when the client advertises `elicitation.form`. A rejected, cancelled, or unsupported prompt rejects or cancels the tool call.
 
 ## Subagents
 
-Subagents run headless with `tools.approvalMode: yolo` so ordinary tier-based prompts do not stall them. The parent `task` approval is the authorization boundary. Per-tool policies still use the normal resolver: user `deny` remains absolute, and any call that resolves to `prompt` rejects because a headless subagent cannot satisfy it.
+Subagents run headless with `tools.approvalMode: yolo` so ordinary tier-based prompts do not stall them. The parent `task` approval is the authorization boundary. Per-tool policies still use the normal resolver: user `deny` remains absolute, and any call that resolves to `prompt`, a critical command included, rejects because a headless subagent cannot satisfy it.

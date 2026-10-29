@@ -443,6 +443,13 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					apply: async (_reason: string) => {
 						// The apply outlives the preview call: its filesystem carries no signal.
 						const applyContext = sessionResolveContext(this.session);
+						// The native rewrite writes files itself; checkpoint the previewed set first.
+						if (this.session.fileCheckpoints) {
+							for (const relativePath of fileList) {
+								const target = await resultSnapshotPath(relativePath, this.session.cwd, applyContext);
+								if (target !== undefined) await this.session.fileCheckpoints.recordBefore(target);
+							}
+						}
 						const applyResult = await runAstEditOnce(multiTargets, resolvedSearchPath, globFilter, {
 							rewrites: normalizedRewrites,
 							dryRun: false,

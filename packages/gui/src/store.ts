@@ -30,10 +30,16 @@ export class SurfaceStore {
 	reveal: { id: string; n: number } | null = null;
 	#listeners = new Map<string, Set<Listener>>();
 	#pending = new Set<string>();
+	/**
+	 * Store-wide version clock. Every built or changed node takes the next value, so a node the
+	 * server deletes and re-adds under the same id (a settled component's changed child) never
+	 * comes back with a version a mounted view already rendered.
+	 */
+	#clock = 0;
 
 	constructor(id: string, root?: TspNode) {
 		this.id = id;
-		this.nodes.set(id, { id, k: "col", p: { ...root?.p }, c: [], parent: null, v: 0 });
+		this.nodes.set(id, { id, k: "col", p: { ...root?.p }, c: [], parent: null, v: ++this.#clock });
 		if (root) for (const child of root.c ?? []) this.#build(child, id, null);
 	}
 
@@ -86,13 +92,15 @@ export class SurfaceStore {
 	#touch(id: string): void {
 		const node = this.nodes.get(id);
 		if (!node) return;
-		node.v++;
+		node.v = ++this.#clock;
 		this.#pending.add(id);
 	}
 
 	#build(wire: TspNode, parent: string, before: string | null): void {
-		const node: StoreNode = { id: wire.id, k: wire.k, p: { ...wire.p }, c: [], parent, v: 0 };
+		const node: StoreNode = { id: wire.id, k: wire.k, p: { ...wire.p }, c: [], parent, v: ++this.#clock };
 		this.nodes.set(node.id, node);
+		// Listeners stay keyed by id across a removal, so a view still mounted for a re-added id redraws.
+		this.#pending.add(node.id);
 		const parentNode = this.nodes.get(parent)!;
 		const at = before === null ? -1 : parentNode.c.indexOf(before);
 		if (at === -1) parentNode.c.push(node.id);

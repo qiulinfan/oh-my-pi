@@ -24,6 +24,8 @@ export interface CompiledFamily {
 	id: string;
 	glob: string;
 	priority: number;
+	/** The bare family name is a model selector for the family's newest revision. */
+	selector?: true;
 }
 
 /** One compiled revision-extraction prefix (pre-lowercased). */

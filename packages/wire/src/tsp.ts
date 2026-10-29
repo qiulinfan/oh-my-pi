@@ -252,6 +252,7 @@ export interface TspAnsiProps {
 	text?: string;
 	/** Keep the tail in view as text arrives. */
 	follow?: boolean;
+	/** Clamp to a preview of the output; gives way inside an open disclosure. */
 	preview?: TspPreview;
 	/** Wrap hint in cells. */
 	cols?: number;
@@ -701,7 +702,8 @@ export interface TspToolProps {
 	collapsed?: boolean;
 	/**
 	 * Body clamp while collapsed: `{lines}` shows the head of the body, `{tail}` the end (bash output).
-	 * `children`: the collapsed body stays whole and the children's own previews (`ansi`, `code`) clamp instead.
+	 * `children`: the collapsed body stays whole and the children's own previews (`ansi`, `code`) clamp instead;
+	 * an open collapsible container (tool, card, section, agent) lifts them.
 	 */
 	preview?: { lines: number } | { tail: number } | "none" | "children";
 	/** Actions offered in the head on hover (`copy`, `rerun`, `open`). */

@@ -148,6 +148,19 @@ export const cfgCommandsEnableOpencodeProject = register({
 	},
 });
 
+export const cfgClaudeHooksEnabled = register({
+	id: "claudeHooks.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Extensions",
+		label: "Claude Code Hooks",
+		description:
+			"Run the command hooks declared in Claude Code settings.json files and enabled Claude Code plugins (PreToolUse, PostToolUse, UserPromptSubmit, Stop, …)",
+	},
+});
+
 export const cfgExtensionHandlersToolCallTimeoutMs = register({
 	id: "extensionHandlers.toolCallTimeoutMs",
 	type: "number",

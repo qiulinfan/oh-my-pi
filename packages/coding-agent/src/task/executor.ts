@@ -75,6 +75,7 @@ import {
 	type PromptOptions,
 } from "../session/agent-session";
 import { type ArtifactManager, writeArtifact } from "../session/artifacts";
+import type { FileCheckpointRecorder } from "../session/file-checkpoints";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
@@ -562,6 +563,12 @@ export interface ExecutorOptions {
 	 * artifacts directory (no per-subagent subdir).
 	 */
 	parentArtifactManager?: ArtifactManager;
+	/**
+	 * Parent session's file checkpoint recorder. A subagent editing the parent's
+	 * checkout records into it so the parent's code rewind covers its edits;
+	 * isolated runs never get it (their worktree merge is the safety net).
+	 */
+	parentFileCheckpoints?: FileCheckpointRecorder;
 	parentHindsightSessionState?: HindsightSessionState;
 	parentMnemopiSessionState?: MnemopiSessionState;
 	/**
@@ -3003,6 +3010,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		resolvedThinkingLevel: progress.resolvedThinkingLevel,
 		resolvedModelIsFallback: progress.resolvedModelIsFallback,
 		resolvedModelRoute: progress.resolvedModelRoute,
+		resolvedModelWarning: progress.resolvedModelWarning,
 		advisor: progress.advisor,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
@@ -4440,6 +4448,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					warning: modelResolutionWarning,
 					requested: modelPatterns,
 				});
+				// Shown under the task row, so an approximate match
+				// (`"claude-haku-4-5" is not a known model; using …`) is never silent.
+				progress.resolvedModelWarning = modelResolutionWarning;
 			}
 			if (authFallbackUsed && model) {
 				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
@@ -4658,6 +4669,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					subagentEventBus: options.subagentEventBus,
 					parentHindsightSessionState: options.parentHindsightSessionState,
 					parentMnemopiSessionState: options.parentMnemopiSessionState,
+					fileCheckpoints: worktree === undefined ? options.parentFileCheckpoints : undefined,
 					parentTaskPrefix: id,
 					asyncJobManager: options.asyncJobManager,
 					parentAgentId: options.parentAgentId,

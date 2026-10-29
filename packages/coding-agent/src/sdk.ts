@@ -53,6 +53,7 @@ import {
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
+import { createClaudeHooksExtension } from "./extensibility/claude-hooks";
 import { loadCapability, reset as resetCapabilities } from "./capability";
 import {
 	MAIN_AGENT_RULE_NAME,
@@ -78,6 +79,7 @@ import {
 	resolveAllowedModels,
 	resolveCliModel,
 	type ResolveCliModelResult,
+	modelRoleSelectorWarnings,
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 	resolveSessionModelSelector,
@@ -200,6 +202,11 @@ import {
 } from "./session/credential-disabled-notice";
 import { DateCwdReminderInjector } from "./session/date-cwd-reminder";
 import { createInterruptedToolResults, createInterruptedTurnAbortMessage } from "./session/exit-diagnostics";
+import {
+	FILE_CHECKPOINT_MAX_FILE_BYTES,
+	type FileCheckpointRecorder,
+	FileCheckpointStore,
+} from "./session/file-checkpoints";
 import { recoverInlineSloppyEdit } from "./session/inline-edit-recovery";
 import {
 	type CustomMessage,
@@ -304,6 +311,8 @@ import { createComputerPrelude } from "./tools/computer";
 import { createRatchetPrelude } from "./ratchet/prelude-definition";
 import { createArchivePrelude } from "./archive/prelude-definition";
 import { ToolContextStore } from "./tools/context";
+import { invalidateFsScanAfterWrite } from "./tools/fs-cache-invalidation";
+import { getEditStore } from "./edit/store";
 import { isIrcEnabled } from "./irc/messaging";
 import { imageGenTool } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -328,6 +337,9 @@ import {
 	cfgAsyncMaxJobs,
 	cfgAsyncWidgets,
 	cfgComputerEnabled,
+	cfgFileCheckpointsEnabled,
+	cfgFileCheckpointsMaxAgeDays,
+	cfgFileCheckpointsMaxSizeMb,
 	cfgRatchetEnabled,
 	cfgGenerateImageEnabled,
 	cfgSecurityEnabled,
@@ -400,6 +412,7 @@ import {
 import { cfgPlanEnabled } from "./plan-mode/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import {
+	cfgContextFilesNested,
 	cfgSnapcompactShape,
 	cfgSnapcompactSystemPrompt,
 	cfgSnapcompactToolResults,
@@ -642,6 +655,13 @@ export interface CreateAgentSessionOptions {
 	deferredPrewalk?: { target: string; patterns: string[] };
 	/** Host-owned display sink for non-fatal startup prewalk warnings. */
 	onPrewalkWarning?: (warning: string) => void;
+	/**
+	 * Host-owned display sink for model-selector warnings found while the session
+	 * starts: a deferred `--model` that only approximately matched, and configured
+	 * `modelRoles` that would run another model than they name. Unset (subagents,
+	 * embedders) skips the configured-role check.
+	 */
+	onModelSelectorWarning?: (warning: string) => void;
 	/** Keep `prewalk.auto` away from the startup session (`--no-prewalk`); `/new` lifts it. */
 	suppressAutoPrewalk?: boolean;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
@@ -824,6 +844,12 @@ export interface CreateAgentSessionOptions {
 	bindProcessState?: boolean;
 	/** Task recursion depth (for subagent sessions). Default: 0 */
 	taskDepth?: number;
+	/**
+	 * Parent's file checkpoint recorder for a subagent editing the parent's checkout, so its
+	 * edits are restorable from the parent's rewind. Subagents without one record nothing;
+	 * a top-level session always owns its own store.
+	 */
+	fileCheckpoints?: FileCheckpointRecorder;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
 	/** Parent Mnemopi state: subagents alias it; a top-level fork (`/tan`) inherits its delivered recall. */
@@ -1859,16 +1885,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// startup does not perform a second recursive filesystem search. Subagents
 	// inherit the parent's resolved values via options.
 	const STARTUP_SCAN_DEADLINE_MS = 5000;
-	const emptyWorkspaceTree: WorkspaceTree = {
-		rootPath: cwd,
-		rendered: "",
-		truncated: false,
-		totalLines: 0,
-		agentsMdFiles: [],
-	};
-	const scanWorkspaceTree = (): Promise<WorkspaceTree> => {
+	const scanWorkspaceTree = (indexOnly = false): Promise<WorkspaceTree> => {
 		const scan = logger.time("buildWorkspaceTree", () =>
-			buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }),
+			buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS, indexOnly }),
 		);
 		scan.catch(() => {});
 		return scan;
@@ -1880,6 +1899,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		: cfgIncludeWorkspaceTree.get(settings)
 			? scanWorkspaceTree()
 			: undefined;
+	// The nested AGENTS.md index renders in every prompt, tree or not; without the tree the walk collects it alone.
+	const agentsMdIndexPromise: Promise<WorkspaceTree> = workspaceTreePromise ?? scanWorkspaceTree(true);
 	// Tree from a mid-session scan; supersedes the startup value handed to subagents.
 	let lateWorkspaceTree: WorkspaceTree | undefined;
 
@@ -2257,7 +2278,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const [initialContextFiles, resolvedWorkspaceTree, watchdogFiles, initialActiveRepoContext, discoveredAdvisors] =
 		await Promise.all([
 			contextFilesPromise,
-			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise ?? Promise.resolve(emptyWorkspaceTree)),
+			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise ?? agentsMdIndexPromise),
 			watchdogFilesPromise,
 			activeRepoContextPromise,
 			advisorConfigsPromise,
@@ -2354,10 +2375,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeToolNames.add(name);
 			}
 		};
+		// A top-level session owns its file checkpoints; a subagent only records into
+		// the parent's store when it edits the parent's checkout.
+		const ownFileCheckpoints = isSubagentSession
+			? undefined
+			: new FileCheckpointStore(sessionManager, {
+					enabled: () => cfgFileCheckpointsEnabled.get(settings),
+					limits: () => ({
+						maxBytes: cfgFileCheckpointsMaxSizeMb.get(settings) * 1024 * 1024,
+						maxAgeMs: cfgFileCheckpointsMaxAgeDays.get(settings) * 24 * 60 * 60 * 1000,
+						maxFileBytes: FILE_CHECKPOINT_MAX_FILE_BYTES,
+					}),
+					onRestored: restoredPath => {
+						getEditStore(toolSession).invalidate(restoredPath);
+						invalidateFsScanAfterWrite(restoredPath);
+						toolSession.bumpFileMutationVersion?.(restoredPath);
+					},
+				});
+		const fileCheckpoints: FileCheckpointRecorder | undefined = ownFileCheckpoints ?? options.fileCheckpoints;
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			fileCheckpoints,
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			toolRegistry,
@@ -2743,6 +2783,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (customTools.length > 0) {
 				inlineExtensions.push(createCustomToolsExtension(customTools, customToolSourcePaths));
 			}
+			inlineExtensions.push(createClaudeHooksExtension({ settings, cwd }));
 		}
 		// Forward the path list (NOT the loaded tools) to subagents so they
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
@@ -3011,6 +3052,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						settings,
 						preferences: matchPreferences,
 					});
+					if (resolved.model && resolved.warning) options.onModelSelectorWarning?.(resolved.warning);
 					if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
 						const primaryPatterns: Array<{
 							pattern: string;
@@ -3413,6 +3455,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					patterns && patterns.length > 0
 						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
 						: "No default model selected. Use /login, set an API key environment variable, or select a local model with /model or --model.";
+			}
+		}
+
+		// Extension providers have registered by now, so a role naming one of their
+		// models is not mistaken for a typo of a bundled id.
+		if (options.onModelSelectorWarning) {
+			for (const warning of modelRoleSelectorWarnings(settings, modelRegistry)) {
+				options.onModelSelectorWarning(warning);
 			}
 		}
 
@@ -4137,8 +4187,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				writeTransportOnly:
 					toolSession.deviceOnlyWrite === true && toolSession.pendingFullWriteDescription !== true,
 				secretsEnabled: obfuscator?.obfuscates() === true,
-				workspaceTree: workspaceTreePromise ?? emptyWorkspaceTree,
+				workspaceTree: workspaceTreePromise ?? agentsMdIndexPromise,
 				includeWorkspaceTree,
+				nestedContextFiles: cfgContextFilesNested.get(settings),
 				memoryBackend: memoryBackend?.id,
 				securityEnabled: cfgSecurityEnabled.get(settings),
 				settingsApproval: toolSession.settingsApproval === true,
@@ -4794,6 +4845,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			extensionRunner,
 			getEvalPreludes,
 			evalToolSession: toolSession,
+			fileCheckpoints: ownFileCheckpoints,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillDescriptions,

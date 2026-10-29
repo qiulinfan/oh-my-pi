@@ -32,6 +32,8 @@
 
 import { isServiceTierOpenAISettingValue, SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+// Import-free module: safe ahead of the profile bootstrap.
+import { isWorkDetail, WORK_DETAILS } from "@oh-my-pi/pi-tui/chat/work-detail";
 import type { Args } from "./args";
 import { CliUsageError } from "./usage-error";
 
@@ -218,6 +220,15 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 		}
 		result.thinking = thinking;
 	},
+	"--work-detail": (result, value) => {
+		if (isWorkDetail(value)) {
+			result.workDetail = value;
+		} else {
+			result.invalidFlagValues.push(
+				`Invalid --work-detail value: ${JSON.stringify(value)}. Expected one of: ${WORK_DETAILS.join(", ")}.`,
+			);
+		}
+	},
 	"--export": (result, value) => {
 		result.export = value;
 	},
@@ -241,11 +252,17 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--approval-mode": (result, value) => {
 		// The values mirror `ApprovalMode` in ../tools/approval, which this module
 		// may only import as a type: that module reaches pi-utils at runtime.
-		if (value === "always-ask" || value === "always-ask-cached" || value === "write" || value === "yolo") {
+		if (
+			value === "always-ask" ||
+			value === "always-ask-cached" ||
+			value === "write" ||
+			value === "auto" ||
+			value === "yolo"
+		) {
 			result.approvalMode = value;
 		} else {
 			result.invalidFlagValues.push(
-				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, always-ask-cached, write, yolo.`,
+				`Invalid --approval-mode value: ${JSON.stringify(value)}. Expected one of: always-ask, always-ask-cached, write, auto, yolo.`,
 			);
 		}
 	},
@@ -321,6 +338,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--hide-thinking",
 	"--advisor",
 	"--external-thinking",
+	"--exact-model",
 	"--prewalk",
 	"--no-prewalk",
 	"--plan-yolo",

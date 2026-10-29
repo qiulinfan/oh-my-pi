@@ -10,6 +10,7 @@ import {
 	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
 	formatModelStringWithRouting,
+	modelRoleSelectorWarnings,
 	parseModelPattern,
 	pickDefaultAvailableModel,
 	resolveAgentAdvisorRolePattern,
@@ -2881,5 +2882,129 @@ describe("Devin selector parity", () => {
 	test("a live raw model still wins over the collapsed carrier routing to it", () => {
 		const withRaw = [...devinModels, devinModel("claude-mythos-9-high")];
 		expect(resolveProviderModelReference("devin", "claude-mythos-9-high", withRaw)?.id).toBe("claude-mythos-9-high");
+	});
+});
+
+describe("approximate model matches", () => {
+	const fixtureModel = (provider: string, id: string): Model<Api> =>
+		buildModel({
+			id,
+			name: id,
+			api: "openai-completions",
+			provider,
+			baseUrl: "https://example.test/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+	// The anthropic catalog before claude-haiku-5-5 shipped (omp 18.1.15).
+	const preHaiku55 = [
+		fixtureModel("anthropic", "claude-3-haiku-20240307"),
+		fixtureModel("anthropic", "claude-haiku-4-5"),
+		fixtureModel("anthropic", "claude-haiku-4-5-20251001"),
+		fixtureModel("anthropic", "claude-sonnet-4-5"),
+	];
+	const withHaiku55 = [...preHaiku55, fixtureModel("anthropic", "claude-haiku-5-5")];
+	const registry = (models: Model<Api>[]) => ({ getAll: () => models, getAvailable: () => models });
+
+	test("a provider-qualified typo runs the nearest model with a warning naming both", () => {
+		const resolved = resolveCliModel({ cliModel: "anthropic/claude-haku-4-5", modelRegistry: registry(withHaiku55) });
+		expect(resolved.model?.id).toBe("claude-haiku-4-5");
+		expect(resolved.warning).toBe(
+			'"anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5',
+		);
+		expect(resolved.error).toBeUndefined();
+	});
+
+	test("an exact id resolves without a warning", () => {
+		for (const selector of ["anthropic/claude-haiku-4-5", "claude-haiku-4-5", "claude-haiku-4-5:high"]) {
+			const resolved = resolveCliModel({ cliModel: selector, modelRegistry: registry(withHaiku55) });
+			expect(resolved.model?.id).toBe("claude-haiku-4-5");
+			expect(resolved.warning).toBeUndefined();
+		}
+	});
+
+	test("a version missing from the catalog warns instead of silently running its neighbour", () => {
+		const resolved = resolveCliModel({ cliModel: "anthropic/claude-haiku-5-5", modelRegistry: registry(preHaiku55) });
+		expect(resolved.model?.id).toBe("claude-haiku-4-5");
+		expect(resolved.warning).toBe(
+			'"anthropic/claude-haiku-5-5" is not a known model; using anthropic/claude-haiku-4-5',
+		);
+	});
+
+	test("the substitution warning survives a thinking suffix and keeps the level", () => {
+		const parsed = parseModelPattern("anthropic/claude-haku-4-5:high", withHaiku55);
+		expect(parsed.model?.id).toBe("claude-haiku-4-5");
+		expect(parsed.thinkingLevel).toBe(Effort.High);
+		expect(parsed.explicitThinkingLevel).toBe(true);
+		expect(parsed.warning).toBe(
+			'"anthropic/claude-haku-4-5:high" is not a known model; using anthropic/claude-haiku-4-5',
+		);
+	});
+
+	test("exact matching turns a near miss into a not-found error", () => {
+		for (const [selector, models] of [
+			["anthropic/claude-haku-4-5", withHaiku55],
+			["anthropic/claude-haiku-5-5", preHaiku55],
+		] as const) {
+			const resolved = resolveCliModel({
+				cliModel: selector,
+				modelRegistry: registry([...models]),
+				settings: Settings.isolated({ "model.exactMatch": true }),
+			});
+			expect(resolved.model).toBeUndefined();
+			expect(resolved.error).toContain(`Model "${selector}" not found`);
+			expect(resolved.error).toContain("model.exactMatch");
+		}
+	});
+
+	test("exact matching still accepts exact ids and catalog aliases", () => {
+		const preferences = { exactMatch: true };
+		expect(parseModelPattern("anthropic/claude-haiku-4-5", withHaiku55, preferences).model?.id).toBe(
+			"claude-haiku-4-5",
+		);
+		expect(parseModelPattern("haiku", withHaiku55, preferences).model?.id).toBe("claude-haiku-5-5");
+		// Built-in role chains name approximate selectors (`haiku-4-5`); exact mode must not break them.
+		const smol = resolveModelRoleValue("@smol", [fixtureModel("anthropic", "claude-haiku-4-5-20251001")], {
+			settings: Settings.isolated({ "model.exactMatch": true }),
+		});
+		expect(smol.model?.id).toBe("claude-haiku-4-5-20251001");
+		expect(smol.warning).toBeUndefined();
+	});
+
+	test("a taxonomy family word resolves to the newest revision of that family", () => {
+		const parsed = parseModelPattern("haiku", withHaiku55);
+		expect(parsed.model?.id).toBe("claude-haiku-5-5");
+		expect(parsed.warning).toBeUndefined();
+		expect(parseModelPattern("anthropic/haiku", withHaiku55).model?.id).toBe("claude-haiku-5-5");
+		// Before 5.5 shipped the newest Haiku is the undated 4.5 alias, not its dated snapshot.
+		expect(parseModelPattern("haiku", preHaiku55).model?.id).toBe("claude-haiku-4-5");
+		// A separator-collapsed id (`-45` is 4.5) never outranks a real 5.x.
+		const collapsed = [fixtureModel("venice", "claude-opus-45"), fixtureModel("venice", "claude-opus-5-5")];
+		expect(parseModelPattern("opus", collapsed).model?.id).toBe("claude-opus-5-5");
+	});
+
+	test("a family word with no available family member falls back to a warned substring match", () => {
+		const parsed = parseModelPattern("flash", [fixtureModel("deepseek", "deepseek-flash")]);
+		expect(parsed.model?.id).toBe("deepseek-flash");
+		expect(parsed.warning).toBe('"flash" is not a known model; using deepseek/deepseek-flash');
+	});
+
+	test("configured roles that only approximately match are reported at startup", () => {
+		const settings = Settings.isolated({
+			modelRoles: { slow: "anthropic/claude-haku-4-5", smol: "claude-haiku-4-5", plan: "@slow" },
+		});
+		expect(modelRoleSelectorWarnings(settings, registry(withHaiku55))).toEqual([
+			'modelRoles.slow: "anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5',
+		]);
+		const exact = Settings.isolated({
+			"model.exactMatch": true,
+			modelRoles: { slow: "anthropic/claude-haku-4-5" },
+		});
+		expect(modelRoleSelectorWarnings(exact, registry(withHaiku55))).toEqual([
+			'modelRoles.slow: "anthropic/claude-haku-4-5" matches no model exactly (model.exactMatch is on)',
+		]);
 	});
 });

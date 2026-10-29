@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -7,7 +8,7 @@ const MODELS = [
 	{ provider: "anthropic", id: "claude-opus-4-5", contextWindow: 200_000 },
 	{ provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 200_000 },
 	{ provider: "openai", id: "gpt-5.2", contextWindow: 400_000 },
-];
+].map(model => ({ ...model, identity: classifyModel(model.provider, model.id) }));
 
 function createRuntime() {
 	const showModelSelector = vi.fn();

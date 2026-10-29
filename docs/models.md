@@ -8,7 +8,7 @@ Primary implementation files:
 
 - `packages/coding-agent/src/config/model-registry.ts` — loads built-in + custom models, provider overrides, runtime discovery, auth integration
 - `packages/coding-agent/src/config/model-resolver.ts` — parses model patterns and selects initial/smol/slow models
-- `packages/coding-agent/src/config/model-settings.ts` — model selection settings (`modelRoles`, `enabledModels`, `enabledProviders`/`disabledProviders`, `modelProviderOrder`, `cycleOrder`)
+- `packages/coding-agent/src/config/model-settings.ts` — model selection settings (`modelRoles`, `model.exactMatch`, `enabledModels`, `enabledProviders`/`disabledProviders`, `modelProviderOrder`, `cycleOrder`)
 - `packages/coding-agent/src/session/settings.ts` — provider transport preferences (`providers.*`)
 - `packages/coding-agent/src/config/models-config.ts` and `models-config-schema-bundle.ts` — custom provider/model validation
 - `packages/coding-agent/src/session/auth-storage.ts` — re-exports `AuthStorage` from `@oh-my-pi/pi-ai`; credential precedence is implemented in `packages/ai/src/auth/cascade.ts`
@@ -642,7 +642,8 @@ not an allowlist of model transports.
 
 - exact `provider/modelId`
 - exact model id (provider inferred)
-- fuzzy/substring matching
+- catalog family words (`haiku`, `sonnet`, `opus`, `flash`, or `anthropic/haiku`)
+- fuzzy/substring matching, reported with a warning
 - glob scope patterns in `--models` (e.g. `openai/*`, `*sonnet*`)
 - optional `:thinkingLevel` suffix (`off|minimal|low|medium|high|xhigh|max|auto|inherit`)
 - `@upstream` routing suffix on OpenRouter and Vercel Gateway selectors (for example, `openrouter/anthropic/claude-sonnet-5@anthropic:high`); an exact literal model id still wins
@@ -654,8 +655,12 @@ Resolution precedence for exact selectors:
 
 1. exact `provider/modelId` reference
 2. exact bare id (case-insensitive); when several providers carry the same id, a preference ranking picks the winner (see below)
-3. retired effort-tier variant alias (collapsed catalog entries, e.g. `X`/`X-thinking` twins)
+3. retired effort-tier variant alias (collapsed catalog entries, e.g. `X`/`X-thinking` twins), and family words: a family the catalog taxonomy marks `selector=#true` (`haiku`, `sonnet`, `opus`, `fable`, `mythos`, Gemini `flash`) resolves to the available model of that family with the newest revision, so `haiku` runs the newest Haiku and `anthropic/haiku` the newest Haiku on `anthropic`
 4. provider-scoped fuzzy match, then substring matching with an alias-vs-dated pick
+
+Steps 1-3 are exact: the selector names the model, an alias the catalog defines for it, or a selector the catalog's built-in role chains declare. A model found only by step 4 is a substitution, so the resolver returns a warning such as `"anthropic/claude-haiku-5-5" is not a known model; using anthropic/claude-haiku-4-5`. The warning appears wherever a typed selector is resolved: on stderr for `--model`, `--models` and `omp -p`, as a startup notification in the TUI (and so in `omp gui` sessions), as a `notice` frame (`source: "model-resolution"`) after `ready` in RPC mode, in the reply to `/model <selector>` and `/switch <selector>` (TUI and ACP), under the task row for a subagent `model`, and at startup for each `modelRoles` entry in `config.yml` that only approximately matches.
+
+Set `model.exactMatch: true` in `config.yml`, or pass `--exact-model` for one run, to refuse substitutions: a selector that does not resolve in steps 1-3 is reported as `Model "<selector>" not found`, and a configured role that matches nothing exactly is reported at startup. Use it for evals and scripts, where running a neighbouring model would invalidate the result.
 
 Glob scope patterns (used by `enabledModels` and CLI `--models`) run separately over concrete models after exact matching.
 

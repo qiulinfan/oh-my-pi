@@ -2,6 +2,10 @@
 
 This document describes the **current hook subsystem code** in `packages/coding-agent/src/extensibility/hooks/*`.
 
+Claude Code's declarative hooks (the `hooks` block of `.claude/settings.json` and
+plugin `hooks/hooks.json`, with `PreToolUse`, `UserPromptSubmit`, `Stop`, … command
+hooks) are a separate feature, documented in [Claude Code hooks](./claude-code-hooks.md).
+
 ## Current status in runtime
 
 The default CLI runtime initializes the **extension runner** path. In current startup flow:

@@ -156,6 +156,7 @@ import {
 	cfgAutoResume,
 	cfgColorBlindMode,
 	cfgComposerShape,
+	cfgDisplayWorkDetail,
 	cfgImagesAutoResize,
 	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
@@ -184,7 +185,7 @@ import {
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
 } from "./session/settings";
-import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings";
+import { cfgDisabledProviders, cfgEnabledModels, cfgModelExactMatch } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
@@ -1037,18 +1038,19 @@ export async function resolveScopedModels(
 	parsed: Args,
 	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getDiscoverableProviders" | "refresh">,
 	activeSettings: Settings,
+	warn?: (warning: string) => void,
 ): Promise<ScopedModel[]> {
 	const modelPatterns = parsed.models ?? cfgEnabledModels.get(activeSettings);
 	if (!modelPatterns || modelPatterns.length === 0) {
 		return [];
 	}
 	const preferences = getModelMatchPreferences(activeSettings);
-	const scopedModels = await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings);
+	const scopedModels = await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings, warn);
 	if (scopedModels.length > 0 || modelRegistry.getDiscoverableProviders().length === 0) {
 		return scopedModels;
 	}
 	await modelRegistry.refresh("online-if-uncached");
-	return await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings);
+	return await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings, warn);
 }
 
 /**
@@ -1387,13 +1389,22 @@ export function applyResolvedSystemPromptInputs(
 	}
 }
 
-/** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
+/** Writes a startup warning to stderr: the default sink outside the CLI's own startup. */
+function writeStartupWarning(warning: string): void {
+	process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+}
+
+/**
+ * Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage.
+ * Model-selector warnings (an approximate match, an invalid `:level`) go to `warn`.
+ */
 export async function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
 	modelRegistry: ModelRegistry,
 	activeSettings: Settings,
+	warn: (warning: string) => void = writeStartupWarning,
 ): Promise<CreateAgentSessionOptions> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
@@ -1493,7 +1504,7 @@ export async function buildSessionOptions(
 			preferences: modelMatchPreferences,
 		});
 		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+			warn(resolved.warning);
 		}
 		if (resolved.disabledProvider !== undefined) {
 			// Deferring a disabled pin to post-extension resolution would let it
@@ -1639,7 +1650,7 @@ export async function buildSessionOptions(
 		} else {
 			options.prewalk = selection.prewalk;
 			for (const warning of selection.warnings) {
-				process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+				warn(warning);
 			}
 		}
 	}
@@ -1651,7 +1662,7 @@ export async function buildSessionOptions(
 		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+			warn(resolved.warning);
 		}
 		if (resolved.error || !resolved.model) {
 			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "@smol"}" not found`);
@@ -2007,6 +2018,10 @@ export async function runRootCommand(
 		if (parsedArgs.hideThinking) {
 			cfgHideThinkingBlock.override(settingsInstance, true);
 		}
+		// Apply --work-detail (ephemeral, not persisted): omp gui starts every session with its picker's mode
+		if (parsedArgs.workDetail) {
+			cfgDisplayWorkDetail.override(settingsInstance, parsedArgs.workDetail);
+		}
 		// Apply --advisor CLI flag (ephemeral, not persisted)
 		if (parsedArgs.advisor) {
 			cfgAdvisorEnabled.override(settingsInstance, true);
@@ -2015,6 +2030,24 @@ export async function runRootCommand(
 		if (parsedArgs.externalThinking) {
 			cfgExternalThinking.override(settingsInstance, true);
 		}
+		// Apply --exact-model CLI flag (ephemeral, not persisted): every model selector
+		// this run resolves, subagents included, must name a model exactly.
+		if (parsedArgs.exactModel) {
+			cfgModelExactMatch.override(settingsInstance, true);
+		}
+		// Model-selector warnings raised before the session exists (`--model`, `--models`,
+		// configured roles): the TUI shows them as startup notifications (its first paint
+		// would wipe a stderr line), RPC sends them as `notice` frames once the protocol
+		// is up, and every other mode prints them to stderr.
+		const startupModelNotices: string[] = [];
+		const warnModelSelector = (warning: string): void => {
+			if (isInteractive) {
+				notifs.push({ kind: "warn", message: warning });
+				return;
+			}
+			if (mode === "rpc" || mode === "rpc-ui") startupModelNotices.push(warning);
+			writeStartupWarning(warning);
+		};
 
 		await logger.time(
 			"initTheme:final",
@@ -2053,6 +2086,7 @@ export async function runRootCommand(
 			parsedArgs,
 			modelRegistry,
 			settingsInstance,
+			warnModelSelector,
 		);
 
 		// Resolve an explicit `--continue <id>` before extension flags are loaded.
@@ -2277,6 +2311,7 @@ export async function runRootCommand(
 			sessionManager,
 			modelRegistry,
 			settingsInstance,
+			warnModelSelector,
 		);
 		const marketplaceAutoUpdateOptions: MarketplaceAutoUpdateOptions = {
 			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
@@ -2295,6 +2330,7 @@ export async function runRootCommand(
 			if (isInteractive) notifs.push({ kind: "warn", message: warning });
 			else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 		};
+		sessionOptions.onModelSelectorWarning = warnModelSelector;
 
 		// OTEL: unless `telemetry.otlpExportEnabled` is off, register global OTLP
 		// exporters when an endpoint is configured via env, then switch on the agent
@@ -2672,6 +2708,7 @@ export async function runRootCommand(
 				stopStartupWatchdog();
 				logger.endTiming();
 				await runRpcMode(session, {
+					startupNotices: startupModelNotices,
 					setToolUIContext: mode === "rpc-ui" ? setToolUIContext : undefined,
 					headless: parsedArgs.noUi === true,
 					subagentEventBus,

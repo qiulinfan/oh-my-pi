@@ -47,6 +47,12 @@ export interface HostedEntry {
 	model?: string;
 	/** The `--thinking` level a new session was started with, for the same. */
 	thinking?: string;
+	/**
+	 * The session's work-detail mode: the `--work-detail` it was started with, then each mode its composer
+	 * chip shows once the user switches it there. omp's session file does not keep it, so a restore of this
+	 * entry starts in it whatever mode the page sends; it outlives /new and /resume.
+	 */
+	workDetail?: string;
 	/** A no-project chat, which runs in its own directory under the chats dir. */
 	chat: boolean;
 	/** How omp exited when it ended by itself and not cleanly (a crash, a signal from elsewhere). */
@@ -93,6 +99,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 	if (!optional(entry.pid, "number") || !optional(entry.startToken, "string")) return undefined;
 	if (!optional(entry.sessionFile, "string") || !optional(entry.prompt, "string")) return undefined;
 	if (!optional(entry.model, "string") || !optional(entry.thinking, "string")) return undefined;
+	if (!optional(entry.workDetail, "string")) return undefined;
 	if (entry.ending !== undefined && entry.ending !== true) return undefined;
 	if (entry.restoredFrom !== undefined && !isGuiId(entry.restoredFrom)) return undefined;
 	const exit = parseExit(entry.exit);
@@ -107,6 +114,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 		prompt: entry.prompt as string | undefined,
 		model: entry.model as string | undefined,
 		thinking: entry.thinking as string | undefined,
+		workDetail: entry.workDetail as string | undefined,
 		chat: entry.chat,
 		exit,
 		restoredFrom: entry.restoredFrom,

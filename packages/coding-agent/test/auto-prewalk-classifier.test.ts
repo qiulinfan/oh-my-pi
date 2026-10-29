@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	AUTO_PREWALK_TIMEOUT_MS,
@@ -28,6 +29,7 @@ const JEV_PREVIEW = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128_000,
 	maxTokens: 4096,
+	identity: classifyModel("typesafe", "jev-preview"),
 } as Model<Api>;
 
 const LOCAL = getBundledModel("local", "qwen2.5-1.5b");

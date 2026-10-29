@@ -181,7 +181,19 @@ The same trailing block is emitted when `SYSTEM.md` selects the bundled custom-p
 
 Loading is automatic — there is no need to instruct the agent to search for `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, or similar files during a session.
 
-When workspace-tree scanning is enabled (`includeWorkspaceTree`), deeper-directory `AGENTS.md` files that were _not_ auto-loaded (for example, ones below the current directory) are surfaced separately in a `<dir-context>` block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content.
+## Subdirectory context files
+
+The block above holds the files of the working directory and its ancestors. Context files in directories _below_ the working directory are attached during the session instead, the first time a tool reaches their directory:
+
+- A `read`, `edit`, `write`, `grep`, `glob`, `find` or `ast_grep` call (any tool that reports its paths for approval grants; not `bash`) that succeeds on a path below the working directory (or below an additional workspace root) attaches the context files of every directory between that root and the path's directory, shallowest first. A search scoped to a subdirectory counts; a search of the whole working directory does not.
+- Each directory contributes the files the same discovery rules find when that directory is the working directory: one file per directory (`AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, … with the shadowing above), plus `contextFiles.extra` names, with `@` imports expanded.
+- A directory is skipped, with everything below it, when the workspace walker would not enter it: gitignored, hidden (`.name`), or a non-source directory such as `node_modules`, `dist`, `build` or `target`.
+- The files arrive as one developer message after the tool results, so the cached prompt prefix is never rewritten. Each file is attached once: a later call in the same directory adds nothing while the message is still in the conversation. When compaction summarizes it away, the next call there attaches it again.
+- A file is cut at 20,000 characters and one tool batch attaches at most 40,000; a cut file says so, and a file past the batch budget is named with an instruction to read it.
+
+Subagents and `omp gui` sessions behave the same way. Set `contextFiles.nested: false` to turn it off.
+
+Independently, the prompt lists the `AGENTS.md` files of directories one to four levels below the working directory in a `<dir-context>` block (gitignored and non-source directories excluded, at most 200), whether or not `includeWorkspaceTree` is on. The list is only paths; with `contextFiles.nested` off it tells the agent to read those files before editing their directories.
 
 ## `@` imports
 

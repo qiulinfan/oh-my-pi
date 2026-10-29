@@ -4,6 +4,7 @@ import type {
 	AgentToolContext,
 	AgentToolResult,
 	AgentToolUpdateCallback,
+	ToolApprovalDecision,
 	ToolSpeculationPolicy,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
@@ -40,6 +41,7 @@ import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
+import { isCriticalShellCommand } from "./critical-command";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
 import { recordStatusEvent, type StatusEventLog } from "@oh-my-pi/pi-tui/tools/eval";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
@@ -295,9 +297,44 @@ function formatEvalInputLanguage(value: string): string {
 	return value;
 }
 
+/**
+ * Shell commands a Python cell runs through its IPython-style escapes: `!cmd`, `name = !cmd`, and
+ * the body of a `%%bash` cell (see `transform_cell` in eval/py/runner.py). Lines are matched
+ * without Python lexing, so an escape-shaped line inside a string literal also counts; that can
+ * only add a prompt.
+ */
+function pythonShellCommands(code: string): string[] {
+	const commands: string[] = [];
+	const lines = code.split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		let line = lines[i]!;
+		while (line.endsWith("\\") && i + 1 < lines.length) line = line.slice(0, -1) + lines[++i]!;
+		const stripped = line.trimStart();
+		if (/^%%bash(?:\s|$)/.test(stripped)) {
+			commands.push(lines.slice(i + 1).join("\n"));
+			break;
+		}
+		const escape = /^(?:[A-Za-z_][\w.[\], ]*?\s*=\s*)?!(.*)$/.exec(stripped);
+		if (escape) commands.push(escape[1]!);
+	}
+	return commands;
+}
+
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
-	readonly approval = "exec" as const;
+	/**
+	 * Exec tier; a Python cell whose shell escapes run a critical command (`!rm -rf ~`, a `%%bash`
+	 * body piping `curl` into `sh`) takes bash's critical override, which every approval mode,
+	 * yolo included, confirms with the user.
+	 */
+	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const params = isRecord(args) ? args : {};
+		const python = params.language === "py" || params.language === "python";
+		if (python && typeof params.code === "string" && pythonShellCommands(params.code).some(isCriticalShellCommand)) {
+			return { tier: "exec", override: true, reason: "Critical pattern detected in shell code" };
+		}
+		return "exec";
+	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = isRecord(args) ? args : {};
 		const language =

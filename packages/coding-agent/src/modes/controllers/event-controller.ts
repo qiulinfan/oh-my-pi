@@ -45,7 +45,7 @@ import {
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
-import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
+import { formatApprovalPrompt, isJudgeableApproval, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -2003,6 +2003,8 @@ export class EventController {
 				: undefined;
 		const approval = resolveApproval(tool, args, mode, userPolicies, grants);
 		if (approval.policy !== "prompt") return undefined;
+		// `auto` puts this call to the approval judge first, which usually runs it unasked.
+		if (isJudgeableApproval(approval, mode)) return undefined;
 		// Approved for this session: the wrapper runs it without asking.
 		const scope = sessionApprovalScope(approval, tool.name);
 		if (scope && session.extensionRunner?.hasSessionApproval(scope.key)) return undefined;

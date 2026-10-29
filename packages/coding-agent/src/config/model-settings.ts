@@ -106,6 +106,24 @@ export const cfgModelRoleStorage = register({
 	},
 });
 
+/**
+ * Model selectors typed by the user (`--model`, `--models`, `modelRoles`, `/model`, task `model`) must name
+ * a model exactly: an id, a `provider/id`, or an alias the catalog defines. A near miss is an error instead
+ * of running the closest model. `--exact-model` turns it on for one run.
+ */
+export const cfgModelExactMatch = register({
+	id: "model.exactMatch",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Exact Model Names",
+		description:
+			"Refuse a model selector that only approximately matches a model (a typo or unknown version) instead of running the closest one",
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Named model presets; no settings-panel UI — managed by `/modelpreset` and the model hub. */

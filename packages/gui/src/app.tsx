@@ -6,7 +6,8 @@
  * first message becomes omp's positional prompt; it runs in the chosen
  * project, or as a chat in its own empty directory. Keys typed outside the composer go to omp as pty
  * bytes, so every omp shortcut (Ctrl+S agent hub, Shift+Tab effort, Esc)
- * works as in a terminal.
+ * works as in a terminal; F6 alone stays here, moving focus between the
+ * prompt and the transcript's row heads.
  */
 import {
 	Fragment,
@@ -21,7 +22,7 @@ import {
 import { ApiError, api, errorText, link, type ServerIdentity } from "./api";
 import { Icon } from "./icons";
 import { keyBytes } from "./keys";
-import { N, OmpMark, SurfaceContext, type SurfaceContextValue, Transcript } from "./render";
+import { N, OmpMark, SurfaceContext, type SurfaceContextValue, Transcript, toggleTranscriptFocus } from "./render";
 import { type ExitInfo, SessionConnection, type SessionInfo, type SurfaceMeta } from "./session";
 
 /** The transcript column (see --column): omp lays its rows out for this width, not the window's. */
@@ -134,6 +135,8 @@ interface SpawnRequest {
 	model?: string;
 	/** omp's `--thinking` level; absent starts at omp's default. */
 	thinking?: string;
+	/** omp's `--work-detail` mode: compact, standard or verbose. */
+	workDetail?: string;
 	prompt?: string;
 }
 
@@ -424,7 +427,9 @@ function SessionView({
 	const onKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
 			const target = event.target as HTMLElement;
-			if (target.closest("textarea, input, select")) return;
+			// A disclosure head with keyboard focus keeps its keys (Enter/Space toggle it, Tab moves on); only
+			// the session view itself and omp's own editor send keys to omp.
+			if (target.closest("textarea, input, select, [data-disclosure]")) return;
 			const bytes = keyBytes(event.nativeEvent);
 			if (bytes === null) return;
 			event.preventDefault();
@@ -432,6 +437,16 @@ function SessionView({
 		},
 		[connection],
 	);
+
+	// F6 moves between omp's prompt and the transcript's disclosure heads, which Tab cannot reach: Tab is omp's.
+	// Taken before the editor or the view sends the key on (omp binds no F6).
+	const onKeyDownCapture = useCallback((event: React.KeyboardEvent) => {
+		if (event.key !== "F6" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+		const root = rootRef.current;
+		if (!root || !toggleTranscriptFocus(root)) return;
+		event.preventDefault();
+		event.stopPropagation();
+	}, []);
 
 	const surfaces = [...connection.surfaces.values()].map(surface => surface.meta);
 	const inline = surfaces.filter(meta => meta.mode === "inline");
@@ -449,6 +464,7 @@ function SessionView({
 			ref={rootRef}
 			tabIndex={-1}
 			onKeyDown={onKeyDown}
+			onKeyDownCapture={onKeyDownCapture}
 			style={{ display: active ? undefined : "none" }}
 		>
 			{status ? <div className="banner">{status}</div> : null}
@@ -666,16 +682,34 @@ function effortLabel(level: string): string {
 	return level === "auto" ? "Auto · adaptive" : level;
 }
 
-function EffortPicker({
+interface Choice {
+	value: string;
+	text: string;
+	meta?: string;
+	title?: string;
+}
+
+/**
+ * A start-page chip that opens a menu of choices. Opening puts focus on the current choice, so the
+ * arrows, Enter and Escape work at once; `lead` choices sit above a separator.
+ */
+function ChoicePicker({
+	icon,
+	label,
+	title,
+	menuLabel,
 	value,
-	model,
-	list,
+	lead = [],
+	choices,
 	onPick,
 }: {
-	/** A `--thinking` level, or "" for the default. */
+	icon: string;
+	label: string;
+	title: string;
+	menuLabel: string;
 	value: string;
-	model: string;
-	list: ModelList | null;
+	lead?: Choice[];
+	choices: Choice[];
 	onPick: (value: string) => void;
 }): ReactNode {
 	const [open, setOpen] = useState(false);
@@ -687,30 +721,13 @@ function EffortPicker({
 		open,
 		useCallback(() => setOpen(false), []),
 	);
-	// Opening puts focus on the current choice, so the arrows, Enter and Escape work at once.
 	useEffect(() => {
 		if (open) menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
 	}, [open]);
-	const { choices, start, known } = thinkingFor(model, list);
-	if (known && choices.length === 0) {
-		return (
-			<div className="picker effort-picker">
-				<button type="button" className="field-chip project" disabled title="This model does not think">
-					<Icon name="brain" size={14} />
-					<span className="chip-label">No thinking</span>
-				</button>
-			</div>
-		);
-	}
 	const close = () => {
 		setOpen(false);
 		trigger.current?.focus();
 	};
-	const pick = (level: string) => {
-		close();
-		onPick(level);
-	};
-	const fallback = start ? `Default · ${effortLabel(start)}` : "Default";
 	const onKeyDown = (event: React.KeyboardEvent) => {
 		if (event.key === "Escape") {
 			event.preventDefault();
@@ -724,18 +741,21 @@ function EffortPicker({
 		const next = event.key === "ArrowDown" ? at + 1 : at - 1;
 		items[(next + items.length) % items.length]?.focus();
 	};
-	const item = (level: string, text: string, meta?: string, title?: string) => (
+	const item = (choice: Choice) => (
 		<button
-			key={level || "default"}
+			key={choice.value || "default"}
 			type="button"
 			role="menuitemradio"
-			aria-checked={level === value}
-			className={`picker-item ${level === value ? "on" : ""}`}
-			title={title}
-			onClick={() => pick(level)}
+			aria-checked={choice.value === value}
+			className={`picker-item ${choice.value === value ? "on" : ""}`}
+			title={choice.title}
+			onClick={() => {
+				close();
+				onPick(choice.value);
+			}}
 		>
-			<span className="side-label">{text}</span>
-			{meta ? <span className="side-meta">{meta}</span> : null}
+			<span className="side-label">{choice.text}</span>
+			{choice.meta ? <span className="side-meta">{choice.meta}</span> : null}
 		</button>
 	);
 	return (
@@ -746,28 +766,98 @@ function EffortPicker({
 				className="field-chip project"
 				aria-haspopup="menu"
 				aria-expanded={open}
-				title="Thinking effort for the new session. Auto picks a level for each message by how hard it looks."
+				title={title}
 				onClick={() => setOpen(current => !current)}
 			>
-				<Icon name="brain" size={14} />
-				<span className="chip-label">{value ? effortLabel(value) : fallback}</span>
+				<Icon name={icon} size={14} />
+				<span className="chip-label">{label}</span>
 				<Icon name="chev-down" size={12} />
 			</button>
 			{open ? (
-				<div className="picker-menu" role="menu" aria-label="Thinking effort" ref={menu} onKeyDown={onKeyDown}>
-					{item("", fallback, "default")}
-					<div className="picker-sep" />
-					{choices.map(level =>
-						item(
-							level,
-							effortLabel(level),
-							undefined,
-							level === "auto" ? "Picks a level for each message by how hard it looks" : undefined,
-						),
-					)}
+				<div className="picker-menu" role="menu" aria-label={menuLabel} ref={menu} onKeyDown={onKeyDown}>
+					{lead.map(item)}
+					{lead.length ? <div className="picker-sep" /> : null}
+					{choices.map(item)}
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+function EffortPicker({
+	value,
+	model,
+	list,
+	onPick,
+}: {
+	/** A `--thinking` level, or "" for the default. */
+	value: string;
+	model: string;
+	list: ModelList | null;
+	onPick: (value: string) => void;
+}): ReactNode {
+	const { choices, start, known } = thinkingFor(model, list);
+	if (known && choices.length === 0) {
+		return (
+			<div className="picker effort-picker">
+				<button type="button" className="field-chip project" disabled title="This model does not think">
+					<Icon name="brain" size={14} />
+					<span className="chip-label">No thinking</span>
+				</button>
+			</div>
+		);
+	}
+	const fallback = start ? `Default · ${effortLabel(start)}` : "Default";
+	return (
+		<ChoicePicker
+			icon="brain"
+			label={value ? effortLabel(value) : fallback}
+			title="Thinking effort for the new session. Auto picks a level for each message by how hard it looks."
+			menuLabel="Thinking effort"
+			value={value}
+			lead={[{ value: "", text: fallback, meta: "default" }]}
+			choices={choices.map(level => ({
+				value: level,
+				text: effortLabel(level),
+				title: level === "auto" ? "Picks a level for each message by how hard it looks" : undefined,
+			}))}
+			onPick={onPick}
+		/>
+	);
+}
+
+/** omp's `--work-detail` modes, as the Work details picker offers them; the GUI starts sessions Compact. */
+const WORK_DETAILS: Choice[] = [
+	{
+		value: "compact",
+		text: "Compact",
+		title: "Thinking and tool calls fold to one line each; click a row to open it",
+	},
+	{
+		value: "standard",
+		text: "Standard",
+		title: "Tool output shows a short preview, and thinking shows while it streams",
+	},
+	{ value: "verbose", text: "Verbose", title: "Thinking and tool output stay open" },
+];
+const DEFAULT_WORK_DETAIL = "compact";
+
+/** The stored Work details choice, or Compact when none (or an unknown one) is stored. */
+function workDetailOf(value: string): string {
+	return WORK_DETAILS.some(choice => choice.value === value) ? value : DEFAULT_WORK_DETAIL;
+}
+
+function WorkDetailPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
+	return (
+		<ChoicePicker
+			icon="list-collapse"
+			label={WORK_DETAILS.find(choice => choice.value === value)?.text ?? value}
+			title="How much of its work a session shows: thinking and tool calls folded to one line, a preview, or open. A session's own chip changes it later."
+			menuLabel="Work details"
+			value={value}
+			choices={WORK_DETAILS}
+			onPick={onPick}
+		/>
 	);
 }
 
@@ -1249,6 +1339,7 @@ export function App(): ReactNode {
 	const [chosen, setChosen] = useState<string | null>(null);
 	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
 	const [thinkingChoice, setThinkingState] = useState(() => stored("omp-gui.thinking", "").trim());
+	const [workDetail, setWorkDetailState] = useState(() => workDetailOf(stored("omp-gui.workDetail", "")));
 	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);
 	/** What the last action (spawn, end, choose folder) failed with; cleared by the next. */
@@ -1333,6 +1424,11 @@ export function App(): ReactNode {
 		setThinkingState(value);
 	};
 
+	const setWorkDetail = (value: string) => {
+		store("omp-gui.workDetail", value);
+		setWorkDetailState(value);
+	};
+
 	const setModel = (value: string) => {
 		store("omp-gui.model", value);
 		setModelState(value);
@@ -1381,10 +1477,13 @@ export function App(): ReactNode {
 			const ids: string[] = [];
 			const errors: string[] = [];
 			for (const request of requests) {
+				// A display choice, not part of the turn: the page sends its pick on every spawn. A bare restore
+				// keeps the mode the session was recorded with when there is one; any other spawn takes the pick.
+				const body: SpawnRequest = { ...request, workDetail };
 				// The server waits up to 10 s for another omp to let go of the session file (one still tearing down).
 				const timer = opensFile(request) ? setTimeout(() => setWaiting(true), WAITING_MS) : undefined;
 				try {
-					ids.push((await api<{ id: string }>("/api/spawn", request)).id);
+					ids.push((await api<{ id: string }>("/api/spawn", body)).id);
 				} catch (err) {
 					errors.push(errorText(err));
 				} finally {
@@ -1728,6 +1827,7 @@ export function App(): ReactNode {
 							<>
 								<ModelPicker value={model} list={modelList} onPick={setModel} />
 								<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
+								<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
 							</>
 						}
 						interrupted={

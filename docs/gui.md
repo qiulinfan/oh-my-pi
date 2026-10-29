@@ -99,6 +99,28 @@ remembered, applies to resumed sessions too, and falls back to Default on a
 model that lacks it. In a session, click the effort ring in the model chip to
 choose a level; Shift+Tab cycles through them.
 
+The Work details picker beside it sets how much of its work a new session shows
+(`--work-detail`):
+
+- Compact (the default): thinking and tool calls stay folded to one line, also
+  while they stream. A folded thought shows the start of its latest paragraph;
+  a failed tool shows its first error line or exit code.
+- Standard: thinking is open while it streams, showing its last lines, and
+  folds when it ends; tool output is cut to a short preview.
+- Verbose: thinking and tool output stay open. A thought that is still
+  streaming shows its last lines too; scroll it up to read its start, and it
+  opens in full when it ends.
+
+Click a row to open or fold it; that choice holds until the mode changes. From
+the keyboard, F6 moves from the prompt to the newest row (keys typed in a
+session otherwise go to omp, Tab included); there Enter or Space opens or folds
+it, Up and Down (Home and End) move between rows, and F6 or Escape goes back to
+the prompt. The pick is remembered and applies to resumed sessions too. In a
+session, the Work details chip in the composer switches the mode of that
+session at once, without redrawing it from the start; a restored session comes
+back in the mode it last ran in. The terminal is not affected: omp started from
+a terminal keeps its own display settings.
+
 Resuming a session the GUI already runs shows that session instead of starting
 a second omp on the same file. A session open in another omp process (a
 terminal, or one still shutting down) is waited for up to 10 s, then refused;
@@ -138,10 +160,13 @@ connected again, any of its text omp did not get is sent.
 
 The server keeps one file per hosted session in `~/.omp/run/gui/hosted/`: its
 directory, its omp process (pid and start time), its omp session file once
-known, and the first message of a new session with its model. The file is
-written before omp starts, and again with omp's pid as soon as it has started;
-when the first write fails the session is not started and the request fails
-with that error.
+known, the first message of a new session with its model, and its Work details
+mode (the one it was started in, then each one picked with its chip, which the
+server reads from the chip omp draws), which a restore brings back (the page's
+current pick applies only to an entry that records none). The file is written
+before omp starts, and again with omp's pid as soon as it has started; when the
+first write fails the session is not started and the request fails with that
+error.
 
 A server stop or crash leaves these files, and so does omp crashing or being
 killed by a signal (the file then records how it ended). The next server's

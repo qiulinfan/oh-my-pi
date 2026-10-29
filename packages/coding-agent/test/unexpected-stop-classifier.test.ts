@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -164,6 +165,7 @@ describe("classifyUnexpectedStop", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 128_000,
 			maxTokens: 4096,
+			identity: classifyModel("typesafe", "jev-preview"),
 		} as Model<Api>;
 		const settings = Settings.isolated({ modelRoles: { judge: "typesafe/jev-preview" } });
 		const registry = makeRegistry([jev], { typesafe: "ts-key" });

@@ -83,4 +83,46 @@ describe("SurfaceStore against the server's document", () => {
 		// The failed add left nothing behind for later ops to trip over.
 		expect(store.get("child")).toBeUndefined();
 	});
+
+	test("redraws a node the server deletes and re-adds under the same id, and its descendants", () => {
+		// A settled component (a finished message) sends a change to its children as del + add of the same
+		// ids: toggling a finished thinking section arrives so. A view still mounted for that id must hear it
+		// and see a version it never drew, or the old section stays on screen until a reload.
+		const doc = new TspDocument(SF);
+		const store = new SurfaceStore(SF, doc.snapshot());
+		const section = (collapsed: boolean, body: string): TspNode => ({
+			id: "n.k0",
+			k: "section",
+			p: { collapsible: true, collapsed },
+			c: [text("n.k0.t", body)],
+		});
+		expect(
+			store.apply(
+				forward(doc, 1, [
+					["add", "n", SF, null, { id: "n", k: "col" }],
+					["add", "n.k0", "n", null, section(false, "thought")],
+				]),
+			),
+		).toBe(true);
+		// The section changed once while it streamed, so a version reset would land on a value already drawn.
+		expect(store.apply(forward(doc, 2, [["set", "n.k0", { took: 1200 }]]))).toBe(true);
+
+		const heard: string[] = [];
+		store.subscribe("n.k0", () => heard.push("n.k0"));
+		store.subscribe("n.k0.t", () => heard.push("n.k0.t"));
+		const before = { section: store.get("n.k0")!.v, body: store.get("n.k0.t")!.v };
+
+		const ops: TspOp[] = [
+			["set", "n", { settled: true }],
+			["del", "n.k0"],
+			["add", "n.k0", "n", null, section(true, "thought, settled")],
+		];
+		expect(store.apply(forward(doc, 3, ops))).toBe(true);
+		expect(heard.sort()).toEqual(["n.k0", "n.k0.t"]);
+		expect(store.get("n.k0")!.v).not.toBe(before.section);
+		expect(store.get("n.k0.t")!.v).not.toBe(before.body);
+		expect(store.get("n.k0")!.p.collapsed).toBe(true);
+		expect(store.get("n.k0.t")!.p.text).toBe("thought, settled");
+		expect(tree(store)).toEqual(doc.snapshot());
+	});
 });

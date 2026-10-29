@@ -38,6 +38,7 @@ import {
 	type CursorExecResolvedCarrier,
 	copyCursorExecResolved,
 	getStreamingPartialJson,
+	isStreamingPartialJsonDisplayOnly,
 	kCursorExecResolved,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { schemaDefinesProperty } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
@@ -2483,7 +2484,12 @@ async function streamAssistantResponse(
 										try {
 											await speculationCoordinator
 												?.streamSession(toolCall.id)
-												?.update(toolCall, getStreamingPartialJson(toolCall));
+												?.update(
+													toolCall,
+													isStreamingPartialJsonDisplayOnly(toolCall)
+														? undefined
+														: getStreamingPartialJson(toolCall),
+												);
 										} catch {
 											await speculationCoordinator?.discardStreamSession(
 												toolCall.id,

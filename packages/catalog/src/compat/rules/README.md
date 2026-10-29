@@ -63,14 +63,16 @@ A class match is ranked by `(matcher-kind rank, token byte length)`. The greates
 
 ### Product families
 
-A family rule has one name, a required `glob` property, and an optional signed integer `priority` (default `0`):
+A family rule has one name, a required `glob` property, an optional signed integer `priority` (default `0`), and an optional `selector` flag:
 
 ```kdl
-family "flash" glob="*flash*"
+family "flash" glob="*flash*" selector=#true
 family "lite" glob="*flash-lite*" priority=10
 ```
 
 The glob is anchored, ASCII-case-insensitive, and matched against the lowercased bare name. Matching families rank by `(priority, non-wildcard byte count in the glob)`. When equal-ranked family globs tie, a leading `class.` or `class:` namespace matching one of the selected class's tokens is removed and family matching is retried; a remaining tie is an ambiguity error. No match produces no family. Repeating rules for the same family ID is allowed, as in the checked-in `o-series` taxonomy.
+
+`selector=#true` makes the bare family name a model selector: `--model haiku` (or `anthropic/haiku`) resolves to the available model of that class and family with the newest revision (a whole-number revision of 10 or more orders as its separator-collapsed `major.minor`, as the class rules' `>=10` ranges read it: `claude-opus-45` is 4.5), and the coding agent treats it as an exact catalog alias (no substitution warning, allowed under `model.exactMatch`). A selector word may be declared by one class only; declaring it on two classes is a compile error.
 
 ### Revision extraction
 

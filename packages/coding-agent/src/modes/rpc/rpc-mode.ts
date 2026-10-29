@@ -1338,6 +1338,11 @@ export interface RpcModeOptions {
 	createLiveSession?: RpcLiveSessionFactory;
 	/** The session's MCP manager, so `/mcp` builtins resolve and reconnect live servers. */
 	mcpManager?: MCPManager;
+	/**
+	 * Warnings raised while resolving model selectors before the session existed
+	 * (`--model`, `--models`, configured roles); sent as `notice` frames right after `ready`.
+	 */
+	startupNotices?: readonly string[];
 }
 
 /**
@@ -1377,6 +1382,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
 			frameEncoder.setProtocolVersion(2);
 	};
+	for (const message of options.startupNotices ?? []) {
+		output({ type: "notice", level: "warning", message, source: "model-resolution" });
+	}
 	const emitRpcTitles = shouldEmitRpcTitles();
 
 	const success = <T extends RpcCommand["type"]>(

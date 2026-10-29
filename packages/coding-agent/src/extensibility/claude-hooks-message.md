@@ -1,0 +1,2 @@
+{{label}} hook {{verb}}:
+{{text}}

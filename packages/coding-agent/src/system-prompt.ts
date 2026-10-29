@@ -41,7 +41,7 @@ import { cfgEvalAutoBackgroundEnabled } from "./eval/settings";
 import { cfgTtsrBuiltinRules, cfgTtsrDisabledRules, cfgTtsrEnabled } from "./export/ttsr-settings";
 import { cfgTuiAutoGraph, cfgTuiReactions, cfgTuiRenderMermaid, cfgTuiRenderSvg } from "./modes/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
-import { cfgToolsFormat } from "./session/context-settings";
+import { cfgContextFilesNested, cfgToolsFormat } from "./session/context-settings";
 import {
 	cfgIncludeModelInPrompt,
 	cfgIncludeWorkspaceTree,
@@ -67,6 +67,7 @@ export const cfgSystemPromptInputs = combine({
 	personality: cfgPersonality,
 	includeModelInPrompt: cfgIncludeModelInPrompt,
 	includeWorkspaceTree: cfgIncludeWorkspaceTree,
+	nestedContextFiles: cfgContextFilesNested,
 	inlineToolDescriptors: cfgInlineToolDescriptors,
 	toolsFormat: cfgToolsFormat,
 	intentTracing: cfgToolsIntentTracing,
@@ -568,6 +569,8 @@ export interface BuildSystemPromptOptions {
 	personality?: Personality;
 	/** Whether to include the workspace directory tree in the system prompt. Default: false */
 	includeWorkspaceTree?: boolean;
+	/** Whether the session attaches nested context files when tools reach their directories (`contextFiles.nested`). Default: false */
+	nestedContextFiles?: boolean;
 	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
 	renderMermaid?: boolean;
 	/** Whether the reader's UI draws ```svg fences as themed images, so the prompt invites figures. Default: false */
@@ -666,6 +669,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeModelInPrompt = true,
 		personality = "default",
 		includeWorkspaceTree = false,
+		nestedContextFiles = false,
 		renderMermaid = true,
 		renderSvg = false,
 		autoGraph = false,
@@ -771,28 +775,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		return dedupeContainedContextFiles([...primary, ...extra.flat()]);
 	})();
 	const additionalRootsForTree = additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd));
+	// The nested AGENTS.md index renders in every prompt; without the tree, the walk collects it alone.
+	const workspaceScanOptions = { timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS, indexOnly: !includeWorkspaceTree };
 	const workspaceTreePromise = (async () => {
 		const primary =
 			providedWorkspaceTree !== undefined
 				? await Promise.resolve(providedWorkspaceTree)
-				: includeWorkspaceTree
-					? await logger.time("buildWorkspaceTree", () =>
-							buildWorkspaceTree(resolvedCwd, { timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS }),
-						)
-					: { rootPath: resolvedCwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] };
-		if (additionalRootsForTree.length === 0 || !includeWorkspaceTree) return primary;
+				: await logger.time("buildWorkspaceTree", () => buildWorkspaceTree(resolvedCwd, workspaceScanOptions));
+		if (additionalRootsForTree.length === 0) return primary;
 		const extraTrees = await Promise.all(
-			additionalRootsForTree.map(root =>
-				buildWorkspaceTree(root, { timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS }).catch(() => ({
-					rootPath: root,
-					rendered: "",
-					truncated: false,
-					totalLines: 0,
-					agentsMdFiles: [],
-				})),
-			),
+			additionalRootsForTree.map(root => buildWorkspaceTree(root, workspaceScanOptions)),
 		);
-		return { ...primary, agentsMdFiles: [...primary.agentsMdFiles, ...extraTrees.flatMap(t => t.agentsMdFiles)] };
+		// An extra root's index is relative to that root; anchor it so it cannot read as a path under cwd.
+		const extraAgentsMd = extraTrees.flatMap(tree => tree.agentsMdFiles.map(file => path.join(tree.rootPath, file)));
+		return { ...primary, agentsMdFiles: [...primary.agentsMdFiles, ...extraAgentsMd] };
 	})();
 	const skillsPromise: Promise<readonly Skill[]> =
 		providedSkills !== undefined
@@ -990,6 +986,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		browserEnabled: evalPreludes.some(prelude => prelude.name === "browser"),
 		computerEnabled: evalPreludes.some(prelude => prelude.name === "computer"),
 		includeWorkspaceTree,
+		nestedContextFiles,
 		renderMermaid,
 		renderSvg,
 		autoGraph,

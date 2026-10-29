@@ -21,6 +21,25 @@ import type { TspCardStatus, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire
 import { card, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { runBox, runFoot, runInput, runOutput, type RunState } from "../tools/native-view";
+import { sanitizeStatusText } from "../chrome/shared";
+import { getWorkDetail } from "./work-detail";
+
+/** Longest line a folded row carries in its head: a command summary or a failure's first line (code points). */
+export const FOLDED_LINE_MAX = 200;
+
+/**
+ * A command's folded one-line summary: its first non-blank line, sanitized and capped at
+ * {@link FOLDED_LINE_MAX}, with an ellipsis when more lines follow. Undefined while the command is still blank.
+ */
+export function commandSummary(command: string): string | undefined {
+	const lines = command.split("\n");
+	const at = lines.findIndex(line => sanitizeStatusText(line) !== "");
+	if (at < 0) return undefined;
+	const points = [...sanitizeStatusText(lines[at]!)];
+	const more = lines.slice(at + 1).some(line => line.trim() !== "");
+	if (points.length > FOLDED_LINE_MAX) return `${points.slice(0, FOLDED_LINE_MAX - 1).join("")}…`;
+	return more ? `${points.join("")} …` : points.join("");
+}
 
 /** Output rows shown while an execution is collapsed. */
 export const PREVIEW_LINES = 20;
@@ -124,6 +143,7 @@ export interface ExecutionCardInput {
 	readonly status: ExecutionStatus;
 	/** `performance.now()` when the run started; drives the live elapsed timer. */
 	readonly startedAt: number;
+	/** Whether the body shows open (the user's toggle, else the work-detail mode and `Ctrl+O`). */
 	readonly expanded: boolean;
 	/** Body nodes before the output (the eval cell's code). */
 	readonly lead?: readonly NativeChild[];
@@ -179,7 +199,8 @@ export function describeExecutionCard(input: ExecutionCardInput): NativeNode {
 			status: EXECUTION_CARD_STATUS[input.status],
 			collapsible: true,
 			collapsed: !input.expanded,
-			preview: { lines: PREVIEW_LINES },
+			// Compact folds the card to its head line (no preview clamp shows the body).
+			preview: getWorkDetail() === "compact" ? undefined : { lines: PREVIEW_LINES },
 		},
 		children,
 	);
@@ -200,6 +221,7 @@ export interface ExecutionToolInput {
 	/** `performance.now()` when the run started / ended. */
 	readonly startedAt: number;
 	readonly endedAt: number | undefined;
+	/** Whether the body shows open (the user's toggle, else the work-detail mode and `Ctrl+O`). */
 	readonly expanded: boolean;
 	/** Raw terminal output. */
 	readonly output: string;
@@ -251,12 +273,17 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 	);
 	const badges: { text: string; tone?: TspTone; title?: string }[] = [{ text: "you", tone: "user" }];
 	if (input.excluded) badges.push({ text: "not sent", title: "Not sent to the model", tone: "muted" });
+	// Like an agent's tool row: compact folds to the head line, naming the command there while the run box is hidden.
+	const folded = !input.expanded && getWorkDetail() === "compact";
+	const target = folded ? commandSummary(input.command) : undefined;
 	return node(
 		"tool",
 		{
 			role: input.role,
 			name: input.name,
 			title: input.title,
+			target,
+			targetKind: target === undefined ? undefined : "command",
 			command: input.command,
 			badges,
 			status: EXECUTION_CARD_STATUS[input.status],
@@ -267,7 +294,7 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 			frame: "card",
 			collapsible: true,
 			collapsed: !input.expanded,
-			preview: "children",
+			preview: getWorkDetail() === "compact" ? "none" : "children",
 		},
 		[box, ...(input.images ?? [])],
 	);

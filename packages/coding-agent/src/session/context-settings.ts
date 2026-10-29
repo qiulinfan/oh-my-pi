@@ -68,6 +68,20 @@ export const cfgContextFilesExtra = register({
 	},
 });
 
+/** Context files of directories below the working directory, attached when a tool first reaches them. */
+export const cfgContextFilesNested = register({
+	id: "contextFiles.nested",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "context",
+		group: "General",
+		label: "Nested Context Files",
+		description:
+			"Attach the AGENTS.md / CLAUDE.md of subdirectories below the working directory the first time a read, edit, write or search reaches them. Off lists nested AGENTS.md paths only",
+	},
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Context
 // ────────────────────────────────────────────────────────────────────────

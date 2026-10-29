@@ -28,7 +28,7 @@ import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md"
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
-import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
+import { denyError, isJudgeableApproval, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
 import { getApprovalGrants } from "../tools/approval-cache";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
@@ -959,6 +959,21 @@ export class SessionTools {
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
 						if (resolved.policy === "allow") {
 							return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
+						}
+						// `auto`: the approval judge answers before the client is asked. Its allow runs
+						// the call (the inner gate reads the same remembered verdict); its deny refuses it.
+						if (isJudgeableApproval(resolved, mode)) {
+							const verdict = await this.#host
+								.extensionRunner()
+								?.judgeApproval(target, args, this.#host.settings, signal);
+							if (verdict === "deny") {
+								throw new ToolError(
+									`Tool "${target.name}" was refused by the approval judge (tools.approvalMode: auto).`,
+								);
+							}
+							if (verdict === "allow") {
+								return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
+							}
 						}
 						// A prompt forced by a critical command or an explicit pattern
 						// remains per-call, even after the client selects Always allow.

@@ -194,6 +194,8 @@ const STREAM_DOCS: Record<string, string> = {
 	headings: "# H1\n\ntext\n\nSetext\n===\n\n---\n\n## H2\n\nend",
 	"display math": "Intro.\n\n$$\na\n\nb\n$$\n\nAfter math.\n\n\\[\nx\n\n\\]\n\nend $x$ inline",
 	"unclosed display math": `Intro.\n\n$$\nx = 1\n\n${PARAGRAPHS}`,
+	"closed display math, then an unclosed one": `Intro.\n\n$$\na\n\nb\n$$\n\n${PARAGRAPHS}\n\n$$\nx = 1\n\n${PARAGRAPHS}`,
+	"math lines in a code fence": "Intro.\n\n```\n$$\n```\n\nAfter.\n\n$$\na\n\nb\n$$\n\nend",
 	"reference definitions": "See [the docs][d].\n\nMiddle.\n\n[d]: https://example.com\n\nAfter [d].",
 	"whitespace lines": "a\n\n\u00a0\n\nb\n\n \n\nc\n\n\u00a0x\n\nd",
 	"carriage returns": "a\r\n\r\nb\r\n\r\nc",
@@ -220,6 +222,14 @@ describe("Streaming Markdown", () => {
 		let prefix: FrozenMarkdownPrefix = { source: "", html: "" };
 		for (let len = 1; len <= doc.length; len++) prefix = renderStreamingMarkdown(doc.slice(0, len), prefix).prefix;
 		expect(prefix.source).toBe(`${PARAGRAPHS}\n\n`);
+	});
+
+	it("keeps freezing past a closed display-math block, and stops at an open one", () => {
+		const closed = `Intro.\n\n$$\nx\n$$\n\n${PARAGRAPHS}\n\n`;
+		const doc = `${closed}$$\ny\n\n${PARAGRAPHS}`;
+		let prefix: FrozenMarkdownPrefix = { source: "", html: "" };
+		for (let len = 1; len <= doc.length; len++) prefix = renderStreamingMarkdown(doc.slice(0, len), prefix).prefix;
+		expect(prefix.source).toBe(closed);
 	});
 
 	it("drops the frozen prefix when the text is rewritten instead of extended", () => {

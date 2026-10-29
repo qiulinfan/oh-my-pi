@@ -17,15 +17,23 @@ MUST follow these context files for all tasks:
 
 {{#if agentsMdSearch.files.length}}
 <dir-context>
-Some directories may have rules; deeper rules override higher ones.
+These directories have their own rules; deeper rules override higher ones.
+{{#if nestedContextFiles}}
+Each file is attached automatically the first time you read, edit, write or search in its directory.
+{{else}}
 Before changes in these directories, MUST read:
+{{/if}}
 {{#list agentsMdSearch.files join="\n"}}- {{this}}{{/list}}
 </dir-context>
 {{/if}}
 
+{{#if nestedContextFiles}}
+Context files load automatically: the working directory's and its ancestors' above; a subdirectory's own when a read, edit, write or search first reaches it. NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: the relevant ones arrive on their own; others noise.
+{{else}}
 {{#ifAny contextFiles.length agentsMdSearch.files.length}}
-Context files above auto-loaded. NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context; others noise.
+Context files above auto-loaded{{#if agentsMdSearch.files.length}}; read the listed ones before changing their directories{{/if}}. NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context or listed; others noise.
 {{/ifAny}}
+{{/if}}
 
 {{#if includeWorkspaceTree}}
 {{#if workspaceTree.rendered}}

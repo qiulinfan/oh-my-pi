@@ -161,6 +161,13 @@ describe("task live progress rendering", () => {
 		expect(renderProgressText(progress, false, uiTheme)).toContain("routed: pool b (quota)");
 	});
 
+	it("shows an approximate model match under the task row", () => {
+		setViewportRows(40);
+		const warning = '"anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5';
+		const progress = { ...makeProgress([]), resolvedModelWarning: warning };
+		expect(renderProgressText(progress, false, uiTheme)).toContain(`model: ${warning}`);
+	});
+
 	it("strips bash footer notices from expanded subagent recent output", () => {
 		setViewportRows(40);
 		const chronological = [

@@ -1102,6 +1102,9 @@ button.picker-item:focus-visible {
 	cursor: pointer;
 	padding: 1px 0;
 	width: fit-content;
+	/* Bounded by the column, so a shrinkable child (the live thought's one-line preview) ellipsizes in it. */
+	max-width: 100%;
+	min-width: 0;
 }
 .section-head:hover {
 	color: var(--fg-2);
@@ -1887,21 +1890,38 @@ button.picker-item:focus-visible {
 	font-size: 16px;
 	line-height: 1.7;
 }
-[data-role="omp.thinking"] .section-head {
+/* A thought, settled (omp.thinking) or still streaming (omp.thinking.live). */
+:is([data-role="omp.thinking"], [data-role="omp.thinking.live"]) .section-head {
 	font-size: 13px;
 	color: var(--muted);
 }
-[data-role="omp.thinking"] .section-took {
+:is([data-role="omp.thinking"], [data-role="omp.thinking.live"]) .section-took {
 	display: none;
 }
-[data-role="omp.thinking"] .section-body {
+:is([data-role="omp.thinking"], [data-role="omp.thinking.live"]) .section-body {
 	font-size: 13.5px;
 	font-style: italic;
 }
-[data-role="omp.thinking"] .section-body .tr-md {
+:is([data-role="omp.thinking"], [data-role="omp.thinking.live"]) .section-body .tr-md {
 	font-family: var(--sans);
 	font-size: 13.5px;
 	color: var(--muted);
+}
+/*
+ * An open live thought (Standard and Verbose open it while it streams) shows its last lines, as omp asks of
+ * `.live`, instead of growing with every paragraph; it opens in full once it settles. The body scrolls, so its
+ * start stays readable: render.tsx keeps it at the newest line until the user scrolls it up.
+ */
+[data-role="omp.thinking.live"] > .section-body {
+	max-height: 14em;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+/* Fades at the top while it follows the newest line. Anchored to the bottom and as tall as the clamp, so only a
+ * thought that nearly fills it fades. */
+[data-role="omp.thinking.live"] > .section-body[data-follow] {
+	-webkit-mask: linear-gradient(to top, #000 11em, transparent 14em) bottom / 100% 14em no-repeat;
+	mask: linear-gradient(to top, #000 11em, transparent 14em) bottom / 100% 14em no-repeat;
 }
 /* omp's "while you were away" recap closes a turn: a quiet note, off the rail. */
 .steps > [data-role="omp.recap"] {
@@ -2072,6 +2092,13 @@ button.picker-item:focus-visible {
 	font-size: 12.5px;
 	white-space: nowrap;
 }
+/* A folded failure's first error line can be long: it ellipsizes, and gives way before the target does. */
+.tool-note {
+	flex: 0 1000 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 .tool-time {
 	margin-left: auto;
 	color: var(--dim);
@@ -2219,14 +2246,17 @@ button.picker-item:focus-visible {
 	font-size: 12.5px;
 	min-height: 32px;
 }
-[data-role="omp.composer.model"] {
+/* The model chip, and the Work details chip omp draws beside it (its click opens omp's own picker). */
+[data-role="omp.composer.model"],
+[data-role="omp.composer.detail"] {
 	cursor: pointer;
 	padding: 4px 9px;
 	border-radius: 8px;
 	color: var(--fg-2);
 	border: 1px solid var(--line);
 }
-[data-role="omp.composer.model"]:hover {
+[data-role="omp.composer.model"]:hover,
+[data-role="omp.composer.detail"]:hover {
 	background: var(--hover);
 	color: var(--fg);
 }

@@ -19,6 +19,25 @@ export function clearStreamingPartialJson(block: StreamingPartialJsonCarrier): v
 	if (Object.hasOwn(block, kStreamingPartialJson)) block[kStreamingPartialJson] = undefined;
 }
 
+/**
+ * Marks a tool-call block whose streamed argument JSON is for live display only:
+ * stream speculation must not plan from it. openai-completions sets it because its
+ * hosts may stream calls without ids, while speculation sessions are keyed by id.
+ * Remove once stream speculation is keyed safely for those hosts and the owner
+ * enables speculation for them.
+ */
+export const kStreamingPartialJsonDisplayOnly = Symbol("provider.block.partialJsonDisplayOnly");
+
+/** Carries the display-only marker without exposing a string-keyed property. */
+export type StreamingPartialJsonDisplayOnlyCarrier = object & { [kStreamingPartialJsonDisplayOnly]?: true };
+
+/** Reports whether a block's streamed argument JSON is for live display only. */
+export function isStreamingPartialJsonDisplayOnly(
+	block: StreamingPartialJsonDisplayOnlyCarrier | null | undefined,
+): boolean {
+	return block?.[kStreamingPartialJsonDisplayOnly] === true;
+}
+
 /** Stores a provider-local stream block index without exposing a string-keyed property. */
 export const kStreamingBlockIndex = Symbol("provider.block.index");
 

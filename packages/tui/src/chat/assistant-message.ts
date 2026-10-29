@@ -19,7 +19,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AssistantThinkingRenderer } from "./extension-types";
 import { ensureThemeSync, getMarkdownTheme, getMarkdownThemeWithLinkTargets, getThemeEpoch, theme } from "../theme";
-import { card, col, elapsed, node, span, text } from "../native/describe";
+import { card, col, elapsed, keyed, node, span, text } from "../native/describe";
 import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { isNativeRendering } from "../native/state";
@@ -41,6 +41,8 @@ import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
+import { sanitizeStatusText } from "../chrome/shared";
+import { getWorkDetail, workDetailEpoch } from "./work-detail";
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -135,6 +137,52 @@ function isSnapshotExtension(previous: readonly StablePart[], current: readonly 
 		if (isLast ? !after.text.startsWith(before.text) : after.text !== before.text) return false;
 	}
 	return true;
+}
+
+/** Longest live-thought preview sent in a folded thinking head (code points); the host ellipsizes to fit. */
+const LIVE_THOUGHT_PREVIEW_MAX = 200;
+
+/** The last paragraph break (a newline, optional spaces or tabs, a newline) ending at or before `end`. */
+function lastParagraphBreak(source: string, end: number): { start: number; end: number } | undefined {
+	let newline = end > 0 ? source.lastIndexOf("\n", end - 1) : -1;
+	while (newline > 0) {
+		let before = newline - 1;
+		while (before >= 0 && (source[before] === " " || source[before] === "\t")) before--;
+		if (before < 0) return undefined;
+		if (source[before] === "\n") return { start: before, end: newline + 1 };
+		newline = source.lastIndexOf("\n", before);
+	}
+	return undefined;
+}
+
+/**
+ * The one-line preview a folded live thought shows beside "Thinking…": the
+ * first line of the latest finished (blank-line ended) paragraph, so it changes
+ * per paragraph rather than per token; before any paragraph finishes, the
+ * current paragraph's first line once that line has ended. `**` emphasis is
+ * dropped and the line sanitized and capped. `""` when nothing has finished yet.
+ */
+function liveThoughtPreview(source: string): string {
+	// Scans back from the end, so a frame costs the tail paragraphs, not the whole thought.
+	const last = lastParagraphBreak(source, source.length);
+	let line: string | undefined;
+	for (let cursor = last; cursor !== undefined && line === undefined;) {
+		const previous = lastParagraphBreak(source, cursor.start);
+		const paragraph = source.slice(previous?.end ?? 0, cursor.start);
+		line = paragraph.split("\n").find(candidate => candidate.trim().length > 0);
+		cursor = previous;
+	}
+	if (line === undefined) {
+		const current = source.slice(last?.end ?? 0).replace(/^\s*\n/, "");
+		const end = current.indexOf("\n");
+		if (end > 0) line = current.slice(0, end);
+	}
+	if (line === undefined) return "";
+	const clean = sanitizeStatusText(line.replaceAll("**", ""));
+	const points = [...clean];
+	return points.length > LIVE_THOUGHT_PREVIEW_MAX
+		? `${points.slice(0, LIVE_THOUGHT_PREVIEW_MAX - 1).join("")}…`
+		: clean;
 }
 
 function resolveThinkingDisplay(block: ThinkingContentBlock, proseOnly: boolean): { text: string; visible: boolean } {
@@ -394,8 +442,13 @@ export class AssistantMessageComponent extends Container {
 	#displayedMessage: AssistantMessage | undefined;
 	/** Thinking-extension components per content index, recorded when the slow path mounts them. */
 	#thinkingExtensions = new Map<number, Component[]>();
-	/** Collapse state of thinking sections toggled in the terminal, by content index; cleared by {@link setHideThinkingBlock}. */
+	/**
+	 * Collapse state of thinking sections toggled in the terminal, by content index; cleared by
+	 * {@link setHideThinkingBlock} and dropped once the work-detail mode changes ({@link #thinkingToggleEpoch}).
+	 */
 	#thinkingCollapsed = new Map<number, boolean>();
+	/** The work-detail epoch {@link #thinkingCollapsed} was recorded under. */
+	#thinkingToggleEpoch = workDetailEpoch();
 	/** When each thinking block was seen streaming and when it stopped (native "Thought for 12s"), by content index. */
 	#thinkingClock = new Map<number, { start: number; end?: number; tokens: number }>();
 	#nativeViewVersion = 0;
@@ -831,6 +884,7 @@ export class AssistantMessageComponent extends Container {
 			rate,
 			media,
 			getThemeEpoch(),
+			workDetailEpoch(),
 		];
 		return this.#native.get(key, () => this.#describeMessage(tail, rate, media));
 	}
@@ -854,6 +908,11 @@ export class AssistantMessageComponent extends Container {
 		if (event.type !== "toggle" || !event.key.startsWith("k")) return;
 		const index = Number(event.key.slice(1));
 		if (!Number.isInteger(index)) return;
+		const epoch = workDetailEpoch();
+		if (this.#thinkingToggleEpoch !== epoch) {
+			this.#thinkingCollapsed.clear();
+			this.#thinkingToggleEpoch = epoch;
+		}
 		this.#thinkingCollapsed.set(index, event.collapsed);
 		this.#nativeViewVersion++;
 	}
@@ -884,6 +943,9 @@ export class AssistantMessageComponent extends Container {
 		};
 		const children: NativeChild[] = [];
 		let answered = false;
+		const detail = getWorkDetail();
+		// Toggles made under an earlier work-detail mode give way to the current one.
+		const toggles = this.#thinkingToggleEpoch === workDetailEpoch() ? this.#thinkingCollapsed : undefined;
 		if (message) {
 			const live = !this.#transcriptBlockFinalized && this.#lastUpdateTransient;
 			let tailIndex = -1;
@@ -948,7 +1010,22 @@ export class AssistantMessageComponent extends Container {
 					if (this.#hideThinkingBlock && !thinkingLive) continue;
 					const tokens = thinkingLive ? this.#thinkingTokens : (clock?.tokens ?? 0);
 					const title = tokens > 0 ? `${formatNumber(tokens)} tokens` : undefined;
-					// Live: starburst · "Thinking…" · ticking timer · tok/s. Done: "Thought for 12s".
+					// The user's toggle wins; then a hidden thought shows only its live head. Compact folds every
+					// thought, verbose keeps every thought open, and standard keeps one open while it streams and
+					// folds it to "Thought for 12s" when it ends unless the user keeps thinking expanded.
+					const collapsed =
+						toggles?.get(index) ??
+						(this.#hideThinkingBlock ||
+							(detail === "compact"
+								? true
+								: detail === "verbose"
+									? false
+									: !thinkingLive && !this.#expandThinkingBlocks));
+					// A folded live thought previews its latest paragraph, unless the user hid thinking text.
+					const preview =
+						thinkingLive && collapsed && !this.#hideThinkingBlock ? liveThoughtPreview(display.text) : "";
+					// Live: starburst · "Thinking…" · ticking timer · tok/s · preview (keyed, so the others keep their ids).
+					// Done: "Thought for 12s".
 					const head = thinkingLive
 						? node(
 								"row",
@@ -958,6 +1035,19 @@ export class AssistantMessageComponent extends Container {
 									text([span("Thinking…", "muted")]),
 									elapsed(performance.now() - (this.#thinkingClock.get(index)?.start ?? performance.now())),
 									...(rate >= 0.05 ? [node("rate", { value: rate, unit: "tok/s" })] : []),
+									...(preview
+										? [
+												keyed(
+													text([span(preview, "dim")], {
+														wrap: "none",
+														truncate: "end",
+														shrink: 1,
+														role: "omp.thinking.preview",
+													}),
+													"preview",
+												),
+											]
+										: []),
 								],
 								"head",
 							)
@@ -970,10 +1060,7 @@ export class AssistantMessageComponent extends Container {
 								// `.live` while streaming: the body clamps to its tail under a fade.
 								role: thinkingLive ? "omp.thinking.live" : "omp.thinking",
 								collapsible: true,
-								// Open while it streams; a finished thought folds to its "Thought for 12s" line unless the user keeps thinking expanded.
-								collapsed:
-									this.#thinkingCollapsed.get(index) ??
-									(this.#hideThinkingBlock || (!thinkingLive && !this.#expandThinkingBlocks)),
+								collapsed,
 								// Tern's fold head sums it into "Worked for 12s".
 								took: clock?.end === undefined ? undefined : Math.max(0, Math.round(clock.end - clock.start)),
 							},

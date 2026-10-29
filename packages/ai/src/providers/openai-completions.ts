@@ -36,7 +36,13 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
-import { isDemotedThinking, kStreamingLastParseLen } from "../utils/block-symbols";
+import {
+	clearStreamingPartialJson,
+	isDemotedThinking,
+	kStreamingLastParseLen,
+	kStreamingPartialJsonDisplayOnly,
+	setStreamingPartialJson,
+} from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
@@ -1041,6 +1047,7 @@ const streamOpenAICompletionsOnce = (
 				partialArgs?: string | Record<string, unknown>;
 				streamIndex?: number;
 				[kStreamingLastParseLen]?: number;
+				[kStreamingPartialJsonDisplayOnly]?: true;
 			};
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
@@ -1073,6 +1080,7 @@ const streamOpenAICompletionsOnce = (
 			};
 			const finishToolCallBlock = (block: ToolCallStreamBlock): void => {
 				if (block.partialArgs === undefined) return;
+				clearStreamingPartialJson(block);
 				const contentIndex = blockIndex(block);
 				if (contentIndex < 0) return;
 				// Object-shaped `partialArgs` came from MiniMax-compatible hosts that stream
@@ -1622,6 +1630,11 @@ const streamOpenAICompletionsOnce = (
 									delta = rawArgs;
 									const prev = typeof block.partialArgs === "string" ? block.partialArgs : "";
 									block.partialArgs = prev + rawArgs;
+									// Live renderers pace and incrementally decode the raw buffer;
+									// `arguments` stays on the throttled re-parse below. Stream
+									// speculation does not plan from it (see the marker's doc).
+									block[kStreamingPartialJsonDisplayOnly] = true;
+									setStreamingPartialJson(block, block.partialArgs);
 									const throttled = parseStreamingJsonThrottled(
 										block.partialArgs,
 										block[kStreamingLastParseLen] ?? 0,

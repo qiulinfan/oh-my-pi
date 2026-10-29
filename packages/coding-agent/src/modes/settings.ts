@@ -12,6 +12,7 @@ import {
 	STATUS_LINE_SEPARATOR_VALUES,
 } from "@oh-my-pi/pi-tui/status-line/schema";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { setWorkDetail, WORK_DETAIL_INFO, WORK_DETAILS } from "@oh-my-pi/pi-tui/chat/work-detail";
 import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { setEmojiAutocompleteEnabled } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { WORD_COMPLETION_METHODS } from "@oh-my-pi/pi-tui/prompt/word-completion";
@@ -668,6 +669,32 @@ export const cfgDisplayHideToolActivity = register({
 		label: "Hide Tool Activity",
 		description: "Hide model-initiated tool calls and results from the transcript",
 	},
+});
+
+/**
+ * How much thinking and tool work a TSP surface (omp gui, Tern) shows; the plain terminal ignores
+ * it. `omp --work-detail` and the composer's work-detail chip override it for one session.
+ */
+export const cfgDisplayWorkDetail = register({
+	id: "display.workDetail",
+	type: "enum",
+	values: WORK_DETAILS,
+	default: "standard",
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Work Details",
+		description: "How much of the agent's thinking and tool work the transcript shows",
+		condition: "nativeRendering",
+		options: WORK_DETAILS.map(value => ({
+			value,
+			label: WORK_DETAIL_INFO[value].label,
+			description: WORK_DETAIL_INFO[value].detail,
+		})),
+	},
+});
+effect(cfgDisplayWorkDetail, mode => {
+	setWorkDetail(mode);
 });
 
 export const cfgDisplayShowTokenUsage = register({

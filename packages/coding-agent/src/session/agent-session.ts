@@ -45,6 +45,7 @@ import {
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	type ThinkingLevel,
 	type ToolChoiceDirective,
+	joinAdditionalContext,
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CompactionPreparation,
@@ -356,6 +357,7 @@ import {
 } from "./codex-auto-reset";
 import { recordCredentialPin, seedCredentialPins } from "./credential-pin";
 import { isDateCwdReminderControl } from "./date-cwd-reminder";
+import type { FileCheckpointStore } from "./file-checkpoints";
 import { EvalRunner, type EvalRunnerHost } from "./eval-runner";
 import {
 	collectPendingToolCalls,
@@ -498,6 +500,7 @@ function jobSnapshotItem(job: AsyncJob): AsyncJobSnapshotItem {
 
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE, TodoTracker, type TodoTrackerHost } from "./todo-tracker";
+import { NestedContextLoader } from "./nested-context";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
@@ -547,6 +550,7 @@ import {
 	cfgBranchSummaryReserveTokens,
 	cfgCompactionModelThresholds,
 	cfgCompactionModelThresholdsEnabled,
+	cfgContextFilesNested,
 	cfgExtendedContext,
 	cfgWorkspaceAdditionalDirectories,
 } from "./context-settings";
@@ -1040,6 +1044,8 @@ export class AgentSession implements SettingsScope {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	/** File checkpoints recorded by this session's file tools; code rewind restores from them. */
+	readonly fileCheckpoints: FileCheckpointStore | undefined;
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Manager of this session's root, used for its own job queries and deliveries. */
@@ -1139,6 +1145,7 @@ export class AgentSession implements SettingsScope {
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;
+	readonly #nestedContext = new NestedContextLoader();
 	readonly #stats: SessionStatsTracker;
 
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
@@ -1862,6 +1869,7 @@ export class AgentSession implements SettingsScope {
 			kernelOwnerId: config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`,
 		});
 		this.#evalToolSession = config.evalToolSession;
+		this.fileCheckpoints = config.fileCheckpoints;
 		const initialEvalStateContext = this.#buildEvalStateContextMessage(this.agent.state.messages);
 		if (initialEvalStateContext) {
 			// Persist the startup snapshot at the slot this process sends it from, so
@@ -5362,7 +5370,7 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
-	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+	async #afterToolCall(ctx: AfterToolCallContext): Promise<AfterToolCallResult | undefined> {
 		if (
 			this.#isTerminalYieldToolResult({
 				toolName: ctx.toolCall.name,
@@ -5374,8 +5382,31 @@ export class AgentSession implements SettingsScope {
 			this.#markTerminalYieldToolCall(ctx.toolCall.id);
 			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			return this.#ttsr.afterToolCall(ctx);
 		}
-		return this.#ttsr.afterToolCall(ctx);
+		const ttsr = this.#ttsr.afterToolCall(ctx);
+		const nested = await this.#nestedContextFor(ctx);
+		if (nested === undefined) return ttsr;
+		return { ...ttsr, additionalContext: joinAdditionalContext([ttsr?.additionalContext, nested]) };
+	}
+
+	/**
+	 * Context files of the directories a successful call reached below the
+	 * workspace roots, not yet in context (`contextFiles.nested`). Targets come
+	 * from the tool's `approvalCacheTargets`, the per-tool account of the paths
+	 * a call reads, writes or searches.
+	 */
+	async #nestedContextFor(ctx: AfterToolCallContext): Promise<string | undefined> {
+		if (ctx.isError || !cfgContextFilesNested.get(this.settings)) return undefined;
+		let targets: readonly string[] | undefined;
+		try {
+			targets = this.getToolByName(ctx.toolCall.name)?.approvalCacheTargets?.(ctx.args);
+		} catch (error) {
+			logger.debug("Nested context: tool targets unavailable", { tool: ctx.toolCall.name, error: String(error) });
+		}
+		if (!targets || targets.length === 0) return undefined;
+		const roots = [this.sessionManager.getCwd(), ...this.sessionManager.getAdditionalDirectories()];
+		return this.#nestedContext.contextFor(targets, roots, ctx.context.messages, ctx.assistantMessage);
 	}
 	/**
 	 * Emits the extension `tool_call` event for a loop-dispatched call at

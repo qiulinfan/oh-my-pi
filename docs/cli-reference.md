@@ -101,7 +101,8 @@ or `--fork`.
 
 | Flag | Description |
 | --- | --- |
-| `--model <id-or-role>` | Model or configured role to use (role: `slow` or `@slow`; fuzzy model match: `opus`, `gpt-5.2`, or `openai/gpt-5.2`). |
+| `--model <id-or-role>` | Model or configured role to use (role: `slow` or `@slow`; model: `opus`, `gpt-5.2`, or `openai/gpt-5.2`). A selector that only approximately matches a model (a typo, or a version the catalog does not have) still runs the closest model, but prints `Warning: "<selector>" is not a known model; using <provider/id>`. |
+| `--exact-model` | Require every model selector this run resolves (`--model`, `--models`, configured roles, `/model`, subagent models) to name a model exactly: an id, a `provider/id`, or a catalog alias such as `haiku`. A near match is an error instead of a substitution. Same as the `model.exactMatch` setting; use it for evals and scripts. |
 | `--smol <id>` | Smol/fast model for lightweight tasks (or `PI_SMOL_MODEL`). |
 | `--slow <id>` | Slow/reasoning model for thorough analysis (or `PI_SLOW_MODEL`). |
 | `--plan <id>` | Plan model for architectural planning (or `PI_PLAN_MODEL`). |
@@ -120,6 +121,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | --- | --- |
 | `--thinking <level>` | Set the thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `auto`. |
 | `--hide-thinking` | Hide thinking blocks in TUI output (display only; does not disable model thinking). |
+| `--work-detail <mode>` | Override `display.workDetail` for this session: how much thinking and tool work `omp gui` and Tern show. `compact` folds thinking and tool calls to one line, also while they stream; `standard` (the default) keeps a streaming thought open and shows a short tool preview; `verbose` keeps thinking and tool output open. The plain terminal ignores it. |
 | `--print-thoughts` | Include thinking blocks in print-mode text output. |
 | `--external-thinking` | Use a private scratchpad while disabling supported GPT/Claude/Gemini reasoning. Use at your own risk: providers have flagged this request shape as abuse. |
 
@@ -142,7 +144,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--no-tools` | Disable all built-in tools. |
 | `--no-lsp` | Disable LSP tools, formatting, and diagnostics. |
 | `--no-pty` | Disable PTY-based interactive bash execution. |
-| `--approval-mode <mode>` | Override `tools.approvalMode` for this session (`always-ask`, `always-ask-cached`, `write`, or `yolo`). See [approval mode](./approval-mode.md). |
+| `--approval-mode <mode>` | Override `tools.approvalMode` for this session (`always-ask`, `always-ask-cached`, `write`, `auto`, or `yolo`). See [approval mode](./approval-mode.md). |
 | `--auto-approve`, `--yolo` | Force yolo tier approval; explicit tool/user policies and provider safety checks still apply. |
 | `--advisor` | Enable the advisor runtime (passively reviews each turn and injects notes). See [advisor / watchdog](./advisor-watchdog.md). |
 | `--max-time <duration>` | Stop the session after this duration (e.g. `600`, `10m`, `1h`). |

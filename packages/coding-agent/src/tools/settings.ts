@@ -309,18 +309,20 @@ export const cfgToolsApproval = register({
 //   "always-ask-cached" — like always-ask, but file reads and writes can be approved
 //                         for a file or folder, this session or across sessions.
 //   "write"             — auto-approves read and write-tier tools; prompts for exec.
+//   "auto"              — like write, but asks the approval judge about each exec call first.
 //   "yolo"              — auto-approves every tier.
+// Every mode, yolo included, prompts for a critical command (`rm -rf /`, `curl … | sh`).
 export const cfgToolsApprovalMode = register({
 	id: "tools.approvalMode",
 	type: "enum",
-	values: ["always-ask", "always-ask-cached", "write", "yolo"] as const,
+	values: ["always-ask", "always-ask-cached", "write", "auto", "yolo"] as const,
 	default: "yolo",
 	ui: {
 		tab: "interaction",
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' also asks before file reads, and can remember a file or folder. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' also asks before file reads, and can remember a file or folder. 'Write' auto-approves read and workspace-write tools. 'Auto' is Write plus a judge model that runs routine exec calls, asks about risky ones, and refuses destructive ones. 'Yolo' auto-approves all tiers; user policy may still prompt or block. Every mode asks before a critical command such as rm -rf / or curl | sh.",
 		options: [
 			{
 				value: "always-ask",
@@ -340,10 +342,16 @@ export const cfgToolsApprovalMode = register({
 					"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, and task.",
 			},
 			{
+				value: "auto",
+				label: "Auto",
+				description:
+					"Like Write, but a judge model (the judge role) decides each exec call: routine ones run, risky ones ask, clearly destructive or exfiltrating ones are refused. Asks when no judge answers.",
+			},
+			{
 				value: "yolo",
 				label: "Yolo",
 				description:
-					"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
+					"Auto-approve read, write, and exec tools, except critical commands, which still ask. User policy can still require confirmation or block calls.",
 			},
 		],
 	},
@@ -729,6 +737,57 @@ export const cfgCheckpointEnabled = register({
 		group: "Available Tools",
 		label: "Checkpoint/Rewind",
 		description: "Enable the checkpoint and rewind tools for context checkpointing",
+	},
+});
+
+// File checkpoints (code rewind)
+export const cfgFileCheckpointsEnabled = register({
+	id: "fileCheckpoints.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoints",
+		description:
+			"Save each file's prior state before omp's file tools change it, so rewind can restore code as well as the conversation. Bash and eval changes are not tracked",
+	},
+});
+
+export const cfgFileCheckpointsMaxSizeMb = register({
+	id: "fileCheckpoints.maxSizeMb",
+	type: "number",
+	default: 500,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoint Size Cap (MB)",
+		description: "Per-session cap on saved file states; the oldest turns' checkpoints are removed first",
+		options: [
+			{ value: "100", label: "100 MB" },
+			{ value: "250", label: "250 MB" },
+			{ value: "500", label: "500 MB", description: "Default" },
+			{ value: "1000", label: "1 GB" },
+			{ value: "2000", label: "2 GB" },
+		],
+	},
+});
+
+export const cfgFileCheckpointsMaxAgeDays = register({
+	id: "fileCheckpoints.maxAgeDays",
+	type: "number",
+	default: 30,
+	ui: {
+		tab: "tools",
+		group: "File Checkpoints",
+		label: "File Checkpoint Retention (days)",
+		description: "Checkpoints of turns older than this are removed when the session is next used",
+		options: [
+			{ value: "7", label: "7 days" },
+			{ value: "14", label: "14 days" },
+			{ value: "30", label: "30 days", description: "Default" },
+			{ value: "90", label: "90 days" },
+		],
 	},
 });
 

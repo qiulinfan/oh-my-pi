@@ -700,6 +700,23 @@ function renderRouteLine(route: string | undefined, continuePrefix: string, maxW
 	];
 }
 
+/** The approximate-model-match warning under a task row, when its selector named no model exactly. */
+function renderModelWarningLine(
+	warning: string | undefined,
+	continuePrefix: string,
+	maxWidth: number,
+	theme: Theme,
+): string[] {
+	if (!warning) return [];
+	return [
+		truncateTaskRow(
+			`${continuePrefix}${theme.fg("warning", `model: ${replaceTabs(sanitizeText(warning))}`)}`,
+			maxWidth,
+			"",
+		),
+	];
+}
+
 /** A tool call's own intent, else its argument, with home paths shortened as the subagent HUD does. */
 function toolCallDetail(intent: string | undefined, args: string | undefined, argsKey: string | undefined): string {
 	return intent ? shortenEmbeddedPaths(intent) : shortenToolArgumentPaths(args ?? "", argsKey);
@@ -759,6 +776,7 @@ function renderAgentProgress(
 		lines.push(...renderDescriptionLines(fullDescription, continuePrefix, maxWidth, theme));
 	}
 	lines.push(...renderRouteLine(progress.resolvedModelRoute, continuePrefix, maxWidth, theme));
+	lines.push(...renderModelWarningLine(progress.resolvedModelWarning, continuePrefix, maxWidth, theme));
 
 	lines.push(...renderTaskSection(progress.assignment ?? progress.task, continuePrefix, expanded, theme));
 
@@ -1127,6 +1145,7 @@ function renderAgentResult(
 		lines.push(...renderDescriptionLines(fullDescription, continuePrefix, maxWidth, theme));
 	}
 	lines.push(...renderRouteLine(result.resolvedModelRoute, continuePrefix, maxWidth, theme));
+	lines.push(...renderModelWarningLine(result.resolvedModelWarning, continuePrefix, maxWidth, theme));
 
 	lines.push(...renderTaskSection(result.assignment ?? result.task, continuePrefix, expanded, theme));
 
@@ -1922,6 +1941,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 		[
 			describeAssignment(progress.assignment ?? progress.task),
 			progress.resolvedModelRoute ? noteText(progress.resolvedModelRoute, "dim") : undefined,
+			progress.resolvedModelWarning ? noteText(progress.resolvedModelWarning, "warning") : undefined,
 			!running && progress.retryFailure
 				? text(
 						[
@@ -1979,6 +1999,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 		[
 			describeAssignment(result.assignment ?? result.task),
 			result.resolvedModelRoute ? noteText(result.resolvedModelRoute, "dim") : undefined,
+			result.resolvedModelWarning ? noteText(result.resolvedModelWarning, "warning") : undefined,
 			aborted && result.abortReason ? errorLine(result.abortReason) : undefined,
 			warning ? errorLine(warning, "warning") : undefined,
 			result.error ? errorLine(result.error) : undefined,
@@ -2012,6 +2033,39 @@ function describeAgents(details: TaskToolDetails, state: AgentDescribeState, dep
 		if (!results.some(res => res.id === progress.id)) agents.push(describeProgressAgent(progress, state, depth));
 	}
 	return agents;
+}
+
+/** Widest live-progress summary a task row's head carries (columns). */
+const LIVE_PROGRESS_WIDTH = 80;
+
+/**
+ * A running task's progress in one line for its head, which stays visible while the row is folded
+ * (the body's agent rows are hidden then): how many agents still run when more than one does, then
+ * what the first of them is doing (its current tool and target, else its stage, else its last tool).
+ * Undefined once no agent runs, and on a row the turn abandoned (sealed as cancelled, or frozen
+ * outside a background job), whose last progress frame no longer describes running work.
+ */
+function liveProgressSummary(details: TaskToolDetails, options: TaskRenderOptions): string | undefined {
+	if (options.cancelled) return undefined;
+	if (options.renderContext?.frozen === true && details.async === undefined) return undefined;
+	const results = details.results ?? [];
+	const running = orderProgressForDisplay(details.progress ?? []).filter(
+		progress => progress.status === "running" && !results.some(res => res.id === progress.id),
+	);
+	const lead = running[0];
+	if (!lead) return undefined;
+	const recent = lead.recentTools[0];
+	const activity = lead.currentTool
+		? [lead.currentTool, toolCallDetail(lead.currentToolIntent, lead.currentToolArgs, lead.currentToolArgsKey)]
+		: lead.stage
+			? [lead.stage]
+			: recent
+				? [recent.tool, toolCallDetail(recent.intent, recent.args, recent.argsKey)]
+				: [];
+	const doing = activity.filter(Boolean).join(" ");
+	const who = formatTaskId(lead.id);
+	const line = `${running.length > 1 ? `${running.length} running · ` : ""}${doing ? `${who}: ${doing}` : who}`;
+	return previewLine(plainText(line), LIVE_PROGRESS_WIDTH);
 }
 
 function agentCountLabel(count: number): string {
@@ -2135,12 +2189,14 @@ function describeTaskResult(
 					.join("\n")
 			: "";
 	const target = count > 0 ? agentCountLabel(count) : agentLabel;
+	const live = liveProgressSummary(details, options);
+	const meta = compact([summary.length > 0 ? summary.join(" · ") : undefined, live]);
 	return {
 		tool: {
 			title: "Task",
 			target,
 			targetKind: target ? "text" : undefined,
-			meta: summary.length > 0 ? [summary.join(" · ")] : undefined,
+			meta: meta.length > 0 ? meta : undefined,
 			badges: background ? [{ text: "background" }] : undefined,
 		},
 		tone: aborted + failed > 0 ? "error" : undefined,
@@ -2391,6 +2447,8 @@ export interface AgentProgress {
 	resolvedModelIsFallback?: boolean;
 	/** Extension routing note (e.g. model-pools) explaining why {@link resolvedModel} was chosen. */
 	resolvedModelRoute?: string;
+	/** The model selector only approximately matched {@link resolvedModel} (`"x" is not a known model; using y`). */
+	resolvedModelWarning?: string;
 	/** True when a live advisor was attached to this run's session, not merely enabled in settings. */
 	advisor?: boolean;
 	/** The agent's latest self-estimate of task completion (0–100), from the periodic `task.completionProbe` side request. */
@@ -2484,6 +2542,8 @@ export interface SingleResult {
 	resolvedModelIsFallback?: boolean;
 	/** Mirrors {@link AgentProgress.resolvedModelRoute} onto the settled result. */
 	resolvedModelRoute?: string;
+	/** Mirrors {@link AgentProgress.resolvedModelWarning} onto the settled result. */
+	resolvedModelWarning?: string;
 	/** Retains {@link AgentProgress.advisor} after the advised session is disposed. */
 	advisor?: boolean;
 	error?: string;

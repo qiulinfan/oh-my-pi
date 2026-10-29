@@ -71,6 +71,7 @@ import type { ForeignSessionInfo, ForeignSessionSource } from "../../session/for
 import { previewModelCompactionPoint, setModelCompactionPoint } from "../../session/model-compaction-threshold";
 import { isTranscriptEntry, type TranscriptEntry } from "../../session/session-context";
 import { isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { chooseRewindScope, restoreCodeFromPlan, type RewindScopeChoice } from "./code-rewind";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { readSessionInfo, type SessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
@@ -132,6 +133,7 @@ import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-se
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { ThinkingSelectorComponent } from "@oh-my-pi/pi-tui/overlays/thinking-selector";
+import { WorkDetailSelectorComponent } from "@oh-my-pi/pi-tui/overlays/work-detail-selector";
 import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
 import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -144,6 +146,7 @@ import {
 	cfgStatusLineCompactThinkingLevel,
 	cfgStatusLineContextLine,
 	cfgStatusLineLeftSegments,
+	cfgDisplayWorkDetail,
 	cfgStatusLinePreset,
 	cfgStatusLineRightSegments,
 	cfgStatusLineSegmentOptions,
@@ -353,7 +356,7 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
+						onChange: (id, value) => this.handleSettingsPanelChange(id, value),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -700,6 +703,17 @@ export class SelectorController {
 			throw error;
 		}
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
+	}
+
+	/**
+	 * A change made in the /settings panel, which writes the persisted value. The panel is the only
+	 * writer that drops this session's `--work-detail`/chip override so the saved mode shows now;
+	 * approved `cfg://` writes set or clear their own override before reporting through
+	 * {@link handleSettingChange}.
+	 */
+	handleSettingsPanelChange(id: string, value: unknown): void {
+		if (id === cfgDisplayWorkDetail.id) cfgDisplayWorkDetail.clearOverride(this.ctx.settings);
+		this.handleSettingChange(id, value);
 	}
 
 	/**
@@ -1415,10 +1429,29 @@ export class SelectorController {
 			return;
 		}
 		const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
+		// The scope dialog draws under the fullscreen selector, so close it first;
+		// later `done()` calls are then no-ops.
+		let closed = false;
+		const close = () => {
+			if (closed) return;
+			closed = true;
+			done();
+		};
 		try {
+			const choice = await chooseRewindScope(this.ctx, entryId, isUserTarget, close);
+			if (!choice) {
+				close();
+				this.ctx.showStatus("Rewind cancelled");
+				return;
+			}
+			if (choice.scope === "code" && choice.plan) {
+				close();
+				await restoreCodeFromPlan(this.ctx, choice.plan);
+				return;
+			}
 			const result = await this.ctx.session.navigateTree(entryId, { summarize: false });
 			if (result.cancelled) {
-				done();
+				close();
 				this.ctx.showStatus("Navigation cancelled");
 				return;
 			}
@@ -1433,10 +1466,14 @@ export class SelectorController {
 			if (result.editorText && (isUserTarget || !this.ctx.editor.getText().trim())) {
 				this.ctx.editor.setDraft(result.editorText, result.editorImages);
 			}
-			done();
-			this.ctx.showStatus("Rewound to selected point");
+			close();
+			if (choice.scope === "both" && choice.plan) {
+				await restoreCodeFromPlan(this.ctx, choice.plan);
+			} else {
+				this.ctx.showStatus("Rewound to selected point");
+			}
 		} catch (error) {
-			done();
+			close();
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
 	}
@@ -1537,6 +1574,31 @@ export class SelectorController {
 					// the post-navigation transcript is a strict prefix of the rendered
 					// one and the tail can be dropped in place.
 					const treeRewind = this.#treeRewindBoundary(entryId, realLeafId);
+
+					// A user-message target can also restore the files changed since it.
+					let scopeChoice: RewindScopeChoice | undefined = { scope: "conversation" };
+					if (this.ctx.session.fileCheckpoints) {
+						const targetEntry = this.ctx.sessionManager.getEntry(entryId);
+						try {
+							scopeChoice = await chooseRewindScope(
+								this.ctx,
+								entryId,
+								targetEntry !== undefined && isUserRequestEntry(targetEntry),
+								() => {},
+							);
+						} catch (error) {
+							this.ctx.showError(error instanceof Error ? error.message : String(error));
+							return;
+						}
+					}
+					if (!scopeChoice) {
+						this.showTreeSelector();
+						return;
+					}
+					if (scopeChoice.scope === "code" && scopeChoice.plan) {
+						await restoreCodeFromPlan(this.ctx, scopeChoice.plan);
+						return;
+					}
 
 					// Loop until user makes a complete choice or cancels to tree.
 					// Shift+Enter in the tree selector pre-answers "Summarize" and
@@ -1644,7 +1706,11 @@ export class SelectorController {
 						if (result.editorText && !this.ctx.editor.getText().trim()) {
 							this.ctx.editor.setDraft(result.editorText, result.editorImages);
 						}
-						this.ctx.showStatus("Navigated to selected point");
+						if (scopeChoice.scope === "both" && scopeChoice.plan) {
+							await restoreCodeFromPlan(this.ctx, scopeChoice.plan);
+						} else {
+							this.ctx.showStatus("Navigated to selected point");
+						}
 
 						// Re-answering a past `ask` commits a new sibling answer but,
 						// unlike a live `ask`, leaves the agent idle. Resume it now —
@@ -2451,6 +2517,28 @@ export class SelectorController {
 		this.showSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
+		});
+	}
+
+	/**
+	 * Open the work-detail picker. A choice overrides `display.workDetail` for this session only (like
+	 * `--work-detail`); the persisted default stays what `/settings` or config.yml says.
+	 */
+	showWorkDetailSelector(): void {
+		this.showSelector(done => {
+			const selector = new WorkDetailSelectorComponent(
+				cfgDisplayWorkDetail.get(this.ctx.settings),
+				mode => {
+					done();
+					cfgDisplayWorkDetail.override(this.ctx.settings, mode);
+					this.ctx.ui.requestRender();
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector.getSelectList() };
 		});
 	}
 
