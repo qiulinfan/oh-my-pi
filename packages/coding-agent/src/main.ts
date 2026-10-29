@@ -156,6 +156,7 @@ import {
 	cfgAutoResume,
 	cfgColorBlindMode,
 	cfgComposerShape,
+	cfgDisplayWorkDetail,
 	cfgImagesAutoResize,
 	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
@@ -2006,6 +2007,10 @@ export async function runRootCommand(
 		// Apply --hide-thinking CLI flag (ephemeral, not persisted)
 		if (parsedArgs.hideThinking) {
 			cfgHideThinkingBlock.override(settingsInstance, true);
+		}
+		// Apply --work-detail (ephemeral, not persisted): omp gui starts every session with its picker's mode
+		if (parsedArgs.workDetail) {
+			cfgDisplayWorkDetail.override(settingsInstance, parsedArgs.workDetail);
 		}
 		// Apply --advisor CLI flag (ephemeral, not persisted)
 		if (parsedArgs.advisor) {

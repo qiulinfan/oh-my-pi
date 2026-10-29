@@ -32,6 +32,8 @@
 
 import { isServiceTierOpenAISettingValue, SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+// Import-free module: safe ahead of the profile bootstrap.
+import { isWorkDetail, WORK_DETAILS } from "@oh-my-pi/pi-tui/chat/work-detail";
 import type { Args } from "./args";
 import { CliUsageError } from "./usage-error";
 
@@ -217,6 +219,15 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 			return;
 		}
 		result.thinking = thinking;
+	},
+	"--work-detail": (result, value) => {
+		if (isWorkDetail(value)) {
+			result.workDetail = value;
+		} else {
+			result.invalidFlagValues.push(
+				`Invalid --work-detail value: ${JSON.stringify(value)}. Expected one of: ${WORK_DETAILS.join(", ")}.`,
+			);
+		}
 	},
 	"--export": (result, value) => {
 		result.export = value;

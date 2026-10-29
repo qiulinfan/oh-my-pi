@@ -502,7 +502,15 @@ function createWindow(): BrowserWindow {
 		trafficLightPosition: { x: 16, y: 17 },
 		backgroundColor: nativeTheme.shouldUseDarkColors ? "#1b1b1f" : "#f2f2f3",
 		show: true,
-		webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+		webPreferences: {
+			contextIsolation: true,
+			sandbox: true,
+			nodeIntegration: false,
+			// An unfocused or covered window keeps painting a streaming turn as it arrives, instead of
+			// holding its frames and timers back and showing the whole stretch at once when it comes to the front.
+			// The cost is CPU while the window is out of sight and omp is streaming; an idle session paints nothing.
+			backgroundThrottling: false,
+		},
 	});
 	showStatus(win, "Starting omp…");
 	// Links leave the app for the default browser; the window only ever shows the GUI server.

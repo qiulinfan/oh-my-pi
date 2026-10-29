@@ -33,6 +33,7 @@ import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleEx
 import { NativeImageCache } from "../native/blobs";
 import { imageLinksEnabled, linkedImageSpan, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
+import { currentToggle, rowExpanded, type WorkDetailToggle, workDetailEpoch } from "./work-detail";
 
 const STREAMING_LINE_CAP = PREVIEW_LINES * 5;
 // Minimum interval between processing incoming chunks for display (ms).
@@ -61,6 +62,10 @@ export class BashExecutionComponent extends Container {
 	#truncation?: TruncationMeta;
 	#artifactError?: OutputArtifactError;
 	#expanded = false;
+	/** What the host last set through {@link setExpanded} (`Ctrl+O`, the transcript-wide state). */
+	#hostExpanded = false;
+	/** The user's own toggle of this card on a TSP surface; it wins until the work-detail mode changes. */
+	#toggle: WorkDetailToggle | undefined;
 	// Post-finalize mutation counter (FinalizableBlock.getTranscriptBlockVersion):
 	// a completed command's block still mutates on expansion toggles, and the
 	// transcript's width-epoch resolution and committed-render bypass must
@@ -140,6 +145,12 @@ export class BashExecutionComponent extends Container {
 	 * Set whether the output is expanded (shows full output) or collapsed (preview only).
 	 */
 	setExpanded(expanded: boolean): void {
+		this.#hostExpanded = expanded;
+		this.#toggle = undefined;
+		this.#applyExpanded(expanded);
+	}
+
+	#applyExpanded(expanded: boolean): void {
 		if (this.#expanded !== expanded) this.#blockVersion++;
 		this.#expanded = expanded;
 		this.#outputPane.setExpanded(expanded);
@@ -152,9 +163,15 @@ export class BashExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/**
+	 * The user's click on the card head: it wins over the work-detail mode until the mode changes or
+	 * `Ctrl+O` sets every row, and is mirrored into the terminal state like an agent tool row's.
+	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
-		if (expanded !== undefined) this.setExpanded(expanded);
+		if (expanded === undefined) return;
+		this.#toggle = { expanded, epoch: workDetailEpoch() };
+		this.#applyExpanded(expanded);
 	}
 
 	/**
@@ -171,6 +188,9 @@ export class BashExecutionComponent extends Container {
 			this.#blockVersion,
 			this.#status,
 			this.#expanded,
+			this.#hostExpanded,
+			currentToggle(this.#toggle),
+			workDetailEpoch(),
 			this.#showImages,
 			this.#images.length,
 			// Image nodes and placeholders carry links only under an enabled policy.
@@ -193,7 +213,7 @@ export class BashExecutionComponent extends Container {
 				role: "omp.bash",
 				status: this.#status,
 				startedAt: this.#startedAt,
-				expanded: this.#expanded,
+				expanded: rowExpanded(this.#toggle, this.#hostExpanded),
 				output: this.#outputLines.join("\n"),
 				images,
 				exitCode: this.#exitCode,

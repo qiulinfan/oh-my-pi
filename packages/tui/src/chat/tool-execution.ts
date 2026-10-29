@@ -53,6 +53,9 @@ import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
+import { sanitizeStatusText } from "../chrome/shared";
+import { currentToggle, getWorkDetail, rowExpanded, type WorkDetailToggle, workDetailEpoch } from "./work-detail";
+import { commandSummary, FOLDED_LINE_MAX } from "./execution-shared";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -97,6 +100,17 @@ function displaceableToolName(
 
 function isEditLikeToolName(toolName: string): boolean {
 	return toolName === "edit" || toolName === "apply_patch";
+}
+
+/** The first non-blank line of a failure's text, sanitized to one line and capped; undefined when blank. */
+function firstErrorLine(output: string): string | undefined {
+	for (const line of output.split("\n")) {
+		const clean = sanitizeStatusText(line.replace(/^Error:\s*/, ""));
+		if (!clean) continue;
+		const points = [...clean];
+		return points.length > FOLDED_LINE_MAX ? `${points.slice(0, FOLDED_LINE_MAX - 1).join("")}…` : clean;
+	}
+	return undefined;
 }
 
 /** Tools whose arguments stream a growing file body or diff into the card (edit, apply_patch, write). */
@@ -374,6 +388,10 @@ export class ToolExecutionComponent extends Container {
 	#toolLabel: string;
 	#args: unknown;
 	#expanded = false;
+	/** What the host last set through {@link setExpanded} (`Ctrl+O`, the transcript-wide state). */
+	#hostExpanded = false;
+	/** The user's own toggle of this row on a TSP surface; it wins until the work-detail mode changes. */
+	#toggle: WorkDetailToggle | undefined;
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
@@ -955,16 +973,35 @@ export class ToolExecutionComponent extends Container {
 		this.#previewReady?.resolve();
 	}
 
+	/** The host's expansion (`Ctrl+O`, creation): it replaces any per-row toggle. */
 	setExpanded(expanded: boolean): void {
+		this.#hostExpanded = expanded;
+		this.#toggle = undefined;
+		this.#applyExpanded(expanded);
+	}
+
+	#applyExpanded(expanded: boolean): void {
 		if (this.#expanded !== expanded) this.#blockVersion++;
 		this.#expanded = expanded;
 		this.#updateDisplay();
 	}
 
-	/** Mirrors the card collapsed or expanded in the terminal, so `Ctrl+O` and native toggles share one state. */
+	/**
+	 * The user's click on the card head: it wins over the work-detail mode, a
+	 * streaming body and a view that opens itself, until the mode changes or
+	 * `Ctrl+O` sets every row. Mirrored into the terminal state too, so a
+	 * later row render shows the same choice.
+	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
-		if (expanded !== undefined) this.setExpanded(expanded);
+		if (expanded === undefined) return;
+		this.#toggle = { expanded, epoch: workDetailEpoch() };
+		this.#applyExpanded(expanded);
+	}
+
+	/** Whether this row's content shows expanded on a TSP surface: the user's toggle, else verbose or the host's state. */
+	#nativeExpanded(): boolean {
+		return rowExpanded(this.#toggle, this.#hostExpanded);
 	}
 
 	/** The file paths this call targets (edit/write/apply_patch args), display-relative. */
@@ -1023,6 +1060,9 @@ export class ToolExecutionComponent extends Container {
 			dataFirst,
 			this.#resultVersion,
 			this.#expanded,
+			this.#hostExpanded,
+			currentToggle(this.#toggle),
+			workDetailEpoch(),
 			this.#isPartial,
 			this.#argsComplete,
 			this.#executionStarted,
@@ -1048,16 +1088,35 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * The native `collapsed` prop: the transcript's expand state, except that a
-	 * view that asks to be {@link NativeToolView.open} never starts folded, and
-	 * a call streaming its body (edit, write) stays open until it settles, then
-	 * folds like a finished thought. The user's own toggle still wins meanwhile:
-	 * the terminal keeps local collapse state until this prop changes.
+	 * The native `collapsed` prop. The user's own toggle wins (until the
+	 * work-detail mode changes); otherwise verbose and the host's expansion
+	 * (`Ctrl+O`, which lapses on a mode change) open the row, and compact folds
+	 * every other row, self-opening todo and LSP cards included. In standard a
+	 * view that asks to be {@link NativeToolView.open} starts open, and a call
+	 * streaming its body (edit, write) stays open until it settles, then folds
+	 * like a finished thought.
 	 */
 	#nativeCollapsed(status: TspCardStatus, view: NativeToolView): boolean {
+		const toggled = currentToggle(this.#toggle);
+		if (toggled !== undefined) return !toggled;
+		const mode = getWorkDetail();
+		if (mode === "verbose" || this.#hostExpanded) return false;
+		if (mode === "compact") return true;
 		if (view.open) return false;
 		const live = status === "pending" || status === "running";
-		return !this.#expanded && !(live && streamsBody(this.#toolName));
+		return !(live && streamsBody(this.#toolName));
+	}
+
+	/**
+	 * Compact's folded failed row: the head carries the first error line as its
+	 * note, unless the renderer already shows an exit code, its own note, or
+	 * the gist in an inline head (`inlineErrorView`).
+	 */
+	#compactErrorNote(status: TspCardStatus, collapsed: boolean | undefined, view: NativeToolView): string | undefined {
+		if (status !== "error" || collapsed !== true || getWorkDetail() !== "compact" || view.inline) return undefined;
+		const head = view.tool;
+		if (head?.note !== undefined || (typeof head?.exit === "number" && head.exit !== 0)) return undefined;
+		return firstErrorLine(this.#nativeTextOutput());
 	}
 
 	/** The late diagnostics section and head chip, when LSP reported after the result. */
@@ -1095,7 +1154,18 @@ export class ToolExecutionComponent extends Container {
 		const intent = isRecord(this.#args) ? this.#args[INTENT_FIELD] : undefined;
 		const badges = [...(head?.badges ?? []), ...(late.chip ? [late.chip] : [])];
 		const title: TspText = head?.title ?? (head ? this.#toolLabel : (view.head ?? this.#toolLabel));
-		const preview = view.preview ?? (inline ? "none" : { lines: DEFAULT_TERMINAL_PREVIEW_LINES });
+		// Compact folds a row to its head line: nothing of the body shows until it opens.
+		const preview =
+			getWorkDetail() === "compact"
+				? "none"
+				: (view.preview ?? (inline ? "none" : { lines: DEFAULT_TERMINAL_PREVIEW_LINES }));
+		const collapsed = hasBody ? this.#nativeCollapsed(status, view) : undefined;
+		// Compact's folded row is one line with the key argument: a tool that draws its command in the body
+		// (bash) shows the command's first line as the target while that body is hidden.
+		const foldedCommand =
+			preview === "none" && collapsed === true && head?.target === undefined && head?.command
+				? commandSummary(head.command)
+				: undefined;
 		return node(
 			"tool",
 			{
@@ -1104,14 +1174,18 @@ export class ToolExecutionComponent extends Container {
 				name: this.#toolName,
 				// `title` here is the head verb (TspToolProps), not the common tooltip.
 				title: title as string,
-				target: head?.target,
-				targetKind: head?.targetKind,
+				target: head?.target ?? foldedCommand,
+				targetKind: foldedCommand ? "command" : head?.targetKind,
 				lang: head?.lang,
 				command: head?.command,
 				href: head?.href,
 				meta: head?.meta,
 				badges: badges.length > 0 ? badges : undefined,
-				note: head?.note ?? (status === "cancelled" && !this.#isBenignSkip() ? "cancelled" : undefined),
+				note:
+					head?.note ??
+					(status === "cancelled" && !this.#isBenignSkip()
+						? "cancelled"
+						: this.#compactErrorNote(status, collapsed, view)),
 				exit: head?.exit ?? undefined,
 				status,
 				age: live ? ms : undefined,
@@ -1119,7 +1193,7 @@ export class ToolExecutionComponent extends Container {
 				intent: typeof intent === "string" && intent ? plainText(intent) : undefined,
 				frame: inline ? "inline" : "card",
 				collapsible: hasBody,
-				collapsed: hasBody ? this.#nativeCollapsed(status, view) : undefined,
+				collapsed,
 				preview: hasBody ? (preview === "auto" ? { lines: DEFAULT_TERMINAL_PREVIEW_LINES } : preview) : undefined,
 				tools: view.tools,
 				tone: view.tone,
@@ -1188,7 +1262,8 @@ export class ToolExecutionComponent extends Container {
 				status,
 				collapsible: hasBody,
 				collapsed: hasBody ? this.#nativeCollapsed(status, view) : undefined,
-				preview: hasBody ? cardPreview(view.preview) : undefined,
+				// Compact folds the card to its head line (no preview clamp shows the body).
+				preview: hasBody && getWorkDetail() !== "compact" ? cardPreview(view.preview) : undefined,
 			},
 			children,
 		);
@@ -1208,15 +1283,16 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#nativeView(media: boolean): NativeToolView {
 		const status = this.#nativeStatus();
+		const expanded = this.#nativeExpanded();
 		const options: RenderResultContextOptions = {
 			media,
-			expanded: this.#expanded,
+			expanded,
 			isPartial: this.#isPartial,
 			argsComplete: this.#argsComplete,
 			executionStarted: this.#executionStarted,
 			elapsedMs: this.#elapsedMs(status),
 			cancelled: status === "cancelled",
-			renderContext: this.#buildRenderContext(),
+			renderContext: this.#buildRenderContext(expanded),
 		};
 		// Custom tools (MCP, extensions) carry their own describe hooks, mirroring
 		// the ANSI path's preference for the tool's renderCall/renderResult.
@@ -1844,7 +1920,7 @@ export class ToolExecutionComponent extends Container {
 	/**
 	 * Build render context for tools that need extra state (bash, python, edit)
 	 */
-	#buildRenderContext(): Record<string, unknown> {
+	#buildRenderContext(expanded = this.#expanded): Record<string, unknown> {
 		const context: Record<string, unknown> = {};
 		const normalizeTimeoutSeconds = (value: unknown, maxSeconds: number): number | undefined => {
 			if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -1862,13 +1938,13 @@ export class ToolExecutionComponent extends Container {
 				const output = this.#getTextOutput().trimEnd();
 				context.output = output;
 			}
-			context.expanded = this.#expanded;
+			context.expanded = expanded;
 			context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(isRecord(this.#args) ? this.#args.timeout : undefined, 3600);
 		} else if (this.#toolName === "eval" && this.#result) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
-			context.expanded = this.#expanded;
+			context.expanded = expanded;
 			context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
 		} else if (this.#toolName === "task") {
 			// Once a result snapshot exists the task renderer's `renderResult`

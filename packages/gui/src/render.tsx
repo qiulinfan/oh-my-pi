@@ -10,13 +10,18 @@ import katex from "katex";
 import {
 	createContext,
 	type CSSProperties,
+	type HTMLAttributes,
+	type KeyboardEvent,
 	memo,
 	type MouseEvent,
 	type ReactNode,
+	type RefCallback,
+	type RefObject,
 	useContext,
 	useEffect,
 	useId,
 	useMemo,
+	useRef,
 	useState,
 	useSyncExternalStore,
 } from "react";
@@ -43,10 +48,9 @@ export function useSurface(): SurfaceContextValue {
 
 export function useNode(id: string): StoreNode | undefined {
 	const { store } = useSurface();
-	useSyncExternalStore(
-		listener => store.subscribe(id, listener),
-		() => store.get(id)?.v ?? -1,
-	);
+	const version = () => store.get(id)?.v ?? -1;
+	// The same snapshot on the server lets react-dom/server render a surface (tests).
+	useSyncExternalStore(listener => store.subscribe(id, listener), version, version);
 	return store.get(id);
 }
 
@@ -288,6 +292,184 @@ const Row: R = ({ node }) => {
 	);
 };
 
+// ─── Disclosures ─────────────────────────────────────────────────────────────
+
+/**
+ * Whether the nearest collapsible container (tool, card, section, agent) is open. A child's own preview clamp
+ * (code, ansi) "gives way inside an open disclosure" (TSP), so it lifts while this is true. Only a
+ * collapsible container provides it, both ways, so a collapsed row inside an open one clamps again and a
+ * plain card never lifts its children's clamps.
+ */
+const DisclosureOpen = createContext(false);
+
+function Disclosed({
+	collapsible,
+	collapsed,
+	children,
+}: {
+	collapsible: unknown;
+	collapsed: unknown;
+	children: ReactNode;
+}): ReactNode {
+	if (!collapsible) return children;
+	return <DisclosureOpen.Provider value={!collapsed}>{children}</DisclosureOpen.Provider>;
+}
+
+/** Where a click on a head leaves focus: the session view, which sends typed keys to omp, as before heads took focus. */
+const KEY_ROOT = ".session-view";
+
+/** The transcript's scroller (app.tsx), the one thing moving between heads scrolls. */
+const SCROLLER = ".main-scroll";
+
+/** Whether `el` clips what overflows it (a folded row's preview clamp) instead of letting it show or scroll. */
+function clips(el: Element): boolean {
+	const overflow = getComputedStyle(el).overflowY;
+	return overflow === "hidden" || overflow === "clip";
+}
+
+/**
+ * The disclosure heads the user can see in `root`, in document order: heads inside a folded row are not drawn,
+ * and heads a folded row's preview clamp cuts off (a collapsed read group's file cards, say) are left out.
+ */
+function disclosureHeads(root: HTMLElement): HTMLElement[] {
+	const clip = new Map<Element, DOMRect | null>();
+	const clipOf = (el: Element): DOMRect | null => {
+		let rect = clip.get(el);
+		if (rect === undefined) {
+			rect = clips(el) ? el.getBoundingClientRect() : null;
+			clip.set(el, rect);
+		}
+		return rect;
+	};
+	return [...root.querySelectorAll<HTMLElement>("[data-disclosure]")].filter(head => {
+		if (head.getClientRects().length === 0) return false;
+		const rect = head.getBoundingClientRect();
+		// Clamps inside the transcript only: past its scroller, a head is merely scrolled away, which focusing it fixes.
+		for (let el = head.parentElement; el && el !== root && !el.matches(SCROLLER); el = el.parentElement) {
+			const box = clipOf(el);
+			if (box && (rect.top < box.top - 1 || rect.bottom > box.bottom + 1)) return false;
+		}
+		return true;
+	});
+}
+
+/** Give focus back to omp's prompt: its editor when it takes typing, else the session view, which sends keys to omp. */
+function focusPrompt(root: HTMLElement): void {
+	const editor = root.querySelector<HTMLTextAreaElement>("textarea:not([readonly])");
+	(editor ?? root).focus({ preventScroll: true });
+}
+
+/**
+ * Focus `head` and bring it into view by scrolling the transcript alone: `scrollIntoView` would also scroll the
+ * clamps around it, which hide their overflow and would stay scrolled to wherever it left them.
+ */
+function focusHead(head: HTMLElement | undefined): void {
+	if (!head) return;
+	head.focus({ preventScroll: true });
+	const scroller = head.closest<HTMLElement>(SCROLLER);
+	if (!scroller) return;
+	const rect = head.getBoundingClientRect();
+	const view = scroller.getBoundingClientRect();
+	if (rect.top < view.top) scroller.scrollTop -= view.top - rect.top;
+	else if (rect.bottom > view.bottom) scroller.scrollTop += Math.min(rect.bottom - view.bottom, rect.top - view.top);
+}
+
+/**
+ * A head's ref: when omp folds, regroups or redraws the row a focused head sits in, the head leaves the page and
+ * the browser drops focus on the body, where no key reaches omp or moves on. Focus goes back to the prompt
+ * first (React detaches a ref before it removes the element, so the head still knows its session view).
+ */
+function returnFocusOnRemoval(head: HTMLElement): () => void {
+	return () => {
+		if (document.activeElement !== head) return;
+		const root = head.closest<HTMLElement>(KEY_ROOT);
+		if (root) focusPrompt(root);
+	};
+}
+
+/**
+ * The transcript's keyboard way in (F6 in the session view): Tab and the other keys there belong to omp, so a
+ * disclosure head cannot be tabbed to. From the prompt F6 focuses the newest head; from a head it goes back to
+ * the prompt. Returns whether it moved focus.
+ */
+export function toggleTranscriptFocus(root: HTMLElement): boolean {
+	const active = document.activeElement;
+	if (active instanceof HTMLElement && active.matches("[data-disclosure]") && root.contains(active)) {
+		focusPrompt(root);
+		return true;
+	}
+	const heads = disclosureHeads(root);
+	if (heads.length === 0) return false;
+	focusHead(heads.at(-1));
+	return true;
+}
+
+const HEAD_MOVES: ReadonlySet<string> = new Set(["Escape", "ArrowUp", "ArrowDown", "Home", "End"]);
+
+/** Keys a focused head moves on: Up/Down to the previous/next head, Home/End to the first/last, Escape back to the prompt. */
+function moveFromHead(head: HTMLElement, key: string): boolean {
+	if (!HEAD_MOVES.has(key)) return false;
+	const root = head.closest<HTMLElement>(KEY_ROOT);
+	if (!root) return false;
+	if (key === "Escape") {
+		focusPrompt(root);
+		return true;
+	}
+	const heads = disclosureHeads(root);
+	const at = heads.indexOf(head);
+	if (key === "ArrowUp") focusHead(heads[Math.max(0, at - 1)]);
+	else if (key === "ArrowDown") focusHead(heads[Math.min(heads.length - 1, at + 1)]);
+	else if (key === "Home") focusHead(heads[0]);
+	else focusHead(heads.at(-1));
+	return true;
+}
+
+/**
+ * A collapsible head's button semantics: focusable, announced with its state, toggled by Enter or Space.
+ * A key it toggles on stops there, since the session view would otherwise send it to omp's prompt (Enter
+ * submits it). A mouse press does not leave focus on the head: it goes back to the session view, so keys
+ * typed after clicking a row keep reaching omp. Collapse state still comes only from omp. The keyboard
+ * reaches heads through {@link toggleTranscriptFocus}; Up/Down, Home/End and Escape move on from one.
+ */
+export function disclosureHead(
+	collapsed: boolean,
+	toggle: (() => void) | undefined,
+	controls?: string,
+): HTMLAttributes<HTMLElement> & { "data-disclosure"?: ""; ref?: RefCallback<HTMLElement> } {
+	if (!toggle) return {};
+	return {
+		ref: returnFocusOnRemoval,
+		role: "button",
+		tabIndex: 0,
+		"aria-expanded": !collapsed,
+		"aria-controls": controls,
+		"data-disclosure": "",
+		onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+			if (event.target !== event.currentTarget) return;
+			if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+			if (event.nativeEvent.isComposing) return;
+			if (event.key !== "Enter" && event.key !== " ") {
+				if (!moveFromHead(event.currentTarget, event.key)) return;
+			} else if (event.repeat) return;
+			else toggle();
+			event.preventDefault();
+			event.stopPropagation();
+		},
+		onPointerDown: event => {
+			event.currentTarget.dataset.pointer = "";
+		},
+		onPointerUp: event => {
+			delete event.currentTarget.dataset.pointer;
+		},
+		onFocus: event => {
+			const head = event.currentTarget;
+			if (head.dataset.pointer === undefined) return;
+			delete head.dataset.pointer;
+			head.closest<HTMLElement>(KEY_ROOT)?.focus({ preventScroll: true });
+		},
+	};
+}
+
 /**
  * A card/section `head` is either text or the id of one of its own children
  * (omp's thinking sections describe their head as a child node): split that
@@ -327,25 +509,73 @@ const Card: R = ({ node }) => {
 			? { maxHeight: `${p.preview.lines * 1.45}em`, overflow: "hidden" }
 			: undefined;
 	const { head, body } = splitHead(node);
+	const bodyId = useId();
+	const showBody = !(p.collapsed && !p.preview);
 	return (
 		<div {...common} className={classes.join(" ")}>
 			{head !== undefined || p.collapsible ? (
-				<div className="card-head" onClick={toggle}>
+				<div
+					className="card-head"
+					onClick={toggle}
+					{...disclosureHead(
+						p.collapsed,
+						toggle &&
+							(() => session.event({ ev: "toggle", sf, id: node.id, key: p.key, collapsed: !p.collapsed })),
+						showBody ? bodyId : undefined,
+					)}
+				>
 					{p.collapsible ? <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} /> : null}
 					<StatusMark status={p.status} />
 					<span className="card-head-text">{head}</span>
 				</div>
 			) : null}
-			{p.collapsed && !p.preview ? null : (
-				<div className="card-body" style={clamp}>
-					{body.map(child => (
-						<N key={child} id={child} />
-					))}
+			{showBody ? (
+				<div className="card-body" id={bodyId} style={clamp}>
+					<Disclosed collapsible={p.collapsible} collapsed={p.collapsed}>
+						{body.map(child => (
+							<N key={child} id={child} />
+						))}
+					</Disclosed>
 				</div>
-			)}
+			) : null}
 		</div>
 	);
 };
+
+/** omp's role for a thought still streaming, whose open body the stylesheet clamps to its latest lines. */
+const LIVE_THOUGHT = "omp.thinking.live";
+
+/**
+ * Keeps a clamped live thought's body scrolled to its newest line while it grows, until the user scrolls it up
+ * to read the start (Verbose, or a thought opened by hand), and again once they scroll back down. `data-follow`
+ * marks it following, which is when its top fades.
+ */
+function useFollowTail(active: boolean): RefObject<HTMLDivElement | null> {
+	const ref = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const el = ref.current;
+		if (!active || !el) return;
+		let follow = true;
+		const pin = () => {
+			if (follow) el.scrollTop = el.scrollHeight;
+		};
+		const onScroll = () => {
+			follow = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+			el.toggleAttribute("data-follow", follow);
+		};
+		el.setAttribute("data-follow", "");
+		pin();
+		const observer = new MutationObserver(pin);
+		observer.observe(el, { childList: true, subtree: true, characterData: true });
+		el.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			observer.disconnect();
+			el.removeEventListener("scroll", onScroll);
+			el.removeAttribute("data-follow");
+		};
+	}, [active]);
+	return ref;
+}
 
 const Section: R = ({ node }) => {
 	const { session, sf } = useSurface();
@@ -355,20 +585,28 @@ const Section: R = ({ node }) => {
 		? () => session.event({ ev: "toggle", sf, id: node.id, key: p.key, collapsed: !p.collapsed })
 		: undefined;
 	const { head, body } = splitHead(node);
+	const bodyId = useId();
+	const bodyRef = useFollowTail(p.role === LIVE_THOUGHT && !p.collapsed);
 	return (
 		<div {...common}>
 			{head !== undefined ? (
-				<div className="section-head" onClick={toggle}>
+				<div
+					className="section-head"
+					onClick={toggle}
+					{...disclosureHead(p.collapsed, toggle, p.collapsed ? undefined : bodyId)}
+				>
 					{p.collapsible ? <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} /> : null}
 					{head}
 					{typeof p.took === "number" ? <span className="s-dim section-took"> · {formatMs(p.took)}</span> : null}
 				</div>
 			) : null}
 			{p.collapsed ? null : (
-				<div className="section-body">
-					{body.map(child => (
-						<N key={child} id={child} />
-					))}
+				<div className="section-body" id={bodyId} ref={bodyRef}>
+					<Disclosed collapsible={p.collapsible} collapsed={p.collapsed}>
+						{body.map(child => (
+							<N key={child} id={child} />
+						))}
+					</Disclosed>
 				</div>
 			)}
 		</div>
@@ -437,7 +675,8 @@ const Markdown: R = ({ node }) => (
 
 function Clamp({ lines, children, tail }: { lines?: number; children: ReactNode; tail?: boolean }): ReactNode {
 	const [open, setOpen] = useState(false);
-	if (!lines || open) return children;
+	const disclosed = useContext(DisclosureOpen);
+	if (!lines || open || disclosed) return children;
 	return (
 		<div className={`clamp ${tail ? "tail" : ""}`}>
 			<div className="clamp-inner" style={{ maxHeight: `${lines * 1.45}em` }}>
@@ -927,9 +1166,17 @@ const Tool: R = ({ node }) => {
 					}
 			: undefined;
 	const hideBody = p.collapsed && (!p.preview || p.preview === "none");
+	const showBody = !hideBody && node.c.length > 0;
+	const bodyId = useId();
 	return (
 		<div {...common} className={`${common.className} frame-${p.frame ?? "card"} status-${p.status}`}>
-			<div className="tool-head" onClick={toggle} title={p.intent} data-toggle={toggle ? "" : undefined}>
+			<div
+				className="tool-head"
+				onClick={toggle}
+				title={p.intent}
+				data-toggle={toggle ? "" : undefined}
+				{...disclosureHead(p.collapsed, toggle, showBody ? bodyId : undefined)}
+			>
 				<StatusMark status={p.status} />
 				<Icon name={p.name} size={13} />
 				<span className="tool-title">
@@ -978,11 +1225,13 @@ const Tool: R = ({ node }) => {
 				</span>
 				{p.collapsible ? <Icon name={p.collapsed ? "chevron-right" : "chevron-down"} size={12} /> : null}
 			</div>
-			{hideBody || node.c.length === 0 ? null : (
-				<div className="tool-body" style={bodyClamp}>
-					<Kids node={node} />
+			{showBody ? (
+				<div className="tool-body" id={bodyId} style={bodyClamp}>
+					<Disclosed collapsible={p.collapsible} collapsed={p.collapsed}>
+						<Kids node={node} />
+					</Disclosed>
 				</div>
-			)}
+			) : null}
 		</div>
 	);
 };
@@ -1078,13 +1327,19 @@ const Agent: R = ({ node }) => {
 	const toggle = p.collapsible
 		? () => session.event({ ev: "toggle", sf, id: node.id, key: p.key, collapsed: !p.collapsed })
 		: undefined;
+	const showBody = !p.collapsed && node.c.length > 0;
+	const bodyId = useId();
 	return (
 		<div
 			{...common}
 			className={`${common.className} agent-${p.status}`}
 			style={{ ...common.style, marginLeft: p.depth ? p.depth * 14 : undefined }}
 		>
-			<div className="agent-head" onClick={toggle}>
+			<div
+				className="agent-head"
+				onClick={toggle}
+				{...disclosureHead(p.collapsed, toggle, showBody ? bodyId : undefined)}
+			>
 				<StatusMark status={running ? "running" : p.status === "failed" ? "error" : p.status} />
 				<span className="agent-name">{p.name}</span>
 				{p.agent ? <span className="k-badge tone-accent">{p.agent}</span> : null}
@@ -1142,11 +1397,13 @@ const Agent: R = ({ node }) => {
 					{p.retry.error ? ` · ${p.retry.error}` : ""}
 				</div>
 			) : null}
-			{p.collapsed || node.c.length === 0 ? null : (
-				<div className="agent-body">
-					<Kids node={node} />
+			{showBody ? (
+				<div className="agent-body" id={bodyId}>
+					<Disclosed collapsible={p.collapsible} collapsed={p.collapsed}>
+						<Kids node={node} />
+					</Disclosed>
 				</div>
-			)}
+			) : null}
 		</div>
 	);
 };

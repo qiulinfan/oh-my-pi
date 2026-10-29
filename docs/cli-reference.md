@@ -120,6 +120,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | --- | --- |
 | `--thinking <level>` | Set the thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `auto`. |
 | `--hide-thinking` | Hide thinking blocks in TUI output (display only; does not disable model thinking). |
+| `--work-detail <mode>` | Override `display.workDetail` for this session: how much thinking and tool work `omp gui` and Tern show. `compact` folds thinking and tool calls to one line, also while they stream; `standard` (the default) keeps a streaming thought open and shows a short tool preview; `verbose` keeps thinking and tool output open. The plain terminal ignores it. |
 | `--print-thoughts` | Include thinking blocks in print-mode text output. |
 | `--external-thinking` | Use a private scratchpad while disabling supported GPT/Claude/Gemini reasoning. Use at your own risk: providers have flagged this request shape as abuse. |
 

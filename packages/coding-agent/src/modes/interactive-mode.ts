@@ -56,6 +56,7 @@ import {
 } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { JobWidgetRegistry } from "../job-widgets/types";
 import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import type { WorkingRowSpec } from "@oh-my-pi/pi-tui/components/loader";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/key-hint-format";
@@ -361,6 +362,7 @@ import {
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
+	cfgDisplayWorkDetail,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
@@ -455,6 +457,7 @@ const cfgLiveUiSettings = combine({
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
+	"display.workDetail": cfgDisplayWorkDetail,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -1904,6 +1907,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
 		this.editor.composerState = () => this.#composerNativeState();
 		this.editor.onToggleDictation = () => void this.#toggleComposerDictation();
+		this.editor.onSelectWorkDetail = () => this.showWorkDetailSelector();
 		this.editor.imageReferenceHyperlink = imageReferenceHyperlink;
 		this.editor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
 		this.editor.modelMentionLabel = selector => {
@@ -3730,6 +3734,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (!visible) this.ui.clearInlineImages();
 			this.ui.requestRender(true);
 		}
+		// The mode's effect already re-scoped every row (per-row toggles made under the old mode lapse):
+		// one render re-describes live and settled rows in place, without resetting the display.
+		// `Ctrl+O` lapses with the toggles, so a new mode is never masked by an expansion made before it.
+		// TSP surfaces only: the terminal draws no mode, so its `Ctrl+O` state stays as it was.
+		if (any("display.workDetail")) {
+			if (this.toolOutputExpanded && isNativeRendering()) this.setToolsExpanded(false);
+			else this.ui.requestRender();
+		}
 		const hideThinkingBlock = cfgHideThinkingBlock.get(this.settings);
 		if (any("hideThinkingBlock") && hideThinkingBlock !== this.hideThinkingBlock) {
 			this.hideThinkingBlock = hideThinkingBlock;
@@ -4010,6 +4022,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					: undefined,
 			thinking: thinkingLevelWord(this.viewSession),
 			thinkingInModel: cfgStatusLineCompactThinkingLevel.get(settings),
+			detail: cfgDisplayWorkDetail.get(this.settings),
 			rate: this.#nativeTokenRate(),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
 			dictation:
@@ -7558,6 +7571,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		nextEditor.prediction = () => this.#eventController.composerPrediction.text;
 		nextEditor.composerState = () => this.#composerNativeState();
 		nextEditor.onToggleDictation = () => void this.#toggleComposerDictation();
+		nextEditor.onSelectWorkDetail = () => this.showWorkDetailSelector();
 		nextEditor.attachmentChips = previousEditor.attachmentChips;
 		nextEditor.imageReferenceHyperlink = imageReferenceHyperlink;
 		nextEditor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
@@ -8484,6 +8498,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showTreeSelector(): void {
 		this.#selectorController.showTreeSelector();
+	}
+
+	/** Open the work-detail picker (the composer chip's click); the choice holds for this session. */
+	showWorkDetailSelector(): void {
+		this.#selectorController.showWorkDetailSelector();
 	}
 
 	showThinkingSelector(): void {

@@ -46,6 +46,7 @@ import { isNativeRendering } from "../native/state";
 import { isQueuedMessageList, parseQueueShorthand, QUEUE_LIST_MARKER_RE } from "./queue-input";
 import { type WordCompletionMethod, WordCompletionProvider } from "./word-completion";
 import { fgOrPlain, theme } from "../theme/theme";
+import { WORK_DETAIL_INFO, type WorkDetail } from "../chat/work-detail";
 
 /** A shell-mode draft's sigil (`!`, `!!`, `$`, `$$`) with its surrounding blanks; the mode chip stands in for it natively. */
 const SHELL_SIGIL_RE = /^\s*(?:!!?|\$\$?)[ \t]?/;
@@ -61,6 +62,8 @@ export interface ComposerNativeState {
 	readonly thinking?: string;
 	/** The thinking level draws as the model chip's icon instead of its own chip (where the terminal has `effort`). */
 	readonly thinkingInModel?: boolean;
+	/** The session's work-detail mode, drawn as a chip that opens its picker; undefined hides the chip. */
+	readonly detail?: WorkDetail;
 	/** Generation tok/s after the thinking level (live while running, else the last reading); undefined hides it. */
 	readonly rate?: number;
 	/** A turn is running: the send keycap becomes a Stop button. */
@@ -89,6 +92,7 @@ interface ComposerControls {
 	readonly mode: NativeNode | undefined;
 	readonly model: NativeNode | undefined;
 	readonly effort: NativeNode | undefined;
+	readonly detail: NativeNode | undefined;
 	readonly dictation: NativeNode | undefined;
 	readonly submit: NativeNode;
 }
@@ -1104,10 +1108,11 @@ export class CustomEditor extends Editor {
 	 * a turn runs) over the context hairline, the viewing header while a
 	 * subagent is focused, the attachment chips, a `line` row of the
 	 * shell-mode chip and the input, and the `bar`: model chip, effort chip
-	 * (or the effort glyph as the model chip's icon), the generation rate,
-	 * the other status facts, usage, dictation, then send (Stop while a turn runs).
-	 * Clicks come back as `status.model`, `thinking.select`, `dictation.toggle`,
-	 * `submit`, `interrupt` and `focus:<id>` actions.
+	 * (or the effort glyph as the model chip's icon), the work-detail chip, the
+	 * generation rate, the other status facts, usage, dictation, then send (Stop
+	 * while a turn runs). Clicks come back as `status.model`, `thinking.select`,
+	 * `detail.select`, `dictation.toggle`, `submit`, `interrupt` and
+	 * `focus:<id>` actions.
 	 */
 	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
 		const effortGlyph = cx.supports("effort");
@@ -1129,6 +1134,7 @@ export class CustomEditor extends Editor {
 			state.viewing?.join("\u0001"),
 			effortGlyph,
 			state.thinkingInModel,
+			state.detail,
 		].join("\0");
 		const rate = state.rate;
 		const chips = this.attachmentChips;
@@ -1156,6 +1162,7 @@ export class CustomEditor extends Editor {
 							compact([
 								controls.model,
 								controls.effort,
+								controls.detail,
 								rate !== undefined &&
 									node(
 										"rate",
@@ -1319,6 +1326,24 @@ export class CustomEditor extends Editor {
 						"effort",
 					)
 				: undefined;
+		const detailInfo = state.detail === undefined ? undefined : WORK_DETAIL_INFO[state.detail];
+		const detail =
+			detailInfo &&
+			node(
+				"row",
+				{
+					role: "omp.composer.detail",
+					gap: "xs",
+					align: "center",
+					title: `Work details: ${detailInfo.label}. ${detailInfo.detail}. Click to choose`,
+					actions: { click: "detail.select" },
+				},
+				[
+					node("icon", { name: "sliders" }, undefined, "icon"),
+					node("text", { text: detailInfo.label, wrap: "none" }, undefined, "label"),
+				],
+				"detail",
+			);
 		const recording = state.dictation === "recording";
 		const starting = state.dictation === "starting";
 		const transcribing = state.dictation === "transcribing";
@@ -1376,7 +1401,7 @@ export class CustomEditor extends Editor {
 					undefined,
 					"send",
 				);
-		if (!shell) return { focus, mode: undefined, model, effort, dictation, submit };
+		if (!shell) return { focus, mode: undefined, model, effort, detail, dictation, submit };
 		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
 		const mode = keyed(
 			row(
@@ -1399,7 +1424,7 @@ export class CustomEditor extends Editor {
 			),
 			"mode",
 		);
-		return { focus, mode, model, effort, dictation, submit };
+		return { focus, mode, model, effort, detail, dictation, submit };
 	}
 
 	/**
@@ -1433,6 +1458,9 @@ export class CustomEditor extends Editor {
 				if (this.onSelectThinkingLevel) this.onSelectThinkingLevel();
 				else this.onCycleThinkingLevel?.();
 				return;
+			case "detail.select":
+				this.onSelectWorkDetail?.();
+				return;
 			case "dictation.toggle": {
 				const { dictation } = this.composerState();
 				if (dictation !== undefined && dictation !== "transcribing") this.onToggleDictation?.();
@@ -1457,6 +1485,8 @@ export class CustomEditor extends Editor {
 	onCycleThinkingLevel?: () => void;
 	/** Opens the thinking-level picker (a click on the effort chip or glyph). */
 	onSelectThinkingLevel?: () => void;
+	/** Opens the work-detail picker (a click on the work-detail chip). */
+	onSelectWorkDetail?: () => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
 	onSelectModel?: () => void;

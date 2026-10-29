@@ -7,6 +7,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ServiceTierOpenAISettingValue } from "../config/service-tier";
 import type { ApprovalMode } from "../tools/approval";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel, parseCliThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { WorkDetail } from "@oh-my-pi/pi-tui/chat/work-detail";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import {
 	OPTIONAL_FLAGS,
@@ -51,6 +52,8 @@ export interface Args {
 	thinking?: ConfiguredThinkingLevel;
 	serviceTier?: ServiceTierOpenAISettingValue;
 	hideThinking?: boolean;
+	/** `--work-detail`: this session's `display.workDetail` (runtime override, not persisted). */
+	workDetail?: WorkDetail;
 	advisor?: boolean;
 	externalThinking?: boolean;
 	continue?: boolean;

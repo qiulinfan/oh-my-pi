@@ -48,6 +48,7 @@ import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } fro
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { isWorkDetail, WORK_DETAIL_INFO, WORK_DETAILS, type WorkDetail } from "@oh-my-pi/pi-tui/chat/work-detail";
 
 /** No-project chats: each gets its own empty working directory here, and they share one session dir. */
 const CHATS_DIR = path.join(os.homedir(), ".omp", "chats");
@@ -55,6 +56,14 @@ const CHAT_SESSION_DIR = path.join(getAgentDir(), "sessions-chats");
 const ESC = "\x1b";
 /** The OSC 1337 user variable omp reports its session file in (base64 of the absolute path). */
 const SESSION_FILE_VAR = "omp_session_file";
+/** The composer chip omp draws its work-detail mode in: a row whose text child is the mode's label. */
+const WORK_DETAIL_CHIP_ROLE = "omp.composer.detail";
+
+/** The work-detail mode a composer chip shows, from its label (see WORK_DETAIL_INFO); undefined for none. */
+function chipWorkDetail(chip: TspNode | undefined): WorkDetail | undefined {
+	const label = chip?.c?.find(child => child.k === "text")?.p as { text?: unknown } | undefined;
+	return WORK_DETAILS.find(mode => WORK_DETAIL_INFO[mode].label === label?.text);
+}
 
 /**
  * The stop ladder: a signal (SIGINT when the user ends the session, SIGTERM when
@@ -179,6 +188,8 @@ interface SessionHost {
 	readonly stopping: boolean;
 	identity(): ServerIdentity;
 	sessionFileChanged(session: PtySession): void;
+	/** omp's composer chip shows another work-detail mode: the user switched it in the session. */
+	workDetailChanged(session: PtySession, mode: WorkDetail): void;
 	/** Settle the roster for a session whose omp has exited; resolves whether it holds anything to restore. */
 	exited(session: PtySession): Promise<boolean>;
 }
@@ -247,6 +258,10 @@ class PtySession {
 	#ended: Promise<void> | undefined;
 	#stopped: Promise<boolean> | undefined;
 	readonly #working = new Set<string>();
+	/** The work-detail chip in omp's composer, once drawn, with the surface it is on. */
+	#detailChip: { sf: string; id: string } | undefined;
+	/** The mode that chip last showed; its first is the mode omp started in, which needs no record. */
+	#workDetail: WorkDetail | undefined;
 
 	constructor(host: SessionHost, id: string, cwd: string, args: string[], resumePath?: string) {
 		this.#host = host;
@@ -529,6 +544,26 @@ class PtySession {
 		}
 	}
 
+	/**
+	 * Follow the work-detail chip in omp's composer: omp keeps a mode picked with the chip for this process
+	 * only, so the server learns a switch here and records it, and a restore brings the session back in it.
+	 */
+	#trackWorkDetail(sf: string, ops: TspFrame["ops"]): void {
+		const surface = this.#surfaces.get(sf);
+		if (!surface) return;
+		for (const op of ops)
+			if (op[0] === "add") {
+				const [id] = idsWithRole(op[4], WORK_DETAIL_CHIP_ROLE);
+				if (id !== undefined) this.#detailChip = { sf, id };
+			}
+		if (this.#detailChip?.sf !== sf) return;
+		const mode = chipWorkDetail(surface.doc.get(this.#detailChip.id));
+		if (mode === undefined || mode === this.#workDetail) return;
+		const switched = this.#workDetail !== undefined;
+		this.#workDetail = mode;
+		if (switched) this.#host.workDetailChanged(this, mode);
+	}
+
 	#onCsi(prefix: string, params: string, final: string): void {
 		if (final === "c" && prefix === "" && (params === "" || params === "0")) this.#write(`${ESC}[?62;22c`);
 		else if (final === "n" && prefix === "" && params === "6") this.#write(`${ESC}[${this.#rows};1R`);
@@ -638,6 +673,7 @@ class PtySession {
 					const ops = (body.ops as TspFrame["ops"]).filter((_, i) => !rejected.has(i));
 					if (ops.length > 0) this.#broadcast({ t: "frame", sf: body.sf, ops });
 					this.#trackBusy(body.sf, ops);
+					this.#trackWorkDetail(body.sf, ops);
 				}
 				this.#ack(body.sf, body.s);
 				return;
@@ -906,6 +942,8 @@ interface SpawnBody {
 	model?: string;
 	/** omp's `--thinking` level: off, minimal..max or auto (adaptive); absent keeps omp's default. */
 	thinking?: string;
+	/** omp's `--work-detail` mode (one of {@link WORK_DETAILS}); absent keeps omp's default. */
+	workDetail?: string;
 	prompt?: string;
 }
 
@@ -1104,6 +1142,13 @@ class GuiHost implements SessionHost {
 		this.#persist(entry);
 	}
 
+	workDetailChanged(session: PtySession, mode: WorkDetail): void {
+		const entry = this.#hosted.get(session.info.id);
+		if (!entry || entry.workDetail === mode) return;
+		entry.workDetail = mode;
+		this.#persist(entry);
+	}
+
 	async exited(session: PtySession): Promise<boolean> {
 		const { id, endedBy, exit } = session.info;
 		// Ended by the user: it leaves the live list, and its entry goes (/api/kill drops it too, but not when
@@ -1231,11 +1276,13 @@ class GuiHost implements SessionHost {
 		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
 		const body = await readBody<SpawnBody>(req);
 		if (body instanceof Response) return body;
-		for (const key of ["project", "from", "model", "thinking", "prompt"] as const)
+		for (const key of ["project", "from", "model", "thinking", "workDetail", "prompt"] as const)
 			if (body[key] !== undefined && typeof body[key] !== "string")
 				return fail(400, "bad-request", `${key} must be a string`);
 		if (body.thinking !== undefined && !CLI_THINKING_LEVELS.includes(body.thinking as ConfiguredThinkingLevel))
 			return fail(400, "bad-request", `thinking must be one of ${CLI_THINKING_LEVELS.join(", ")}`);
+		if (body.workDetail !== undefined && !isWorkDetail(body.workDetail))
+			return fail(400, "bad-request", `workDetail must be one of ${WORK_DETAILS.join(", ")}`);
 		if (body.resume !== undefined && (typeof body.resume?.path !== "string" || typeof body.resume?.cwd !== "string"))
 			return fail(400, "bad-request", "resume needs a path and a cwd");
 		// A spawn changes the roster, and a restore reads what the previous run left.
@@ -1266,9 +1313,15 @@ class GuiHost implements SessionHost {
 		const from = body.from === undefined ? undefined : await this.#recorded(body.from);
 		if (from instanceof Response) return from;
 		let { resume, project, prompt, model, thinking } = body;
+		// A display choice, not part of the turn. A bare restore brings the session back in the mode it was
+		// recorded with (the page sends its current pick on every spawn, so the request's mode applies only
+		// when none was recorded); any other spawn takes the mode it names.
+		const bareRestore = body.from !== undefined && !resume && !project && !prompt;
+		const recordedDetail = isWorkDetail(from?.workDetail) ? from.workDetail : undefined;
+		const workDetail = bareRestore ? (recordedDetail ?? body.workDetail) : (body.workDetail ?? recordedDetail);
 		let restore = body.restore === true;
 		let chat = false;
-		if (body.from !== undefined && !resume && !project && !prompt) {
+		if (bareRestore) {
 			// Restore the session as it was recorded: its session file, or else its first message on its model.
 			// omp names its file before writing it, so a session that died early may have none on disk, or one
 			// with no message yet (as /new writes it): either way its first message, if any, starts it again.
@@ -1310,6 +1363,7 @@ class GuiHost implements SessionHost {
 		}
 		if (model) args.push("--model", model);
 		if (thinking) args.push("--thinking", thinking);
+		if (workDetail) args.push("--work-detail", workDetail);
 		// The first message goes in as omp's positional prompt, so the session starts working on it.
 		const firstMessage = resume ? undefined : prompt?.trim() || undefined;
 		if (firstMessage) args.push("--", firstMessage);
@@ -1344,6 +1398,7 @@ class GuiHost implements SessionHost {
 			prompt: firstMessage,
 			model: firstMessage ? model : undefined,
 			thinking: firstMessage ? thinking : undefined,
+			workDetail,
 			chat,
 			restoredFrom: from?.guiId,
 		};

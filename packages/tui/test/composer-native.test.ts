@@ -354,6 +354,25 @@ describe("native composer", () => {
 		expect(kinds(editor.describe(cx))).toContain("effort");
 	});
 
+	it("draws the session's work-detail chip, follows mode changes, and routes its click to the picker", () => {
+		let detail: ComposerNativeState["detail"] = "compact";
+		const editor = new CustomEditor(getEditorTheme());
+		editor.composerState = () => ({ running: false, detail });
+		const label = () => nodes(byRole(editor.describe(cx), "omp.composer.detail")!).find(n => n.k === "text")?.p;
+		expect(byRole(editor.describe(cx), "omp.composer.detail")?.p).toMatchObject({
+			actions: { click: "detail.select" },
+		});
+		expect(label()).toMatchObject({ text: "Compact" });
+		detail = "verbose";
+		expect(label()).toMatchObject({ text: "Verbose" });
+
+		editor.onSelectWorkDetail = vi.fn();
+		editor.handleNativeEvent({ type: "action", key: "bar/detail", act: "detail.select", mods: [] });
+		expect(editor.onSelectWorkDetail).toHaveBeenCalledTimes(1);
+
+		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.detail")).toBeUndefined();
+	});
+
 	it("omits the effort chip when the model has no thinking", () => {
 		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.effort")).toBeUndefined();
 	});

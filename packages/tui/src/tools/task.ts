@@ -2014,6 +2014,39 @@ function describeAgents(details: TaskToolDetails, state: AgentDescribeState, dep
 	return agents;
 }
 
+/** Widest live-progress summary a task row's head carries (columns). */
+const LIVE_PROGRESS_WIDTH = 80;
+
+/**
+ * A running task's progress in one line for its head, which stays visible while the row is folded
+ * (the body's agent rows are hidden then): how many agents still run when more than one does, then
+ * what the first of them is doing (its current tool and target, else its stage, else its last tool).
+ * Undefined once no agent runs, and on a row the turn abandoned (sealed as cancelled, or frozen
+ * outside a background job), whose last progress frame no longer describes running work.
+ */
+function liveProgressSummary(details: TaskToolDetails, options: TaskRenderOptions): string | undefined {
+	if (options.cancelled) return undefined;
+	if (options.renderContext?.frozen === true && details.async === undefined) return undefined;
+	const results = details.results ?? [];
+	const running = orderProgressForDisplay(details.progress ?? []).filter(
+		progress => progress.status === "running" && !results.some(res => res.id === progress.id),
+	);
+	const lead = running[0];
+	if (!lead) return undefined;
+	const recent = lead.recentTools[0];
+	const activity = lead.currentTool
+		? [lead.currentTool, toolCallDetail(lead.currentToolIntent, lead.currentToolArgs, lead.currentToolArgsKey)]
+		: lead.stage
+			? [lead.stage]
+			: recent
+				? [recent.tool, toolCallDetail(recent.intent, recent.args, recent.argsKey)]
+				: [];
+	const doing = activity.filter(Boolean).join(" ");
+	const who = formatTaskId(lead.id);
+	const line = `${running.length > 1 ? `${running.length} running · ` : ""}${doing ? `${who}: ${doing}` : who}`;
+	return previewLine(plainText(line), LIVE_PROGRESS_WIDTH);
+}
+
 function agentCountLabel(count: number): string {
 	return `${count} ${pluralize("agent", count)}`;
 }
@@ -2135,12 +2168,14 @@ function describeTaskResult(
 					.join("\n")
 			: "";
 	const target = count > 0 ? agentCountLabel(count) : agentLabel;
+	const live = liveProgressSummary(details, options);
+	const meta = compact([summary.length > 0 ? summary.join(" · ") : undefined, live]);
 	return {
 		tool: {
 			title: "Task",
 			target,
 			targetKind: target ? "text" : undefined,
-			meta: summary.length > 0 ? [summary.join(" · ")] : undefined,
+			meta: meta.length > 0 ? meta : undefined,
 			badges: background ? [{ text: "background" }] : undefined,
 		},
 		tone: aborted + failed > 0 ? "error" : undefined,

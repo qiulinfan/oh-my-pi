@@ -84,5 +84,8 @@ without `OMP_DESKTOP_DATA_DIR` the logs go to `~/Library/Logs/Electron`.
 - A window whose page crashes reloads onto the same sessions; one that stops
   responding offers Wait or Reload.
 - Links open in your default browser.
+- A window in the background or covered by others keeps drawing a streaming
+  turn as it arrives, so coming back to it never shows a long stretch appear
+  at once. That costs some CPU while omp streams out of sight.
 - This directory is not a Bun workspace package, so installing the repository
   does not download Electron.

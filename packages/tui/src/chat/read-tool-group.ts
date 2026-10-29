@@ -14,7 +14,7 @@ import {
 	readSourceFsPath,
 	splitPathAndSel,
 } from "../tools/read";
-import { PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
+import { DEFAULT_TERMINAL_PREVIEW_LINES, PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
 import { wrapTreeLine } from "../render/hanging-wrap";
 import { wrapTextWithAnsi } from "../utils";
@@ -36,6 +36,7 @@ import {
 import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
+import { currentToggle, getWorkDetail, rowExpanded, type WorkDetailToggle, workDetailEpoch } from "./work-detail";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -152,12 +153,6 @@ type ReadUsageRow = {
 
 /** Number of preview rows to show per read while collapsed. */
 const COLLAPSED_PREVIEW_LINES = PREVIEW_LIMITS.OUTPUT_COLLAPSED;
-
-/**
- * The outer data-first group must not cut off later files: code is trimmed by
- * source line and Markdown is clamped by each file's native card after rendering.
- */
-const TRIMMED_BODY_PREVIEW = { lines: 1000 } as const;
 
 /** Native item tone per read status; successful reads stay neutral. */
 const READ_STATUS_TONE: Record<ReadEntry["status"], "pending" | "warning" | "error" | undefined> = {
@@ -366,6 +361,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#usageBatchByToolCallId = new Map<string, string>();
 	#text: Text;
 	#expanded = false;
+	/** What the host last set through {@link setExpanded} (`Ctrl+O`, the transcript-wide state). */
+	#hostExpanded = false;
+	/** The user's own toggle of the group head on a TSP surface; it wins until the work-detail mode changes. */
+	#toggle: WorkDetailToggle | undefined;
 	#toolActivityVisible = true;
 	#showContentPreview: boolean;
 	// A read group accretes entries across multiple assistant completions for as
@@ -384,8 +383,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#blockVersion = 0;
 	#displayVersion = 0;
 	readonly #native = new Memo();
-	/** Content previews toggled in the terminal, by tool call id. */
-	#previewCollapsed = new Map<string, boolean>();
+	/**
+	 * Content previews the user toggled in the terminal, by tool call id; like the group's own toggle, each
+	 * wins until the work-detail mode changes or the host sets the group's expansion.
+	 */
+	#previewToggles = new Map<string, WorkDetailToggle>();
 
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
@@ -564,11 +566,29 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#updateDisplay();
 	}
 
+	/** The host's expansion (`Ctrl+O`, creation): it replaces any per-row toggle. */
 	setExpanded(expanded: boolean): void {
+		this.#hostExpanded = expanded;
+		this.#toggle = undefined;
+		this.#applyExpanded(expanded);
+	}
+
+	#applyExpanded(expanded: boolean): void {
 		if (this.#expanded !== expanded) this.#blockVersion++;
 		this.#expanded = expanded;
-		this.#previewCollapsed.clear();
+		this.#previewToggles.clear();
 		this.#updateDisplay();
+	}
+
+	/** Whether the group shows expanded on a TSP surface: the user's toggle, else verbose or the host's state. */
+	#nativeExpanded(): boolean {
+		return rowExpanded(this.#toggle, this.#hostExpanded);
+	}
+
+	/** Whether a file's preview card shows collapsed: the user's toggle of that card, else the group's state. */
+	#previewCardCollapsed(toolCallId: string, groupExpanded: boolean): boolean {
+		const toggled = currentToggle(this.#previewToggles.get(toolCallId));
+		return toggled === undefined ? !groupExpanded : !toggled;
 	}
 
 	setToolActivityVisible(visible: boolean): void {
@@ -582,19 +602,24 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/**
 	 * Mirrors the terminal's toggles: the `tool` head (the group's root) is
-	 * `Ctrl+O`'s expansion; a fallback preview card collapses on its own
-	 * (`setExpanded` resets those).
+	 * the user's own choice for this group, kept until the work-detail mode
+	 * changes or `Ctrl+O` sets every row; a file's preview card (keyed
+	 * `p<toolCallId>`, nested in the file's section when several files show)
+	 * collapses on its own (`setExpanded` resets those).
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
 		if (expanded !== undefined) {
-			this.setExpanded(expanded);
+			this.#toggle = { expanded, epoch: workDetailEpoch() };
+			this.#applyExpanded(expanded);
 			return;
 		}
-		if (event.type !== "toggle" || !event.key.startsWith("p")) return;
-		const toolCallId = event.key.slice(1);
-		if (!this.#entries.has(toolCallId)) return;
-		this.#previewCollapsed.set(toolCallId, event.collapsed);
+		if (event.type !== "toggle") return;
+		// A preview card's keypath: `p<id>`, or `p<id>/p<id>` inside its file's section.
+		const key = event.key;
+		const toolCallId = [...this.#entries.keys()].find(id => key === `p${id}` || key === `p${id}/p${id}`);
+		if (toolCallId === undefined) return;
+		this.#previewToggles.set(toolCallId, { expanded: !event.collapsed, epoch: workDetailEpoch() });
 		this.#displayVersion++;
 	}
 
@@ -607,7 +632,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
-		const key = [dataFirst, this.#displayVersion, this.#toolActivityVisible, this.#sealed];
+		const key = [
+			dataFirst,
+			this.#displayVersion,
+			this.#toolActivityVisible,
+			this.#sealed,
+			this.#hostExpanded,
+			currentToggle(this.#toggle),
+			workDetailEpoch(),
+		];
 		return this.#native.get(key, () =>
 			withHidden(dataFirst ? this.#describeTool() : this.#describeGroup(), !this.#toolActivityVisible),
 		);
@@ -621,6 +654,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 * code or rendered Markdown, clamped per file while collapsed.
 	 */
 	#describeTool(): NativeNode {
+		const expanded = this.#nativeExpanded();
+		const compact = getWorkDetail() === "compact";
 		const entries = [...this.#entries.values()];
 		const rows = this.#buildSummaryRows(this.#displayTargetsForEntries(entries));
 		const status = this.#groupStatus(entries);
@@ -643,7 +678,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			} else {
 				head = rowHead;
 			}
-			for (const entry of previews) body.push(...this.#nativePreview(entry));
+			for (const entry of previews) body.push(...this.#nativePreview(entry, expanded));
 			for (const [i, usage] of (this.#usageRowsBySummaryRow(rows).get(0) ?? []).entries()) {
 				body.push(this.#nativeUsage(usage, `u${i}`));
 			}
@@ -664,11 +699,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				const name = shortenPath(split.path);
 				const sectionHead: TspSpan[] = [span(name || "…", "path")];
 				if (split.sel) sectionHead.push(span(`:${split.sel}`, "muted"));
-				body.push(node("section", { head: sectionHead }, this.#nativePreview(entry), `p${entry.toolCallId}`));
+				body.push(
+					node("section", { head: sectionHead }, this.#nativePreview(entry, expanded), `p${entry.toolCallId}`),
+				);
 				const usage = this.#usageRows.get(entry.toolCallId);
 				if (usage) body.push(this.#nativeUsage(usage, `u${entry.toolCallId}`));
 			}
 		}
+		// Compact folds the whole group to its head line, file rows included.
+		if (compact && body.length > 0) collapsible = true;
 		return node(
 			"tool",
 			{
@@ -680,8 +719,16 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				tone: status === "error" ? "error" : undefined,
 				frame: "inline",
 				collapsible,
-				collapsed: collapsible ? !this.#expanded : undefined,
-				preview: collapsible ? TRIMMED_BODY_PREVIEW : undefined,
+				collapsed: collapsible ? !expanded : undefined,
+				// Standard clamps the folded group like any tool row's preview; each file's own preview is clamped
+				// inside it. A file card the user opened lifts the group clamp so the card shows in full.
+				preview: collapsible
+					? compact
+						? "none"
+						: previews.some(entry => currentToggle(this.#previewToggles.get(entry.toolCallId)) === true)
+							? "children"
+							: { lines: DEFAULT_TERMINAL_PREVIEW_LINES }
+					: undefined,
 			},
 			body,
 		);
@@ -739,24 +786,30 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 	}
 
-	/** One read's content, clamped per file while the group is collapsed. */
-	#nativePreview(entry: ReadEntry): NativeChild[] {
+	/**
+	 * One read's content, clamped per file while the group is collapsed. Markdown sits in its own
+	 * collapsible card (keyed `p<toolCallId>`), whose chevron the user can toggle apart from the group.
+	 */
+	#nativePreview(entry: ReadEntry, expanded: boolean): NativeChild[] {
 		if (previewsMarkdown(entry)) {
 			return [
-				card(
-					{
-						variant: "bare",
-						collapsible: true,
-						collapsed: !this.#expanded,
-						preview: { lines: COLLAPSED_PREVIEW_LINES },
-					},
-					[md(entry.contentText ?? "")],
+				keyed(
+					card(
+						{
+							variant: "bare",
+							collapsible: true,
+							collapsed: this.#previewCardCollapsed(entry.toolCallId, expanded),
+							preview: { lines: COLLAPSED_PREVIEW_LINES },
+						},
+						[md(entry.contentText ?? "")],
+					),
+					`p${entry.toolCallId}`,
 				),
 			];
 		}
 		const split = splitPathAndSel(entry.path);
 		const lines = (entry.contentText ?? "").split("\n");
-		const shown = this.#expanded ? lines.length : Math.min(lines.length, COLLAPSED_PREVIEW_LINES);
+		const shown = expanded ? lines.length : Math.min(lines.length, COLLAPSED_PREVIEW_LINES);
 		const blocks: NativeChild[] = readContentCode(
 			lines.slice(0, shown).join("\n"),
 			entry.codeStartLine ?? firstSelectorLine(split.sel) ?? 1,
@@ -829,7 +882,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						tone: READ_STATUS_TONE[entry.status],
 						head: pathValue ? [title, span(" "), span(pathValue, "path")] : [title],
 						collapsible: true,
-						collapsed: this.#previewCollapsed.get(entry.toolCallId) ?? !this.#expanded,
+						collapsed: this.#previewCardCollapsed(entry.toolCallId, this.#nativeExpanded()),
 						preview: { lines: COLLAPSED_PREVIEW_LINES },
 					},
 					[

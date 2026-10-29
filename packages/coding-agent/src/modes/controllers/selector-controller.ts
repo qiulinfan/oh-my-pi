@@ -132,6 +132,7 @@ import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-se
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { ThinkingSelectorComponent } from "@oh-my-pi/pi-tui/overlays/thinking-selector";
+import { WorkDetailSelectorComponent } from "@oh-my-pi/pi-tui/overlays/work-detail-selector";
 import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
 import { renderUsageReports } from "./command-controller";
 import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -144,6 +145,7 @@ import {
 	cfgStatusLineCompactThinkingLevel,
 	cfgStatusLineContextLine,
 	cfgStatusLineLeftSegments,
+	cfgDisplayWorkDetail,
 	cfgStatusLinePreset,
 	cfgStatusLineRightSegments,
 	cfgStatusLineSegmentOptions,
@@ -353,7 +355,7 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
+						onChange: (id, value) => this.handleSettingsPanelChange(id, value),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -700,6 +702,17 @@ export class SelectorController {
 			throw error;
 		}
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
+	}
+
+	/**
+	 * A change made in the /settings panel, which writes the persisted value. The panel is the only
+	 * writer that drops this session's `--work-detail`/chip override so the saved mode shows now;
+	 * approved `cfg://` writes set or clear their own override before reporting through
+	 * {@link handleSettingChange}.
+	 */
+	handleSettingsPanelChange(id: string, value: unknown): void {
+		if (id === cfgDisplayWorkDetail.id) cfgDisplayWorkDetail.clearOverride(this.ctx.settings);
+		this.handleSettingChange(id, value);
 	}
 
 	/**
@@ -2451,6 +2464,28 @@ export class SelectorController {
 		this.showSelector(done => {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
+		});
+	}
+
+	/**
+	 * Open the work-detail picker. A choice overrides `display.workDetail` for this session only (like
+	 * `--work-detail`); the persisted default stays what `/settings` or config.yml says.
+	 */
+	showWorkDetailSelector(): void {
+		this.showSelector(done => {
+			const selector = new WorkDetailSelectorComponent(
+				cfgDisplayWorkDetail.get(this.ctx.settings),
+				mode => {
+					done();
+					cfgDisplayWorkDetail.override(this.ctx.settings, mode);
+					this.ctx.ui.requestRender();
+				},
+				() => {
+					done();
+					this.ctx.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector.getSelectList() };
 		});
 	}
 

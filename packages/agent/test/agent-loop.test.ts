@@ -23,7 +23,11 @@ import { ASIDE_MESSAGE_COMMIT, ASIDE_MESSAGE_DISCARD, SPECULATIVE_STREAM_SESSION
 import type { AssistantMessage, AssistantMessageEvent, Context, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { kCursorExecResolved, setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import {
+	kCursorExecResolved,
+	kStreamingPartialJsonDisplayOnly,
+	setStreamingPartialJson,
+} from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import type { HarmonyDetection } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import * as harmonyLeak from "@oh-my-pi/pi-ai/utils/harmony-leak";
@@ -7642,96 +7646,98 @@ describe("agentLoop kCursorExecResolved (issue #4348)", () => {
 });
 
 describe("speculative tool execution", () => {
-	it("opens, updates, and finalizes a stream policy before final call admission", async () => {
-		const schema = type({ value: "string" });
-		const calls: string[] = [];
-		const tool: AgentTool<typeof schema> = {
-			name: "streamed",
-			label: "Streamed",
-			description: "Records speculative stream lifecycle",
-			parameters: schema,
-			speculation: {
-				stream: {
-					open: ({ parentToolCallId }) => {
-						calls.push(`open:${parentToolCallId}`);
-						return {
-							update: (toolCall, partialJson) => {
-								calls.push(`update:${toolCall.id}:${partialJson}`);
-							},
-							finalize: ({ toolCall }) => {
-								calls.push(`finalize:${toolCall.id}`);
-							},
-							commit: () => {
-								calls.push("commit");
-							},
-							discard: reason => {
-								calls.push(`discard:${reason}`);
-							},
-						};
+	it.each<{ displayOnly: boolean; update: string }>([
+		{ displayOnly: false, update: 'update:stream-1:{"value":"ok"}' },
+		// openai-completions marks its buffer display-only: speculation must not plan from it.
+		{ displayOnly: true, update: "update:stream-1:undefined" },
+	])(
+		"opens, updates, and finalizes a stream policy before final call admission (%o)",
+		async ({ displayOnly, update }) => {
+			const schema = type({ value: "string" });
+			const calls: string[] = [];
+			const tool: AgentTool<typeof schema> = {
+				name: "streamed",
+				label: "Streamed",
+				description: "Records speculative stream lifecycle",
+				parameters: schema,
+				speculation: {
+					stream: {
+						open: ({ parentToolCallId }) => {
+							calls.push(`open:${parentToolCallId}`);
+							return {
+								update: (toolCall, partialJson) => {
+									calls.push(`update:${toolCall.id}:${partialJson}`);
+								},
+								finalize: ({ toolCall }) => {
+									calls.push(`finalize:${toolCall.id}`);
+								},
+								commit: () => {
+									calls.push("commit");
+								},
+								discard: reason => {
+									calls.push(`discard:${reason}`);
+								},
+							};
+						},
 					},
 				},
-			},
-			async execute(_toolCallId, _args, _signal, _onUpdate, context) {
-				calls.push("execute");
-				await context?.[SPECULATIVE_STREAM_SESSION]?.commit();
-				return { content: [{ type: "text", text: "ok" }] };
-			},
-		};
-		let turn = 0;
-		const streamFn = () => {
-			const response = new AssistantMessageEventStream();
-			queueMicrotask(() => {
-				if (turn++ === 0) {
-					const streamingToolCall = {
-						type: "toolCall" as const,
-						id: "stream-1",
-						name: "streamed",
-						arguments: {},
-					};
-					setStreamingPartialJson(streamingToolCall, '{"value":"ok"}');
-					const streamingPartial = createAssistantMessage([streamingToolCall], "toolUse");
-					const toolCall = {
-						type: "toolCall" as const,
-						id: "stream-1",
-						name: "streamed",
-						arguments: { value: "ok" },
-					};
-					const finalPartial = createAssistantMessage([toolCall], "toolUse");
-					response.push({ type: "start", partial: streamingPartial });
-					response.push({ type: "toolcall_start", contentIndex: 0, partial: streamingPartial });
-					response.push({ type: "toolcall_delta", contentIndex: 0, delta: '"ok"}', partial: streamingPartial });
-					response.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: finalPartial });
-					response.push({ type: "done", reason: "toolUse", message: finalPartial });
-					return;
-				}
-				const partial = createAssistantMessage([{ type: "text", text: "done" }], "stop");
-				response.push({ type: "start", partial });
-				response.push({ type: "done", reason: "stop", message: partial });
-			});
-			return response;
-		};
+				async execute(_toolCallId, _args, _signal, _onUpdate, context) {
+					calls.push("execute");
+					await context?.[SPECULATIVE_STREAM_SESSION]?.commit();
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+			};
+			let turn = 0;
+			const streamFn = () => {
+				const response = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (turn++ === 0) {
+						const streamingToolCall = {
+							type: "toolCall" as const,
+							id: "stream-1",
+							name: "streamed",
+							arguments: {},
+						};
+						setStreamingPartialJson(streamingToolCall, '{"value":"ok"}');
+						if (displayOnly) Object.assign(streamingToolCall, { [kStreamingPartialJsonDisplayOnly]: true });
+						const streamingPartial = createAssistantMessage([streamingToolCall], "toolUse");
+						const toolCall = {
+							type: "toolCall" as const,
+							id: "stream-1",
+							name: "streamed",
+							arguments: { value: "ok" },
+						};
+						const finalPartial = createAssistantMessage([toolCall], "toolUse");
+						response.push({ type: "start", partial: streamingPartial });
+						response.push({ type: "toolcall_start", contentIndex: 0, partial: streamingPartial });
+						response.push({ type: "toolcall_delta", contentIndex: 0, delta: '"ok"}', partial: streamingPartial });
+						response.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: finalPartial });
+						response.push({ type: "done", reason: "toolUse", message: finalPartial });
+						return;
+					}
+					const partial = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+					response.push({ type: "start", partial });
+					response.push({ type: "done", reason: "stop", message: partial });
+				});
+				return response;
+			};
 
-		await agentLoop(
-			[createUserMessage("stream")],
-			{ systemPrompt: [""], messages: [], tools: [tool] },
-			{
-				model: createMockModel({ responses: [] }).model,
-				convertToLlm: identityConverter,
-				getToolContext: () => ({}),
-				speculativeToolExecution: { enabled: true },
-			},
-			undefined,
-			streamFn,
-		).result();
+			await agentLoop(
+				[createUserMessage("stream")],
+				{ systemPrompt: [""], messages: [], tools: [tool] },
+				{
+					model: createMockModel({ responses: [] }).model,
+					convertToLlm: identityConverter,
+					getToolContext: () => ({}),
+					speculativeToolExecution: { enabled: true },
+				},
+				undefined,
+				streamFn,
+			).result();
 
-		expect(calls).toEqual([
-			"open:stream-1",
-			'update:stream-1:{"value":"ok"}',
-			"finalize:stream-1",
-			"execute",
-			"commit",
-		]);
-	});
+			expect(calls).toEqual(["open:stream-1", update, "finalize:stream-1", "execute", "commit"]);
+		},
+	);
 
 	it.each<{ preserves: boolean; expected: string[] }>([
 		{ preserves: false, expected: ["execute"] },

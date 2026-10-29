@@ -2,7 +2,7 @@ import type { Token } from "@oh-my-pi/pi-utils/marked";
 import { Marked } from "@oh-my-pi/pi-utils/marked";
 import { listMayContinueAt } from "@oh-my-pi/pi-utils/marked-list";
 import type { ReactNode } from "react";
-import { memo, useMemo, useRef } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { escapeHtml } from "../../lib/format";
 import { mathExtension } from "./math";
 
@@ -107,6 +107,23 @@ const NO_PREFIX: FrozenMarkdownPrefix = { source: "", html: "" };
  * it on into one block across blank lines, so nothing at or past it freezes.
  */
 const MATH_OPENER_LINE = /^ {0,3}(?:\$\$|\\\[)[ \t]*$/m;
+
+/**
+ * Where freezing must stop: the first own-line opener that is not already part of a closed display-math
+ * block or a code block (no append changes either), or the end of `src`. One closed `$$` block early in a
+ * long answer must not keep everything after it re-rendering with each update.
+ */
+function mathFreezeLimit(src: string, tokens: readonly Token[]): number {
+	let pos = 0;
+	for (const token of tokens) {
+		if (token.type !== "math" && token.type !== "code") {
+			const opener = MATH_OPENER_LINE.exec(token.raw);
+			if (opener !== null) return pos + opener.index;
+		}
+		pos += token.raw.length;
+	}
+	return src.length;
+}
 /** A whitespace-only line from the sticky offset, capturing its terminator ("\n", or "" at end of text). */
 const WHITESPACE_LINE = /[^\S\n]*(\n|$)/y;
 
@@ -117,8 +134,7 @@ const WHITESPACE_LINE = /[^\S\n]*(\n|$)/y;
  * append-only extension of it. 0 when there is none.
  */
 function stableTokenCount(src: string, tokens: readonly Token[]): { count: number; end: number } {
-	const opener = MATH_OPENER_LINE.exec(src);
-	const mathLimit = opener === null ? src.length : opener.index;
+	const mathLimit = mathFreezeLimit(src, tokens);
 	let pos = 0;
 	let count = 0;
 	let end = 0;
@@ -187,18 +203,75 @@ export function renderStreamingMarkdown(
 	}
 }
 
+/** What a {@link StreamingMarkdown} block's DOM holds: the frozen prefix's markup, drawn as its first `nodes` children. */
+interface DrawnPrefix {
+	html: string;
+	nodes: number;
+}
+
+let inertDocument: Document | undefined;
+
+/**
+ * The prefix's share of `el`, which holds `prefix` then `tail` drawn together: all its nodes but the tail's,
+ * counted by parsing only the (short) tail in an inert document, so mounting a long settled block builds
+ * its DOM once and loads nothing twice. Unknown (null) when the tail starts with text, which the drawn DOM
+ * may have merged into the prefix's last text node; the first update then redraws the block once.
+ */
+function countDrawnPrefix(el: HTMLElement, prefix: string, tail: string): DrawnPrefix | null {
+	if (prefix === "") return { html: "", nodes: 0 };
+	if (tail === "") return { html: prefix, nodes: el.childNodes.length };
+	inertDocument ??= document.implementation.createHTMLDocument("");
+	const parsed = inertDocument.createElement("div");
+	parsed.innerHTML = tail;
+	if (parsed.firstChild?.nodeType === Node.TEXT_NODE) return null;
+	const nodes = el.childNodes.length - parsed.childNodes.length;
+	return nodes < 0 ? null : { html: prefix, nodes };
+}
+
 /**
  * {@link Markdown} for a block that is still streaming: settled leading
  * blocks are rendered once and reused, so each token re-parses only the open
- * tail instead of the whole growing block. Output is identical to
- * {@link Markdown} for the same text.
+ * tail instead of the whole growing block. Their DOM is kept too: an update
+ * appends what newly froze and replaces only the tail's nodes, so the browser
+ * builds and lays out the tail and not the whole answer again (a 68k-character
+ * answer cost ~7 ms per update rebuilt whole). The DOM is the one {@link Markdown}
+ * draws for the same text: the prefix ends on a block boundary, so its markup
+ * and the tail's parse to the same top-level nodes apart or together.
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }): ReactNode {
 	const prefixRef = useRef(NO_PREFIX);
-	const html = useMemo(() => {
-		const rendered = renderStreamingMarkdown(text, prefixRef.current);
-		prefixRef.current = rendered.prefix;
-		return rendered.html;
+	const rendered = useMemo(() => {
+		const result = renderStreamingMarkdown(text, prefixRef.current);
+		prefixRef.current = result.prefix;
+		return result;
 	}, [text]);
-	return <div className="tr-md" dangerouslySetInnerHTML={{ __html: html }} />;
+	// The first markup goes in as React's (so server rendering draws it); React never sets it again, since
+	// this prop stays the same object, and every later update is drawn by the effect below.
+	const [initial] = useState(() => ({ __html: rendered.html }));
+	const ref = useRef<HTMLDivElement>(null);
+	// Unknown until counted: on mount from what React drew, else by the first update, which redraws once.
+	const drawn = useRef<DrawnPrefix | null>(null);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		const { html, prefix } = rendered;
+		const at = drawn.current;
+		if (at === null && html === initial.__html) {
+			drawn.current = countDrawnPrefix(el, prefix.html, html.slice(prefix.html.length));
+			return;
+		}
+		if (at === null || !prefix.html.startsWith(at.html) || el.childNodes.length < at.nodes) {
+			el.innerHTML = prefix.html;
+			drawn.current = { html: prefix.html, nodes: el.childNodes.length };
+			el.insertAdjacentHTML("beforeend", html.slice(prefix.html.length));
+			return;
+		}
+		while (el.childNodes.length > at.nodes) el.lastChild!.remove();
+		if (prefix.html.length > at.html.length) {
+			el.insertAdjacentHTML("beforeend", prefix.html.slice(at.html.length));
+			drawn.current = { html: prefix.html, nodes: el.childNodes.length };
+		}
+		el.insertAdjacentHTML("beforeend", html.slice(prefix.html.length));
+	}, [rendered, initial]);
+	return <div className="tr-md" ref={ref} dangerouslySetInnerHTML={initial} />;
 });
