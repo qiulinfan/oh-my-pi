@@ -63,6 +63,7 @@ export const cfgThemeDark = register({
 	type: "string",
 	default: "titanium",
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Theme",
 		label: "Dark Theme",
@@ -77,6 +78,7 @@ export const cfgThemeLight = register({
 	type: "string",
 	default: "light",
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Theme",
 		label: "Light Theme",
@@ -395,6 +397,7 @@ export const cfgTuiCompleteScrollback = register({
 	type: "boolean",
 	default: false,
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Display",
 		label: "Complete Scrollback",
@@ -434,6 +437,7 @@ export const cfgTuiTextSizing = register({
 	type: "boolean",
 	default: false,
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Display",
 		label: "Large Headings (Kitty)",
@@ -581,6 +585,7 @@ export const cfgTuiMouse = register({
 	type: "boolean",
 	default: false,
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Display",
 		label: "Mouse Click-to-Focus",
@@ -789,6 +794,7 @@ export const cfgShowHardwareCursor = register({
 	type: "boolean",
 	default: true, // will be computed based on platform if undefined
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Display",
 		label: "Show Hardware Cursor",
@@ -801,6 +807,7 @@ export const cfgTuiImeSafeCursor = register({
 	type: "boolean",
 	default: false,
 	ui: {
+		terminalOnly: true,
 		tab: "appearance",
 		group: "Display",
 		label: "IME-Safe Prompt Layout",

@@ -123,6 +123,8 @@ export interface UiBase {
 	warning?: string;
 	/** Condition function name - setting only shown when true */
 	condition?: string;
+	/** Only a terminal acts on it (its cursor, mouse, scrollback, palette): `omp gui` draws its own and notes so. */
+	terminalOnly?: boolean;
 }
 
 /** Wide ui shape exposed to consumers that walk the schema generically. */

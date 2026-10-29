@@ -1,4 +1,5 @@
 import { TERMINAL } from "@oh-my-pi/pi-tui";
+import { $env } from "@oh-my-pi/pi-utils";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { isSettingsInitialized, Settings, settings } from "./settings";
@@ -42,6 +43,13 @@ const CONDITIONS: Record<string, () => boolean> = {
 	restrictedFoldersNotProject: whenSettings(s => cfgToolsRestrictedFolders.provenance(s) !== "project"),
 };
 
+/** Description suffix for a setting only a terminal acts on, shown in the panel inside `omp gui`. */
+function guiNote(ui: { terminalOnly?: boolean }): string {
+	return ui.terminalOnly && $env.TERM_PROGRAM === "omp-gui"
+		? " Terminal only: omp gui draws its own and ignores it."
+		: "";
+}
+
 /** Description suffix telling the panel user that an environment variable is in play. */
 function envNote(setting: AnySetting): string {
 	if (!setting.envName || setting.envValue() === undefined) return "";
@@ -61,12 +69,13 @@ export function createSettingsHost(): SettingsHost {
 		for (const setting of orderedSettings()) {
 			const ui = setting.ui;
 			if (ui?.tab !== tab) continue;
-			const note = envNote(setting);
+			const note = `${envNote(setting)}${guiNote(ui)}`;
 			entries.push({
 				path: setting.id,
 				type: setting.type,
 				defaultValue: setting.default,
-				ui: note ? { ...ui, description: `${ui.description}${note}` } : ui,
+				// The notes are sentences of their own: end a description that has no stop with one.
+				ui: note ? { ...ui, description: `${ui.description.replace(/(?<![.!?])$/, ".")}${note}` } : ui,
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
