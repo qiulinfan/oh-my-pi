@@ -47,6 +47,7 @@ import { processStartToken } from "../utils/process-identity";
 import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } from "./hosted";
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
+import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 /** No-project chats: each gets its own empty working directory here, and they share one session dir. */
 const CHATS_DIR = path.join(os.homedir(), ".omp", "chats");
@@ -817,6 +818,10 @@ interface ModelChoice {
 	selector: string;
 	name: string;
 	provider: string;
+	/** What `--thinking` can set on the model, as omp's `/effort` picker offers it; empty when it does not think. */
+	thinkingSelectors: string[];
+	/** The level a session on it starts at when nothing names one; null when it does not think. */
+	thinkingStart: string | null;
 }
 
 interface ModelList {
@@ -839,7 +844,14 @@ async function listModels(): Promise<ModelList> {
 		fallback = config?.modelRoles?.default ?? null;
 	} catch {}
 	return {
-		models: models.map(({ selector, name, provider }) => ({ selector, name, provider })),
+		// omp works out both thinking fields itself (`omp models --json`), so the start page agrees with a session.
+		models: models.map(({ selector, name, provider, thinkingSelectors, thinkingStart }) => ({
+			selector,
+			name,
+			provider,
+			thinkingSelectors: Array.isArray(thinkingSelectors) ? thinkingSelectors : [],
+			thinkingStart: typeof thinkingStart === "string" ? thinkingStart : null,
+		})),
 		default: fallback,
 	};
 }
@@ -892,6 +904,8 @@ interface SpawnBody {
 	 */
 	from?: string;
 	model?: string;
+	/** omp's `--thinking` level: off, minimal..max or auto (adaptive); absent keeps omp's default. */
+	thinking?: string;
 	prompt?: string;
 }
 
@@ -1217,9 +1231,11 @@ class GuiHost implements SessionHost {
 		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
 		const body = await readBody<SpawnBody>(req);
 		if (body instanceof Response) return body;
-		for (const key of ["project", "from", "model", "prompt"] as const)
+		for (const key of ["project", "from", "model", "thinking", "prompt"] as const)
 			if (body[key] !== undefined && typeof body[key] !== "string")
 				return fail(400, "bad-request", `${key} must be a string`);
+		if (body.thinking !== undefined && !CLI_THINKING_LEVELS.includes(body.thinking as ConfiguredThinkingLevel))
+			return fail(400, "bad-request", `thinking must be one of ${CLI_THINKING_LEVELS.join(", ")}`);
 		if (body.resume !== undefined && (typeof body.resume?.path !== "string" || typeof body.resume?.cwd !== "string"))
 			return fail(400, "bad-request", "resume needs a path and a cwd");
 		// A spawn changes the roster, and a restore reads what the previous run left.
@@ -1249,7 +1265,7 @@ class GuiHost implements SessionHost {
 	async #start(body: SpawnBody): Promise<Spawned | Response> {
 		const from = body.from === undefined ? undefined : await this.#recorded(body.from);
 		if (from instanceof Response) return from;
-		let { resume, project, prompt, model } = body;
+		let { resume, project, prompt, model, thinking } = body;
 		let restore = body.restore === true;
 		let chat = false;
 		if (body.from !== undefined && !resume && !project && !prompt) {
@@ -1263,6 +1279,7 @@ class GuiHost implements SessionHost {
 			} else if (from.prompt) {
 				prompt = from.prompt;
 				model ??= from.model;
+				thinking ??= from.thinking;
 				if (!from.chat) project = from.cwd;
 			} else return fail(400, "bad-request", "this session has nothing to restore");
 		}
@@ -1286,9 +1303,13 @@ class GuiHost implements SessionHost {
 			await fs.promises.mkdir(CHAT_SESSION_DIR, { recursive: true });
 			args.push("--session-dir", CHAT_SESSION_DIR);
 		}
-		// A restore continues the interrupted turn on the model it ran with.
-		if (restore) model = undefined;
+		// A restore continues the interrupted turn on the model and thinking level it ran with.
+		if (restore) {
+			model = undefined;
+			thinking = undefined;
+		}
 		if (model) args.push("--model", model);
+		if (thinking) args.push("--thinking", thinking);
 		// The first message goes in as omp's positional prompt, so the session starts working on it.
 		const firstMessage = resume ? undefined : prompt?.trim() || undefined;
 		if (firstMessage) args.push("--", firstMessage);
@@ -1322,6 +1343,7 @@ class GuiHost implements SessionHost {
 			sessionFile: resumePath,
 			prompt: firstMessage,
 			model: firstMessage ? model : undefined,
+			thinking: firstMessage ? thinking : undefined,
 			chat,
 			restoredFrom: from?.guiId,
 		};

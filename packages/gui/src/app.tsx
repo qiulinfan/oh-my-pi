@@ -132,6 +132,8 @@ interface SpawnRequest {
 	 */
 	from?: string;
 	model?: string;
+	/** omp's `--thinking` level; absent starts at omp's default. */
+	thinking?: string;
 	prompt?: string;
 }
 
@@ -615,6 +617,10 @@ interface ModelChoice {
 	selector: string;
 	name: string;
 	provider: string;
+	/** What `--thinking` can set on the model, in the order omp's `/effort` picker offers it; empty when it does not think. */
+	thinkingSelectors: string[];
+	/** The level a session on it starts at when nothing names one; null when it does not think. */
+	thinkingStart: string | null;
 }
 
 interface ModelList {
@@ -623,10 +629,152 @@ interface ModelList {
 	default: string | null;
 }
 
+/** Every `--thinking` value omp accepts: the choices for a model the page cannot look up. */
+const ALL_THINKING = ["off", "auto", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** The model a selector names: the exact selector, else one ending in `:<level>` (a level is never part of an id). */
+function findModel(selector: string, list: ModelList): { choice: ModelChoice; level?: string } | undefined {
+	const exact = list.models.find(entry => entry.selector === selector);
+	if (exact) return { choice: exact };
+	const at = selector.lastIndexOf(":");
+	const level = selector.slice(at + 1);
+	if (at < 0 || !ALL_THINKING.includes(level)) return undefined;
+	const choice = list.models.find(entry => entry.selector === selector.slice(0, at));
+	return choice && { choice, level };
+}
+
+/**
+ * The thinking choices for a new session with the model picker at `model` ("" for omp's default), and
+ * the level it starts at when none is picked. A model the page cannot look up (the list has not loaded,
+ * the default role is an alias) gets every level: omp checks and clamps what it is given.
+ */
+function thinkingFor(
+	model: string,
+	list: ModelList | null,
+): { choices: string[]; start: string | null; known: boolean } {
+	const found = list ? findModel(model || list.default || "", list) : undefined;
+	if (!found) return { choices: ALL_THINKING, start: null, known: false };
+	// The default role's own `:level` is where a session on it starts.
+	return {
+		choices: found.choice.thinkingSelectors,
+		start: (!model && found.level) || found.choice.thinkingStart,
+		known: true,
+	};
+}
+
+function effortLabel(level: string): string {
+	return level === "auto" ? "Auto · adaptive" : level;
+}
+
+function EffortPicker({
+	value,
+	model,
+	list,
+	onPick,
+}: {
+	/** A `--thinking` level, or "" for the default. */
+	value: string;
+	model: string;
+	list: ModelList | null;
+	onPick: (value: string) => void;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+	const trigger = useRef<HTMLButtonElement>(null);
+	const menu = useRef<HTMLDivElement>(null);
+	useDismiss(
+		ref,
+		open,
+		useCallback(() => setOpen(false), []),
+	);
+	// Opening puts focus on the current choice, so the arrows, Enter and Escape work at once.
+	useEffect(() => {
+		if (open) menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+	}, [open]);
+	const { choices, start, known } = thinkingFor(model, list);
+	if (known && choices.length === 0) {
+		return (
+			<div className="picker effort-picker">
+				<button type="button" className="field-chip project" disabled title="This model does not think">
+					<Icon name="brain" size={14} />
+					<span className="chip-label">No thinking</span>
+				</button>
+			</div>
+		);
+	}
+	const close = () => {
+		setOpen(false);
+		trigger.current?.focus();
+	};
+	const pick = (level: string) => {
+		close();
+		onPick(level);
+	};
+	const fallback = start ? `Default · ${effortLabel(start)}` : "Default";
+	const onKeyDown = (event: React.KeyboardEvent) => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			close();
+			return;
+		}
+		if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+		event.preventDefault();
+		const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+		const at = items.indexOf(document.activeElement as HTMLButtonElement);
+		const next = event.key === "ArrowDown" ? at + 1 : at - 1;
+		items[(next + items.length) % items.length]?.focus();
+	};
+	const item = (level: string, text: string, meta?: string, title?: string) => (
+		<button
+			key={level || "default"}
+			type="button"
+			role="menuitemradio"
+			aria-checked={level === value}
+			className={`picker-item ${level === value ? "on" : ""}`}
+			title={title}
+			onClick={() => pick(level)}
+		>
+			<span className="side-label">{text}</span>
+			{meta ? <span className="side-meta">{meta}</span> : null}
+		</button>
+	);
+	return (
+		<div className="picker effort-picker" ref={ref}>
+			<button
+				ref={trigger}
+				type="button"
+				className="field-chip project"
+				aria-haspopup="menu"
+				aria-expanded={open}
+				title="Thinking effort for the new session. Auto picks a level for each message by how hard it looks."
+				onClick={() => setOpen(current => !current)}
+			>
+				<Icon name="brain" size={14} />
+				<span className="chip-label">{value ? effortLabel(value) : fallback}</span>
+				<Icon name="chev-down" size={12} />
+			</button>
+			{open ? (
+				<div className="picker-menu" role="menu" aria-label="Thinking effort" ref={menu} onKeyDown={onKeyDown}>
+					{item("", fallback, "default")}
+					<div className="picker-sep" />
+					{choices.map(level =>
+						item(
+							level,
+							effortLabel(level),
+							undefined,
+							level === "auto" ? "Picks a level for each message by how hard it looks" : undefined,
+						),
+					)}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+/** A selector's model name; a `:level` suffix shows in the effort picker instead. */
 function modelName(selector: string, list: ModelList | null): string {
-	const [base, effort] = selector.split(":");
-	const name = list?.models.find(model => model.selector === base)?.name ?? base!.split("/").pop()!;
-	return effort ? `${name} · ${effort}` : name;
+	const found = list ? findModel(selector, list) : undefined;
+	return found?.choice.name ?? selector.split("/").pop()!;
 }
 
 function ModelPicker({
@@ -1100,6 +1248,7 @@ export function App(): ReactNode {
 	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
 	const [chosen, setChosen] = useState<string | null>(null);
 	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
+	const [thinkingChoice, setThinkingState] = useState(() => stored("omp-gui.thinking", "").trim());
 	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);
 	/** What the last action (spawn, end, choose folder) failed with; cleared by the next. */
@@ -1179,6 +1328,11 @@ export function App(): ReactNode {
 		});
 	}, []);
 
+	const setThinking = (value: string) => {
+		store("omp-gui.thinking", value);
+		setThinkingState(value);
+	};
+
 	const setModel = (value: string) => {
 		store("omp-gui.model", value);
 		setModelState(value);
@@ -1255,9 +1409,14 @@ export function App(): ReactNode {
 		}
 	};
 
+	// The level a session starts at: the picked one when the picked model takes it, else omp's default.
+	const thinking =
+		thinkingChoice && thinkingFor(model, modelList).choices.includes(thinkingChoice) ? thinkingChoice : "";
+
 	const resumeRequest = (session: SavedSession): SpawnRequest => ({
 		resume: { path: session.path, cwd: session.cwd },
 		model: model || undefined,
+		thinking: thinking || undefined,
 	});
 
 	// --restore takes no prompt, and the turn continues on the model it was running.
@@ -1565,7 +1724,12 @@ export function App(): ReactNode {
 								onChoose={() => void chooseFolder()}
 							/>
 						}
-						modelPicker={<ModelPicker value={model} list={modelList} onPick={setModel} />}
+						modelPicker={
+							<>
+								<ModelPicker value={model} list={modelList} onPick={setModel} />
+								<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
+							</>
+						}
 						interrupted={
 							interrupted.length ? (
 								<InterruptedList
@@ -1584,7 +1748,12 @@ export function App(): ReactNode {
 						isCutOff={isCutOff}
 						onStart={prompt =>
 							void spawn([
-								{ project: target || undefined, model: model || undefined, prompt: prompt.trim() || undefined },
+								{
+									project: target || undefined,
+									model: model || undefined,
+									thinking: thinking || undefined,
+									prompt: prompt.trim() || undefined,
+								},
 							])
 						}
 						onResume={session => void spawn([resumeRequest(session)])}

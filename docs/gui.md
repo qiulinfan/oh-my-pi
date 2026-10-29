@@ -90,6 +90,15 @@ directory under `~/.omp/chats/`; chats share the session directory
 The model picker lists the models `omp models` reports, with the `default`
 model role from `config.yml` first.
 
+The effort picker beside it sets the new session's thinking level
+(`--thinking`). It offers what omp's `/effort` picker offers for that model
+(off, Auto, then the model's levels; no Auto where omp has not verified the
+model's levels), and Default names the level the session would start at.
+Auto picks a level for each message by how hard it looks. The choice is
+remembered, applies to resumed sessions too, and falls back to Default on a
+model that lacks it. In a session, click the effort ring in the model chip to
+choose a level; Shift+Tab cycles through them.
+
 Resuming a session the GUI already runs shows that session instead of starting
 a second omp on the same file. A session open in another omp process (a
 terminal, or one still shutting down) is waited for up to 10 s, then refused;

@@ -640,6 +640,11 @@ export class InputController {
 			hintUsage.record("effort");
 			this.cycleThinkingLevel();
 		};
+		// A click on the effort chip opens the `/effort` picker: every level, auto included, in one step.
+		this.ctx.editor.onSelectThinkingLevel = () => {
+			hintUsage.record("effort");
+			if (this.ctx.viewSession.model?.reasoning) this.ctx.showThinkingSelector();
+		};
 		this.ctx.editor.setActionKeys("app.model.cycleForward", this.ctx.keybindings.getKeys("app.model.cycleForward"));
 		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel("forward");
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));
