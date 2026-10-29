@@ -7,6 +7,7 @@
  */
 import { StreamingMarkdown } from "@oh-my-pi/collab-web/src/components/transcript/Markdown";
 import katex from "katex";
+import mermaid from "mermaid";
 import {
 	createContext,
 	type CSSProperties,
@@ -17,6 +18,7 @@ import {
 	type ReactNode,
 	type RefCallback,
 	type RefObject,
+	useCallback,
 	useContext,
 	useEffect,
 	useId,
@@ -208,11 +210,96 @@ function startsTurn(node: StoreNode | undefined): boolean {
 	return text.includes("@");
 }
 
+/** Subscribes to every node in `ids`, so a component reading their children redraws when those change. */
+function useNodes(ids: readonly string[]): void {
+	const { store } = useSurface();
+	const key = ids.join("\n");
+	const subscribe = useCallback(
+		(listener: () => void) => {
+			const offs = ids.map(id => store.subscribe(id, listener));
+			return () => {
+				for (const off of offs) off();
+			};
+		},
+		[store, key],
+	);
+	const version = () => ids.map(id => store.get(id)?.v ?? -1).join(",");
+	useSyncExternalStore(subscribe, version, version);
+}
+
+/** An assistant message's part drawn off the rail: its answer prose, and what closes it (errors, copy, usage). */
+function isAnswerPart(node: StoreNode | undefined): boolean {
+	if (!node) return false;
+	if (node.k === "md") return true;
+	const role = String(node.p.role ?? "");
+	return (
+		role === "omp.turn.usage" ||
+		role === "omp.turn.copy" ||
+		role === "omp.error" ||
+		role === "omp.assistant.abort" ||
+		role === "omp.assistant.recovered"
+	);
+}
+
+/** One drawn part of a turn: a node, wrapped in its assistant message's role when it was one's child. */
+interface TurnPart {
+	id: string;
+	from?: string;
+}
+
+/** A turn's parts in order: runs of work (thinking, tools) on the rail, and answer prose between them. */
+type TurnBlock = { rail: boolean; parts: TurnPart[] };
+
+function turnBlocks(steps: readonly string[], store: SurfaceStore): TurnBlock[] {
+	const blocks: TurnBlock[] = [];
+	const push = (rail: boolean, part: TurnPart) => {
+		const last = blocks.at(-1);
+		if (last?.rail === rail) last.parts.push(part);
+		else blocks.push({ rail, parts: [part] });
+	};
+	for (const id of steps) {
+		const node = store.get(id);
+		const role = String(node?.p.role ?? "");
+		if (!node || !role.startsWith("omp.assistant")) {
+			push(true, { id });
+			continue;
+		}
+		if (node.p.hidden) continue;
+		for (const child of node.c) push(!isAnswerPart(store.get(child)), { id: child, from: role });
+	}
+	return blocks;
+}
+
+function Part({ part }: { part: TurnPart }): ReactNode {
+	if (!part.from) return <N id={part.id} />;
+	return (
+		<div className="k-col" data-role={part.from}>
+			<N id={part.id} />
+		</div>
+	);
+}
+
+/**
+ * What answers a turn's opening message: the work (thinking, tools, notices) in columns the
+ * stylesheet draws as a timeline, and the assistant's answer prose between them at full width.
+ */
+function TurnBody({ steps }: { steps: readonly string[] }): ReactNode {
+	const { store } = useSurface();
+	// An assistant message's parts move between the rail and the answer as they arrive.
+	useNodes(steps.filter(id => String(store.get(id)?.p.role ?? "").startsWith("omp.assistant")));
+	return turnBlocks(steps, store).map(block => (
+		<div key={block.parts[0]!.id} className={block.rail ? "steps" : "answer"}>
+			{block.parts.map(part => (
+				<Part key={part.id} part={part} />
+			))}
+		</div>
+	));
+}
+
 /**
  * The main region as turns: each message that starts one (see startsTurn)
- * with the steps that answer it (assistant prose, thinking, tools) in a
- * column the stylesheet draws as a timeline. Whatever precedes the first
- * message (omp's welcome) stays above.
+ * with what answers it (see TurnBody). Whatever precedes the first message
+ * (omp's welcome) stays above.
  */
 export const Transcript = memo(function Transcript({ id }: { id: string }): ReactNode {
 	const node = useNode(id);
@@ -233,13 +320,7 @@ export const Transcript = memo(function Transcript({ id }: { id: string }): Reac
 			{turns.map(turn => (
 				<section key={turn.user} className="turn">
 					<N id={turn.user} />
-					{turn.steps.length > 0 ? (
-						<div className="steps">
-							{turn.steps.map(child => (
-								<N key={child} id={child} />
-							))}
-						</div>
-					) : null}
+					<TurnBody steps={turn.steps} />
 				</section>
 			))}
 		</div>
@@ -669,11 +750,123 @@ const Text: R = ({ node }) => {
 	);
 };
 
-const Markdown: R = ({ node }) => (
-	<div {...useCommon(node)}>
-		<StreamingMarkdown text={node.p.text ?? ""} />
-	</div>
-);
+type DiagramTheme = "dark" | "neutral";
+
+/** The page's theme as mermaid names it; `data-theme` on <html> is set by the app (and may change after mount). */
+function diagramTheme(): DiagramTheme {
+	return document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
+}
+
+function subscribeTheme(listener: () => void): () => void {
+	const observer = new MutationObserver(listener);
+	observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+	return () => observer.disconnect();
+}
+
+/** The theme diagrams are drawn in, following the page's; server rendering draws none. */
+function useDiagramTheme(): DiagramTheme | undefined {
+	return useSyncExternalStore(subscribeTheme, diagramTheme, () => undefined);
+}
+
+/** The theme mermaid was last set up for (its config is global). */
+let mermaidTheme: DiagramTheme | undefined;
+let mermaidSeq = 0;
+/** Rendered diagrams by theme and source: a block redrawn while its answer streams reuses its SVG. */
+const mermaidSvgs = new Map<string, Promise<string | null>>();
+
+/** A Mermaid diagram as SVG in `theme`; null when the source does not parse. */
+function mermaidSvg(source: string, theme: DiagramTheme): Promise<string | null> {
+	const key = `${theme}\n${source}`;
+	let svg = mermaidSvgs.get(key);
+	if (!svg) {
+		if (theme !== mermaidTheme) {
+			mermaidTheme = theme;
+			mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, theme });
+		}
+		svg = mermaid.render(`omp-mermaid-${++mermaidSeq}`, source).then(
+			result => result.svg,
+			() => null,
+		);
+		mermaidSvgs.set(key, svg);
+	}
+	return svg;
+}
+
+/**
+ * Draws the ```mermaid fences of a markdown block as diagrams in the page's theme, again when it
+ * changes. While the block streams, its last element may be a fence still being written, so it
+ * stays code until something follows it or the block settles. A source that does not parse stays code.
+ */
+function useMermaidFigures(ref: RefObject<HTMLDivElement | null>, text: string, streaming: boolean): void {
+	const theme = useDiagramTheme();
+	useEffect(() => {
+		const root = ref.current?.querySelector<HTMLElement>(".tr-md");
+		if (!root || !theme || !text.includes("```mermaid")) return;
+		const draw = () => {
+			for (const pre of root.querySelectorAll<HTMLElement>(":scope > pre")) {
+				const source =
+					pre.dataset.mermaidSource ?? pre.querySelector(":scope > code.language-mermaid")?.textContent;
+				if (source === undefined || source === null) continue;
+				if (streaming && pre === root.lastElementChild && !pre.dataset.mermaidSource) continue;
+				const key = `${theme}\n${source}`;
+				if (pre.dataset.mermaid === key) continue;
+				pre.dataset.mermaid = key;
+				void mermaidSvg(source, theme).then(svg => {
+					if (svg === null || !pre.isConnected || pre.dataset.mermaid !== key) return;
+					pre.dataset.mermaidSource = source;
+					pre.classList.add("mermaid-figure");
+					pre.innerHTML = svg;
+				});
+			}
+		};
+		draw();
+		// The block's own redraws (a streaming tail replaced, a resync) bring fresh fences without a new `text`.
+		const observer = new MutationObserver(draw);
+		observer.observe(root, { childList: true });
+		return () => observer.disconnect();
+	}, [ref, text, streaming, theme]);
+}
+
+/** Whether a Markdown link leaves for the web (or mail), which the browser or desktop shell opens itself. */
+const WEB_LINK = /^(?:https?|mailto):/i;
+
+/**
+ * A click on a Markdown link that names a local path (`src/a.ts:12`, `/Users/…`, `file://…`) opens it through the
+ * server, relative to the session's directory; a page link (`#…`) goes nowhere. Web links open as links do.
+ */
+function useLocalLinks(session: SessionConnection): (event: MouseEvent) => void {
+	return useCallback(
+		(event: MouseEvent) => {
+			const link = (event.target as Element | null)?.closest?.(".tr-md a[href]");
+			const href = link?.getAttribute("href");
+			if (!href || WEB_LINK.test(href)) return;
+			event.preventDefault();
+			if (!href.startsWith("#")) session.openHref(href);
+		},
+		[session],
+	);
+}
+
+const Markdown: R = ({ node }) => {
+	const ref = useRef<HTMLDivElement>(null);
+	const text = node.p.text ?? "";
+	const { session } = useSurface();
+	const common = useCommon(node);
+	const openLocal = useLocalLinks(session);
+	useMermaidFigures(ref, text, node.p.stream === true);
+	return (
+		<div
+			{...common}
+			ref={ref}
+			onClick={event => {
+				openLocal(event);
+				if (!event.defaultPrevented) common.onClick?.(event);
+			}}
+		>
+			<StreamingMarkdown text={text} />
+		</div>
+	);
+};
 
 function Clamp({ lines, children, tail }: { lines?: number; children: ReactNode; tail?: boolean }): ReactNode {
 	const [open, setOpen] = useState(false);

@@ -1289,6 +1289,101 @@ button.picker-item:focus-visible {
 	padding: 0;
 	font-size: 12.5px;
 }
+/* Transcript math (KaTeX HTML): a display equation scrolls inside its wrapper, whose padding takes the ink that
+ * overflows its box, so it never scrolls vertically; inline math keeps prose's line breaking around it. */
+.tr-md .katex {
+	white-space: normal;
+	font-size: 1.08em;
+}
+.tr-md .tr-math {
+	display: block;
+	margin: 4px 0;
+	padding-block: 0.4em;
+	overflow-x: auto;
+	overflow-y: hidden;
+}
+.tr-md .tr-math .katex-display {
+	margin: 0;
+}
+/* Footnotes: a reference is a small raised label; its note, written at the answer's end, is quiet text. */
+.tr-md .tr-footnote-ref {
+	font-size: 0.75em;
+	color: var(--link);
+	margin-left: 1px;
+}
+.tr-md .tr-footnote {
+	font-size: 0.88em;
+	color: var(--muted);
+	margin: 2px 0;
+}
+.tr-md .tr-footnote > sup {
+	margin-right: 2px;
+}
+/* Highlighted code in answers (highlight.js classes), in this page's palette so it follows light and dark. */
+.tr-md .hljs-comment,
+.tr-md .hljs-quote {
+	color: var(--dim);
+	font-style: italic;
+}
+.tr-md .hljs-keyword,
+.tr-md .hljs-selector-tag,
+.tr-md .hljs-doctag,
+.tr-md .hljs-meta .hljs-keyword {
+	color: var(--accent-ink);
+}
+.tr-md .hljs-string,
+.tr-md .hljs-regexp,
+.tr-md .hljs-addition,
+.tr-md .hljs-meta .hljs-string {
+	color: var(--green);
+}
+.tr-md .hljs-number,
+.tr-md .hljs-literal,
+.tr-md .hljs-symbol,
+.tr-md .hljs-bullet {
+	color: var(--amber);
+}
+.tr-md .hljs-title,
+.tr-md .hljs-title.function_,
+.tr-md .hljs-section,
+.tr-md .hljs-selector-id,
+.tr-md .hljs-selector-class {
+	color: var(--focus);
+}
+.tr-md .hljs-type,
+.tr-md .hljs-built_in,
+.tr-md .hljs-title.class_,
+.tr-md .hljs-attr,
+.tr-md .hljs-attribute,
+.tr-md .hljs-variable.language_ {
+	color: var(--amber);
+}
+.tr-md .hljs-deletion {
+	color: var(--red);
+}
+.tr-md .hljs-meta,
+.tr-md .hljs-punctuation {
+	color: var(--muted);
+}
+.tr-md .hljs-emphasis {
+	font-style: italic;
+}
+.tr-md .hljs-strong {
+	font-weight: 600;
+}
+/* A ```mermaid fence drawn as its diagram. */
+.tr-md pre.mermaid-figure {
+	background: none;
+	border: none;
+	padding: 4px 0;
+	white-space: normal;
+	text-align: center;
+	overflow-x: auto;
+}
+.tr-md pre.mermaid-figure svg {
+	max-width: 100%;
+	height: auto;
+}
 .tr-md blockquote {
 	border-left: 3px solid var(--line-2);
 	margin: 0.6em 0;
@@ -1852,6 +1947,16 @@ button.picker-item:focus-visible {
 	flex-direction: column;
 	gap: 12px;
 }
+/* The assistant's answer prose sits at full width between runs of work on the rail. */
+.answer {
+	margin-top: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.answer > [data-role^="omp.assistant"]:empty {
+	display: none;
+}
 /* The rail joining a turn's steps. */
 .steps::before {
 	content: "";
@@ -1868,21 +1973,7 @@ button.picker-item:focus-visible {
 .steps > [data-role="omp.assistant"] {
 	gap: 10px;
 }
-.steps > [data-role="omp.assistant"] > .k-md {
-	position: relative;
-}
-/* One dot per step: prose in ink, tools by their status (their status mark moves into the gutter). */
-.steps > [data-role="omp.assistant"] > .k-md::before {
-	content: "";
-	position: absolute;
-	left: calc(4px - var(--rail));
-	top: 0.72em;
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--fg-2);
-	box-shadow: 0 0 0 3px var(--bg);
-}
+/* One dot per step: thoughts hollow, tools by their status (their status mark moves into the gutter). */
 .steps > [data-role="omp.assistant"] > .k-section {
 	position: relative;
 }
