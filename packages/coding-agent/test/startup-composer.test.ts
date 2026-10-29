@@ -516,6 +516,43 @@ describe("Composer prepaint", () => {
 		}
 	});
 
+	it("submits the draft with an Enter held through startup when the held keys replay", async () => {
+		const terminal = new CountingTerminal();
+		const composer = new Composer({ preferences: config, terminal });
+		composer.start();
+		const lease = new ComposerLease(composer);
+		const testSession = await createTestSession({ inMemory: true });
+		const mode = new InteractiveMode(
+			testSession.session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			lease.composer,
+		);
+		lease.adopt();
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		const prompt = vi.spyOn(testSession.session, "prompt").mockResolvedValue(true);
+		// `omp gui` sends its typing as edits, which reach the draft at once, while the Enter behind
+		// them waits in the startup hold: init replays it.
+		vi.spyOn(composer, "releaseHeldInput").mockImplementation(() => terminal.sendInput("\r"));
+
+		try {
+			terminal.sendInput("alpha");
+			await mode.init({ suppressWelcomeIntro: true });
+			for (let i = 0; i < 50 && prompt.mock.calls.length === 0; i++) await Promise.resolve();
+			expect(prompt).toHaveBeenCalledWith("alpha", expect.objectContaining({ streamingBehavior: "steer" }));
+			expect(mode.editor.getExpandedText()).toBe("");
+		} finally {
+			mode.stop();
+			lease.dispose();
+			await testSession.cleanup();
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("turns kitty enhanced paste on when the interactive mode adopts an already started composer", async () => {
 		// The prepaint composer starts the TUI before InteractiveMode wires the input
 		// controller, so enhanced paste (ESC[?5522h) cannot wait for a start event.
