@@ -45,6 +45,8 @@ export interface HostedEntry {
 	prompt?: string;
 	/** The model a new session was started on, for starting its first message again. */
 	model?: string;
+	/** The `--thinking` level a new session was started with, for the same. */
+	thinking?: string;
 	/** A no-project chat, which runs in its own directory under the chats dir. */
 	chat: boolean;
 	/** How omp exited when it ended by itself and not cleanly (a crash, a signal from elsewhere). */
@@ -90,7 +92,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 	if (typeof entry.startedAt !== "number" || typeof entry.chat !== "boolean") return undefined;
 	if (!optional(entry.pid, "number") || !optional(entry.startToken, "string")) return undefined;
 	if (!optional(entry.sessionFile, "string") || !optional(entry.prompt, "string")) return undefined;
-	if (!optional(entry.model, "string")) return undefined;
+	if (!optional(entry.model, "string") || !optional(entry.thinking, "string")) return undefined;
 	if (entry.ending !== undefined && entry.ending !== true) return undefined;
 	if (entry.restoredFrom !== undefined && !isGuiId(entry.restoredFrom)) return undefined;
 	const exit = parseExit(entry.exit);
@@ -104,6 +106,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 		sessionFile: entry.sessionFile as string | undefined,
 		prompt: entry.prompt as string | undefined,
 		model: entry.model as string | undefined,
+		thinking: entry.thinking as string | undefined,
 		chat: entry.chat,
 		exit,
 		restoredFrom: entry.restoredFrom,
@@ -120,6 +123,7 @@ export function learnSessionFile(entry: HostedEntry, file: string): void {
 	if (entry.sessionFile !== undefined && entry.sessionFile !== file) {
 		entry.prompt = undefined;
 		entry.model = undefined;
+		entry.thinking = undefined;
 	}
 	entry.sessionFile = file;
 }

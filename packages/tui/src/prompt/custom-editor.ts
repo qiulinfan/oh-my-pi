@@ -1106,7 +1106,7 @@ export class CustomEditor extends Editor {
 	 * shell-mode chip and the input, and the `bar`: model chip, effort chip
 	 * (or the effort glyph as the model chip's icon), the generation rate,
 	 * the other status facts, usage, dictation, then send (Stop while a turn runs).
-	 * Clicks come back as `status.model`, `thinking.cycle`, `dictation.toggle`,
+	 * Clicks come back as `status.model`, `thinking.select`, `dictation.toggle`,
 	 * `submit`, `interrupt` and `focus:<id>` actions.
 	 */
 	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
@@ -1257,7 +1257,8 @@ export class CustomEditor extends Editor {
 		const shell = state.shell;
 		const focus = state.viewing && this.#describeViewing(state.viewing, interruptKey);
 		const thinking = state.thinking;
-		const thinkingHint = thinkingKey ? `  ${formatTooltipKey(thinkingKey)}` : "";
+		// A click chooses the level; the key cycles it.
+		const thinkingHint = `. Click to choose${thinkingKey ? `; ${formatTooltipKey(thinkingKey)} cycles` : ""}`;
 		// The level collapses into the model chip's icon; its own tooltip and click stay.
 		const modelIcon =
 			facts && thinking !== undefined && effortGlyph && state.thinkingInModel
@@ -1267,7 +1268,7 @@ export class CustomEditor extends Editor {
 							level: thinking,
 							role: "omp.composer.model.effort",
 							title: `Thinking effort: ${thinking}${thinkingHint}`,
-							actions: { click: "thinking.cycle" },
+							actions: { click: "thinking.select" },
 						},
 						undefined,
 						"effort",
@@ -1301,8 +1302,8 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.effort",
 							gap: "xs",
 							align: "center",
-							title: `Thinking effort${thinkingHint}`,
-							actions: { click: "thinking.cycle" },
+							title: `Thinking effort: ${thinking}${thinkingHint}`,
+							actions: { click: "thinking.select" },
 						},
 						[
 							effortGlyph
@@ -1427,8 +1428,10 @@ export class CustomEditor extends Editor {
 			return;
 		}
 		switch (event.act) {
-			case "thinking.cycle":
-				this.onCycleThinkingLevel?.();
+			case "thinking.select":
+				// A host without the picker still lets a click change the level.
+				if (this.onSelectThinkingLevel) this.onSelectThinkingLevel();
+				else this.onCycleThinkingLevel?.();
 				return;
 			case "dictation.toggle": {
 				const { dictation } = this.composerState();
@@ -1452,6 +1455,8 @@ export class CustomEditor extends Editor {
 	onExit?: () => void;
 	onDisplayReset?: () => void;
 	onCycleThinkingLevel?: () => void;
+	/** Opens the thinking-level picker (a click on the effort chip or glyph). */
+	onSelectThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
 	onSelectModel?: () => void;

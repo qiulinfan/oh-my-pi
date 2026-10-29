@@ -96,7 +96,7 @@ describe("native composer", () => {
 		expect(byRole(idle, "omp.composer.send")?.p).toMatchObject({ keys: ["enter"], actions: { click: "submit" } });
 		expect(byRole(idle, "omp.composer.stop")).toBeUndefined();
 		const chip = byRole(idle, "omp.composer.effort")!;
-		expect(chip.p).toMatchObject({ actions: { click: "thinking.cycle" } });
+		expect(chip.p).toMatchObject({ actions: { click: "thinking.select" } });
 		expect(nodes(chip).find(n => n.k === "effort")?.p).toEqual({ level: "high" });
 		expect(nodes(chip).find(n => n.k === "text")?.p).toMatchObject({ text: "high" });
 
@@ -106,10 +106,17 @@ describe("native composer", () => {
 		expect(byRole(busy, "omp.composer.send")).toBeUndefined();
 		expect(byRole(busy, "omp.composer.stop")?.p).toMatchObject({ actions: { click: "interrupt" }, tone: "error" });
 
-		editor.handleNativeEvent({ type: "action", key: "bar/effort", act: "thinking.cycle", mods: [] });
+		// Without a picker the click still changes the level, by cycling it.
+		editor.handleNativeEvent({ type: "action", key: "bar/effort", act: "thinking.select", mods: [] });
 		editor.handleNativeEvent({ type: "action", key: "bar/stop", act: "interrupt", mods: [] });
 		expect(editor.onCycleThinkingLevel).toHaveBeenCalledTimes(1);
 		expect(editor.onEscape).toHaveBeenCalledTimes(1);
+
+		// With one, the click opens it and leaves cycling to the key.
+		editor.onSelectThinkingLevel = vi.fn();
+		editor.handleNativeEvent({ type: "action", key: "bar/effort", act: "thinking.select", mods: [] });
+		expect(editor.onSelectThinkingLevel).toHaveBeenCalledTimes(1);
+		expect(editor.onCycleThinkingLevel).toHaveBeenCalledTimes(1);
 	});
 
 	it("quotes the session title in italics as the placeholder; a viewed subagent's name wins", () => {
@@ -315,7 +322,7 @@ describe("native composer", () => {
 
 	it("keeps the effort chip at `off` with an empty glyph so a click can turn thinking back on", () => {
 		const chip = byRole(composer({ running: false, thinking: "off" }).describe(cx), "omp.composer.effort")!;
-		expect(chip.p).toMatchObject({ actions: { click: "thinking.cycle" } });
+		expect(chip.p).toMatchObject({ actions: { click: "thinking.select" } });
 		expect(nodes(chip).find(n => n.k === "effort")?.p).toEqual({ level: "off" });
 		expect(nodes(chip).find(n => n.k === "text")?.p).toMatchObject({ text: "off" });
 	});
@@ -394,16 +401,14 @@ describe("native composer thinking level in the model chip", () => {
 		return editor;
 	}
 
-	it("draws the level as the model chip's icon, cycling on click, and drops the effort chip", () => {
+	it("draws the level as the model chip's icon, choosing on click, and drops the effort chip", () => {
 		const root = withFacts({ running: false, thinking: "xhigh", thinkingInModel: true }).describe(cx);
 		expect(byRole(root, "omp.composer.effort")).toBeUndefined();
 		const model = byRole(root, "omp.composer.model")!;
 		expect((model.c ?? []).filter(isNode).map(n => n.k)).toEqual(["effort", "text", "icon"]);
 		expect(byRole(model, "omp.composer.model.effort")?.p).toMatchObject({
 			level: "xhigh",
-			// The level, then the cycle key as the effort chip's tooltip names it.
-			title: expect.stringMatching(/^Thinking effort: xhigh {2}\S/),
-			actions: { click: "thinking.cycle" },
+			actions: { click: "thinking.select" },
 		});
 	});
 

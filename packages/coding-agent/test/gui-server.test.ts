@@ -663,6 +663,41 @@ describe("omp gui: hosted-session roster", () => {
 		expect(await gui.args(second, restored.id)).toEqual(["--restore", file]);
 		expect(await gui.interrupted(second)).toEqual([]);
 	}, 60_000);
+
+	test("a session starts at the thinking level picked, a first-message restore keeps it, and an unknown level is refused", async () => {
+		const gui = await setup();
+		// A session that died before omp wrote its file, started with a model and a level.
+		await Bun.write(
+			path.join(gui.runtimeDir, "hosted", "0000000c.json"),
+			JSON.stringify({
+				guiId: "0000000c",
+				startedAt: 1,
+				cwd: gui.project,
+				chat: false,
+				prompt: "say hi",
+				model: "deepseek/deepseek-flash",
+				thinking: "low",
+			}),
+		);
+		const served = await gui.start();
+		const unknown = await gui.api<{ code: string }>(served, "/api/spawn", {
+			project: gui.project,
+			thinking: "turbo",
+		});
+		expect({ status: unknown.status, code: unknown.body.code }).toEqual({ status: 400, code: "bad-request" });
+
+		const fresh = await gui.spawn(served, { project: gui.project, thinking: "auto" });
+		expect(await gui.args(served, fresh.id)).toEqual(["--thinking", "auto"]);
+		const restored = await gui.spawn(served, { from: "0000000c" });
+		expect(await gui.args(served, restored.id)).toEqual([
+			"--model",
+			"deepseek/deepseek-flash",
+			"--thinking",
+			"low",
+			"--",
+			"say hi",
+		]);
+	}, 60_000);
 });
 
 describe("omp gui: sessions that outlive or leave their server", () => {

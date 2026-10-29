@@ -1180,6 +1180,8 @@ const Effort: R = ({ node }) => {
 					transform="rotate(-90 8 8)"
 				/>
 			</svg>
+			{/* In the model chip the ring stands alone, so it says its level too. */}
+			{node.p.role === "omp.composer.model.effort" ? <span className="effort-level">{node.p.level}</span> : null}
 		</span>
 	);
 };
