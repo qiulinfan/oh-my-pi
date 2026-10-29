@@ -31,7 +31,7 @@ if (pack) {
 	const vsix = path.join(root, "out", "omp-vscode.vsix");
 	await fs.mkdir(path.dirname(vsix), { recursive: true });
 	// The bundle carries every dependency, so the package needs none of node_modules.
-	await $`${path.join(root, "node_modules", ".bin", "vsce")} package --no-dependencies --skip-license --allow-missing-repository --out ${vsix}`.cwd(
+	await $`${path.join(root, "node_modules", ".bin", "vsce")} package --no-dependencies --skip-license --out ${vsix}`.cwd(
 		root,
 	);
 	if (install) await $`code --install-extension ${vsix} --force`;

@@ -6,6 +6,11 @@
 	"publisher": "qiulinfan",
 	"private": true,
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/qiulinfan/oh-my-pi.git",
+		"directory": "vscode"
+	},
 	"engines": {
 		"vscode": "^1.140.0"
 	},
