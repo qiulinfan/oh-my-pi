@@ -250,3 +250,13 @@ are described in [obsidian/README.md](../obsidian/README.md).
 Below 640 px the page takes the whole width: the session list slides over it
 from the left (the button at the top left shows it), and the composer's
 controls wrap onto further lines.
+
+## VS Code side bar
+
+The VS Code extension in `vscode/` shows the same page in VS Code's secondary
+side bar, in a frame inside a webview. It reaches the server as the Obsidian
+plugin does. The webview's sandbox opens no windows, so a page that finds
+itself framed posts its web and mail links to the embedder (a
+`{type: "omp-gui.open-external", url}` message to its parent), which opens
+them in the browser. Building, installing and its behavior are described in
+[vscode/README.md](../vscode/README.md).

@@ -4,10 +4,10 @@
  * browser marks cross-site, and a frame inside app://obsidian.md is one, while
  * a <webview> navigates at its own top level.
  *
- * Finding omp, reading the login shell's environment and the `omp gui`
- * handshake are the desktop app's (desktop/src), which need no Electron. Like
- * the desktop app, the plugin attaches to the running server or starts one,
- * and a server it started stops with Obsidian, ending the sessions it hosts.
+ * Reaching the server is desktop/src/attach.ts, shared with the VS Code
+ * extension: like the desktop app, the plugin attaches to the running server
+ * or starts one, and a server it started stops with Obsidian, ending the
+ * sessions it hosts.
  *
  * The page opens web links with window.open. A <webview> drops those unless it
  * allows popups, so it allows them and denies every one from the main
@@ -15,10 +15,9 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
+import { GuiAttachment } from "../../desktop/src/attach";
 import { remote, shell } from "electron";
 import { ItemView, Plugin, PluginSettingTab, Setting, type WorkspaceLeaf } from "obsidian";
-import { type LoginShellEnv, readLoginShellEnv } from "../../desktop/src/login-shell";
-import { findOmp, type GuiAddress, GuiProcess, pingGui } from "../../desktop/src/supervisor";
 
 const VIEW_TYPE = "omp-sidebar";
 const EXTERNAL_LINK = /^(https?|mailto):/i;
@@ -37,18 +36,9 @@ interface Settings {
 
 const DEFAULT_SETTINGS: Settings = { ompPath: "", sidebarPlaced: false };
 
-interface Connection {
-	address: GuiAddress;
-	/** Set when the login shell's environment could not be read and this plugin's server started without it. */
-	degraded: boolean;
-}
-
 export default class OmpPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
-	#env: Promise<LoginShellEnv> | null = null;
-	/** The `omp gui` that serves, when this plugin started the server rather than attaching to one. */
-	#owned: GuiProcess | null = null;
-	#connection: Promise<Connection> | null = null;
+	readonly server = new GuiAttachment();
 
 	override async onload(): Promise<void> {
 		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
@@ -61,7 +51,7 @@ export default class OmpPlugin extends Plugin {
 
 	override onunload(): void {
 		// Quitting Obsidian closes the server's stdin, which stops it anyway; this covers disabling the plugin.
-		void this.#owned?.stop();
+		void this.server.stop();
 	}
 
 	async saveSettings(): Promise<void> {
@@ -91,35 +81,6 @@ export default class OmpPlugin extends Plugin {
 			await leaf.setViewState({ type: VIEW_TYPE, active: true });
 		}
 		await workspace.revealLeaf(leaf);
-	}
-
-	/** The page to load: the running server's when it still answers, else one `omp gui` attaches or starts one. */
-	async pageUrl(): Promise<string> {
-		let connection = this.#connection && (await this.#connection.catch(() => null));
-		if (connection) {
-			const ping = await pingGui(connection.address, connection.address);
-			if (ping.state !== "ok" && ping.state !== "slow") connection = null;
-		}
-		if (!connection) {
-			this.#connection = this.#connect();
-			connection = await this.#connection;
-		}
-		return `${connection.address.url}${connection.degraded ? "&env=degraded" : ""}`;
-	}
-
-	async #connect(): Promise<Connection> {
-		if (this.#owned?.alive) await this.#owned.stop();
-		this.#owned = null;
-		this.#env ??= readLoginShellEnv();
-		const env = await this.#env;
-		const omp = await findOmp(this.settings.ompPath || undefined, env.env.PATH, os.homedir()).catch(err => {
-			const why = env.failure ? ` (The login shell's environment could not be read: ${env.failure}.)` : "";
-			throw new Error(`${err instanceof Error ? err.message : String(err)}${why}`);
-		});
-		const proc = new GuiProcess(omp, env.env, { cwd: os.homedir() });
-		const address = await proc.ready();
-		if (!address.attached) this.#owned = proc;
-		return { address, degraded: env.failure !== undefined && !address.attached };
 	}
 }
 
@@ -158,7 +119,7 @@ class OmpView extends ItemView {
 		const status = root.createDiv({ cls: "omp-sidebar-status", text: "Starting omp gui…" });
 		let url: string;
 		try {
-			url = await this.#plugin.pageUrl();
+			url = await this.#plugin.server.pageUrl(this.#plugin.settings.ompPath || undefined);
 		} catch (err) {
 			if (generation !== this.#generation) return;
 			status.setText(err instanceof Error ? err.message : String(err));

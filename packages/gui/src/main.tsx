@@ -2,6 +2,7 @@ import { drawMathWithKatexHtml } from "@oh-my-pi/collab-web/src/components/trans
 import hljs from "highlight.js/lib/common";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";
+import { routeLinksToEmbedder } from "./embed";
 import "katex/dist/katex.min.css";
 import "./styles.css";
 
@@ -9,5 +10,7 @@ import "./styles.css";
 drawMathWithKatexHtml();
 // Fenced code in answers is highlighted through collab-web's highlight.js seam (`getHljs`).
 (globalThis as { hljs?: unknown }).hljs = hljs;
+
+routeLinksToEmbedder();
 
 createRoot(document.getElementById("root")!).render(<App />);
