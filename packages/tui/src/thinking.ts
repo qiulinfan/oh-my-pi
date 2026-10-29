@@ -141,6 +141,28 @@ export function automaticThinkingLevel<T>(model: Model | undefined, fallback: T)
 }
 
 /**
+ * The level a session on `model` starts at when nothing names one: no `--thinking`, no `:level` on its
+ * model selector, no level saved in the session. The model's own default wins over the configured
+ * default unless that default is `auto`.
+ */
+export function startingThinkingLevel(
+	model: Model | undefined,
+	configuredDefault: ConfiguredThinkingLevel | undefined,
+): ConfiguredThinkingLevel | undefined {
+	if (configuredDefault !== AUTO_THINKING && model?.thinking?.defaultLevel !== undefined)
+		return model.thinking.defaultLevel;
+	return automaticThinkingLevel(model, configuredDefault);
+}
+
+/** The thinking selectors a user can pick for `model` among `efforts`: off, auto (never for an unverified ladder), then the efforts. */
+export function effortSelectors(model: Model | undefined, efforts: readonly Effort[]): ConfiguredThinkingLevel[] {
+	if (!model?.reasoning) return [];
+	// Auto never opts an unverified model into thinking; only a concrete pick does.
+	if (model.thinking?.unverified) return [ThinkingLevel.Off, ...efforts];
+	return [ThinkingLevel.Off, AUTO_THINKING, ...efforts];
+}
+
+/**
  * Sentinel selector for the coding-agent "auto" thinking mode. Kept entirely
  * inside the coding-agent layer: it is never an {@link Effort} or
  * {@link ThinkingLevel}, so provider mapping/clamping keeps seeing concrete

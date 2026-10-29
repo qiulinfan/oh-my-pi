@@ -16,6 +16,15 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { getEffectiveTokenCost, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	concreteThinkingLevel,
+	effortSelectors,
+	parseConfiguredThinkingLevel,
+	resolveThinkingLevelForModel,
+	startingThinkingLevel,
+} from "@oh-my-pi/pi-tui/thinking";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ConfigError } from "../config/config-file";
@@ -23,6 +32,7 @@ import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAndLoadExtensions, ExtensionRunner, emitSessionShutdownEvent } from "../extensibility/extensions";
 import { discoverAuthStorage } from "../sdk";
+import { cfgDefaultThinkingLevel } from "../session/settings";
 import { SessionManager } from "../session/session-manager";
 import { EventBus } from "../utils/event-bus";
 
@@ -82,6 +92,10 @@ interface ModelJson {
 	reasoning: boolean;
 	/** Supported thinking efforts when the model thinks, otherwise null. */
 	thinking: readonly Effort[] | null;
+	/** The thinking selectors a session on the model can be set to (off, auto, efforts); empty when it does not think. */
+	thinkingSelectors: ConfiguredThinkingLevel[];
+	/** The level a session on the model starts at when nothing names one, under the configured default; null when it does not think. */
+	thinkingStart: ConfiguredThinkingLevel | null;
 	input: ("text" | "image")[];
 	cost: Model<Api>["cost"];
 	pricingStatus: ModelPricingStatus;
@@ -113,7 +127,8 @@ function byProviderThenId(left: Model<Api>, right: Model<Api>): number {
 	return left.id.localeCompare(right.id);
 }
 
-function toModelJson(model: Model<Api>): ModelJson {
+function toModelJson(model: Model<Api>, configuredThinking: ConfiguredThinkingLevel | undefined): ModelJson {
+	const start = model.reasoning ? startingThinkingLevel(model, configuredThinking) : undefined;
 	// Scalar legs report the card in force now, not the one current when the row was built.
 	const { input, output, cacheRead, cacheWrite } = getEffectiveTokenCost(model.cost);
 	return {
@@ -126,6 +141,14 @@ function toModelJson(model: Model<Api>): ModelJson {
 		maxTokens: model.maxTokens,
 		reasoning: model.reasoning,
 		thinking: model.thinking ? getSupportedEfforts(model) : null,
+		thinkingSelectors: effortSelectors(model, getSupportedEfforts(model)),
+		// Clamped into the model's ladder, as the session does; auto stays auto until a turn resolves it.
+		thinkingStart:
+			start === undefined
+				? null
+				: start === AUTO_THINKING
+					? AUTO_THINKING
+					: (resolveThinkingLevelForModel(model, concreteThinkingLevel(start)) ?? null),
 		input: model.input,
 		cost: { ...model.cost, input, output, cacheRead, cacheWrite },
 		pricingStatus: getModelPricingStatus(model),
@@ -199,6 +222,8 @@ export function renderProviderModels(
 	pattern: string | undefined,
 	json: boolean,
 	kind: ModelKind | "all" = "chat",
+	/** The configured `defaultThinkingLevel`, for each model's `thinkingStart` in JSON output. */
+	configuredThinking?: ConfiguredThinkingLevel,
 ): void {
 	const available = source.getAvailable(kind);
 	const needle = pattern?.toLowerCase();
@@ -232,7 +257,12 @@ export function renderProviderModels(
 				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
 			);
 		}
-		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };
+		const output: ModelsJson = {
+			models: filtered
+				.slice()
+				.sort(byProviderThenId)
+				.map(model => toModelJson(model, configuredThinking)),
+		};
 		writeLine(JSON.stringify(output));
 		return;
 	}
@@ -312,6 +342,8 @@ export interface RunModelsListingOptions {
 	disabledExtensionIds?: string[];
 	/** When true, exclude ambient factories and resolve only `additionalExtensionPaths`. */
 	disableExtensionDiscovery?: boolean;
+	/** The configured `defaultThinkingLevel`, for each model's `thinkingStart` in JSON output. */
+	configuredThinking?: ConfiguredThinkingLevel;
 }
 
 export async function runModelsListing(options: RunModelsListingOptions): Promise<void> {
@@ -326,6 +358,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		settingsExtensions = [],
 		disabledExtensionIds = [],
 		disableExtensionDiscovery = false,
+		configuredThinking,
 	} = options;
 
 	const eventBus = new EventBus();
@@ -371,7 +404,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		for (const warning of modelRegistry.drainConfigWarnings()) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 		}
-		renderProviderModels(modelRegistry, action, pattern, json, kind);
+		renderProviderModels(modelRegistry, action, pattern, json, kind, configuredThinking);
 	} finally {
 		await emitSessionShutdownEvent(extensionRunner);
 	}
@@ -411,6 +444,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 		await runModelsListing({
 			modelRegistry,
 			cwd,
+			configuredThinking: parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings)),
 			action,
 			pattern,
 			json,

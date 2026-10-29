@@ -262,7 +262,7 @@ import {
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
 	toReasoningEffort,
-	automaticThinkingLevel,
+	startingThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
 import {
 	BashTool,
@@ -2136,16 +2136,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
 			level = defaultRoleSpec.thinkingLevel;
 		}
-		const configuredDefaultLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
-		if (
-			level === undefined &&
-			configuredDefaultLevel !== AUTO_THINKING &&
-			selectedModel?.thinking?.defaultLevel !== undefined
-		) {
-			level = selectedModel.thinking.defaultLevel;
-		}
 		if (level === undefined) {
-			level = automaticThinkingLevel(selectedModel, configuredDefaultLevel);
+			level = startingThinkingLevel(
+				selectedModel,
+				parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings)),
+			);
 		}
 		return level;
 	};

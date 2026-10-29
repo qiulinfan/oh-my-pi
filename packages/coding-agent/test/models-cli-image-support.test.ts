@@ -5,6 +5,8 @@ import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/typ
 import { renderProviderModels } from "@oh-my-pi/pi-coding-agent/cli/models-cli";
 import Models from "@oh-my-pi/pi-coding-agent/commands/models";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 const TEST_CONFIG: CliConfig = { bin: "omp", version: "test", commands: new Map() };
 
@@ -204,5 +206,47 @@ describe("omp models image support column", () => {
 				makeModel({ id: "text-only-model", api: "openai-completions", input: ["text"], transport: "pi-native" }),
 			),
 		).toBe("no");
+	});
+});
+
+describe("omp models --json thinking fields", () => {
+	it("reports the levels a session on each model can pick and starts at, as a session resolves them", () => {
+		const base = makeModel({ id: "base", api: "openai-completions" });
+		const ownDefault = {
+			...base,
+			id: "own-default",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: ["low", "medium", "high"], defaultLevel: "medium" },
+		} as Model<Api>;
+		const unverified = {
+			...base,
+			id: "unverified",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: ["low", "high"], unverified: true },
+		} as Model<Api>;
+		const plain = { ...base, id: "plain" } as Model<Api>;
+		const fields = (configured: ConfiguredThinkingLevel) => {
+			const output: string[] = [];
+			spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+				output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+				return true;
+			});
+			const source = { getAvailable: () => [ownDefault, unverified, plain], getError: () => undefined };
+			renderProviderModels(source, "ls", undefined, true, "chat", configured);
+			vi.restoreAllMocks();
+			const { models } = JSON.parse(output.join("")) as {
+				models: { id: string; thinkingSelectors: string[]; thinkingStart: string | null }[];
+			};
+			return Object.fromEntries(models.map(model => [model.id, [model.thinkingSelectors, model.thinkingStart]]));
+		};
+
+		// A model's own default outranks the configured one; an unverified ladder offers no auto and starts unset.
+		expect(fields(ThinkingLevel.High)).toEqual({
+			"own-default": [["off", "auto", "low", "medium", "high"], "medium"],
+			unverified: [["off", "low", "high"], null],
+			plain: [[], null],
+		});
+		// A configured auto outranks a model's own default.
+		expect(fields(AUTO_THINKING)["own-default"]).toEqual([["off", "auto", "low", "medium", "high"], "auto"]);
 	});
 });

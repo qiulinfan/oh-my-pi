@@ -36,6 +36,7 @@ import {
 	type ConfiguredThinkingLevel,
 	clampAutoThinkingEffort,
 	clampThinkingLevelToCeiling,
+	effortSelectors,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
@@ -595,9 +596,7 @@ export class ModelControls {
 			ceiling === undefined
 				? efforts
 				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
-		// Auto never opts an unverified model into thinking; only a concrete pick does.
-		if (this.#model.thinking?.unverified) return [ThinkingLevel.Off, ...selectable];
-		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
+		return effortSelectors(this.#model, selectable);
 	}
 
 	/**
