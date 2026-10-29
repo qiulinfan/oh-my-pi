@@ -1,56 +1,54 @@
-/* omp GUI: Claude Code's desktop layout and type, in omp's own web palette.
-   The colours are the tokens omp's collab-web and stats apps share: neutral
-   surfaces, alpha hairlines, soft status colours, pink for links and strokes,
-   cyan for focus, and one gradient that appears in three places only (the π
-   mark, the send button, the context meter). In dark, the surfaces are lifted
-   off collab-web's black and the text dimmed a step (about 11:1 rather than
-   19:1), so long reading does not glare.
+/* omp GUI: Claude Code's desktop layout and type, in Claude's warm neutrals with omp's own accents.
+   Surfaces and text follow Claude desktop's tokens: a warm off-white or warm charcoal panel (never pure white or
+   blue-gray), text at Claude's contrast (about 17:1 light, 14:1 dark, and no text below about 4:1), and hairlines
+   in its border tone at low alpha. Where Claude is orange, omp is pink for links and strokes, cyan for focus, and
+   one gradient that appears in three places only (the π mark, the send button, the context meter).
    The app sets data-theme="light|dark" on <html> before first paint. */
 :root {
 	color-scheme: light;
 	/* Surfaces: sidebar chassis, main panel, raised cards, insets, floating overlays. */
-	--sidebar: #f2f2f3;
-	--bg: #ffffff;
+	--sidebar: #f5f4ed;
+	--bg: #faf9f5;
 	--surface: #ffffff;
-	--sunken: #f6f6f7;
+	--sunken: #f0eee6;
 	--overlay: #ffffff;
-	--user-bg: #f2f2f3;
-	--custom-bg: #f2f2f3;
-	--hover: rgba(0, 0, 0, 0.03);
-	--sel: rgba(0, 0, 0, 0.06);
-	--active: rgba(0, 0, 0, 0.06);
-	--line: rgba(0, 0, 0, 0.08);
-	--line-2: rgba(0, 0, 0, 0.14);
-	--line-3: rgba(0, 0, 0, 0.24);
-	--fg: #151518;
-	--fg-2: #34343a;
-	--muted: #5a5a63;
-	--dim: #8b8b94;
+	--user-bg: #f0eee6;
+	--custom-bg: #f0eee6;
+	--hover: rgba(31, 30, 29, 0.04);
+	--sel: rgba(31, 30, 29, 0.07);
+	--active: rgba(31, 30, 29, 0.07);
+	--line: rgba(31, 30, 29, 0.1);
+	--line-2: rgba(31, 30, 29, 0.17);
+	--line-3: rgba(31, 30, 29, 0.3);
+	--fg: #141413;
+	--fg-2: #3d3d3a;
+	--muted: #5c5b56;
+	--dim: #7a7871;
 	/* Accent: the gradient (three places), pink for text and strokes, cyan for focus. */
 	--grad: linear-gradient(100deg, #1fa9bb, #d42ea3);
 	--mark-a: oklch(0.7 0.24 340);
 	--mark-b: oklch(0.62 0.21 295);
 	--mark-c: oklch(0.81 0.14 200);
 	--accent: #c42596;
-	--accent-ink: #c42596;
+	--accent-ink: #b81f8a;
 	--accent-wash: rgba(212, 46, 163, 0.1);
 	--on-accent: #ffffff;
-	--link: #c42596;
-	--custom-label: #c42596;
-	--focus: #1fa9bb;
-	--green: #12a36b;
-	--amber: #c77c02;
-	--red: #dc3a40;
+	--link: #b81f8a;
+	--custom-label: #b81f8a;
+	--focus: #138a9b;
+	--green: #0e8a5a;
+	--amber: #a96800;
+	--red: #c7333a;
 	--add-bg: rgba(18, 163, 107, 0.1);
-	--add-fg: #0f8a5b;
+	--add-fg: #0b7a4f;
 	--del-bg: rgba(220, 58, 64, 0.08);
-	--del-fg: #c2343a;
+	--del-fg: #b52f35;
 	--md-code: var(--fg);
 	--md-bullet: var(--dim);
-	--scrim: rgba(0, 0, 0, 0.25);
-	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-	--shadow-md: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
-	--shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.16);
+	--scrim: rgba(20, 20, 19, 0.25);
+	--shadow-sm: 0 1px 2px rgba(31, 30, 29, 0.05);
+	--shadow-md: 0 1px 2px rgba(31, 30, 29, 0.05), 0 8px 24px rgba(31, 30, 29, 0.07);
+	--shadow-lg: 0 24px 64px rgba(31, 30, 29, 0.18);
 	--sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "JetBrainsMonoNL Nerd Font", sans-serif;
 	--serif: Charter, "Iowan Old Style", "Songti SC", Georgia, "JetBrainsMonoNL Nerd Font", serif;
 	--mono: "JetBrainsMonoNL Nerd Font", Menlo, "PingFang SC", monospace;
@@ -68,22 +66,22 @@
 	--error: var(--red);
 
 	/* The 16 ANSI colours tool output uses, tuned to the status colours. */
-	--ansi-0: #151518;
-	--ansi-1: #dc3a40;
-	--ansi-2: #12a36b;
-	--ansi-3: #c77c02;
+	--ansi-0: #141413;
+	--ansi-1: #c7333a;
+	--ansi-2: #0e8a5a;
+	--ansi-3: #a96800;
 	--ansi-4: #2f6fd6;
-	--ansi-5: #c42596;
-	--ansi-6: #1a9aab;
-	--ansi-7: #5a5a63;
-	--ansi-8: #8b8b94;
+	--ansi-5: #b81f8a;
+	--ansi-6: #127f8f;
+	--ansi-7: #5c5b56;
+	--ansi-8: #7a7871;
 	--ansi-9: #e5535a;
 	--ansi-10: #17b87a;
 	--ansi-11: #d98e10;
 	--ansi-12: #4a86e8;
 	--ansi-13: #d23fa6;
 	--ansi-14: #22b3c6;
-	--ansi-15: #34343a;
+	--ansi-15: #3d3d3a;
 
 	/* omp names some span colours by its own palette tokens; give them this palette's meaning. */
 	--p-accent: var(--accent-ink);
@@ -125,28 +123,28 @@
 
 :root[data-theme="dark"] {
 	color-scheme: dark;
-	--sidebar: #1b1b1f;
-	--bg: #212125;
-	--surface: #27272c;
-	--sunken: #1c1c20;
-	--overlay: #2d2d33;
-	--user-bg: #2d2d33;
-	--custom-bg: #2d2d33;
-	--hover: rgba(255, 255, 255, 0.04);
-	--sel: rgba(255, 255, 255, 0.08);
-	--active: rgba(255, 255, 255, 0.08);
-	--line: rgba(255, 255, 255, 0.08);
-	--line-2: rgba(255, 255, 255, 0.14);
-	--line-3: rgba(255, 255, 255, 0.24);
-	--fg: #d6d6da;
-	--fg-2: #b9b9bf;
-	--muted: #94949c;
-	--dim: #6e6e76;
+	--sidebar: #1f1e1d;
+	--bg: #262624;
+	--surface: #30302e;
+	--sunken: #1f1e1d;
+	--overlay: #30302e;
+	--user-bg: #141413;
+	--custom-bg: #30302e;
+	--hover: rgba(222, 220, 209, 0.05);
+	--sel: rgba(222, 220, 209, 0.09);
+	--active: rgba(222, 220, 209, 0.09);
+	--line: rgba(222, 220, 209, 0.1);
+	--line-2: rgba(222, 220, 209, 0.17);
+	--line-3: rgba(222, 220, 209, 0.28);
+	--fg: #faf9f5;
+	--fg-2: #c9c7bd;
+	--muted: #a8a69d;
+	--dim: #8b897f;
 	--grad: linear-gradient(100deg, #5ad8e6, #ed4abf);
 	--accent: #f068c8;
 	--accent-ink: #f068c8;
 	--accent-wash: rgba(237, 74, 191, 0.14);
-	--on-accent: #0a0a0b;
+	--on-accent: #141413;
 	--link: #f068c8;
 	--custom-label: #f068c8;
 	--focus: #5ad8e6;
@@ -162,22 +160,22 @@
 	--shadow-md: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.45);
 	--shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 
-	--ansi-0: #6e6e76;
+	--ansi-0: #8b897f;
 	--ansi-1: #ff6166;
 	--ansi-2: #3ecf8e;
 	--ansi-3: #f5a524;
 	--ansi-4: #6aa6ff;
 	--ansi-5: #f068c8;
 	--ansi-6: #5ad8e6;
-	--ansi-7: #b9b9bf;
-	--ansi-8: #8b8b94;
+	--ansi-7: #c9c7bd;
+	--ansi-8: #8b897f;
 	--ansi-9: #ff8a8e;
 	--ansi-10: #6ee0ac;
 	--ansi-11: #f8bf5a;
 	--ansi-12: #8ab8ff;
 	--ansi-13: #f590d6;
 	--ansi-14: #8ce6f0;
-	--ansi-15: #d6d6da;
+	--ansi-15: #faf9f5;
 }
 
 :root[data-prose="serif"] {
