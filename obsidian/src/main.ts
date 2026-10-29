@@ -31,9 +31,11 @@ interface Webview extends HTMLElement {
 interface Settings {
 	/** An absolute path to the omp to run; empty searches the login shell's PATH, then ~/.local/bin/omp. */
 	ompPath: string;
+	/** Set once the view has been put in the right sidebar, so a view the user closed stays closed. */
+	sidebarPlaced: boolean;
 }
 
-const DEFAULT_SETTINGS: Settings = { ompPath: "" };
+const DEFAULT_SETTINGS: Settings = { ompPath: "", sidebarPlaced: false };
 
 interface Connection {
 	address: GuiAddress;
@@ -54,6 +56,7 @@ export default class OmpPlugin extends Plugin {
 		this.addRibbonIcon("bot", "Open omp", () => void this.reveal());
 		this.addCommand({ id: "open", name: "Open sidebar", callback: () => void this.reveal() });
 		this.addSettingTab(new OmpSettingTab(this));
+		this.app.workspace.onLayoutReady(() => void this.#placeOnce());
 	}
 
 	override onunload(): void {
@@ -63,6 +66,21 @@ export default class OmpPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	/**
+	 * Put the view in the right sidebar the first time the plugin loads in a
+	 * vault, behind whatever tab is showing there, as Obsidian's own sidebar
+	 * plugins do.
+	 */
+	async #placeOnce(): Promise<void> {
+		if (this.settings.sidebarPlaced) return;
+		const { workspace } = this.app;
+		if (workspace.getLeavesOfType(VIEW_TYPE).length === 0) {
+			await workspace.getRightLeaf(false)?.setViewState({ type: VIEW_TYPE, active: false });
+		}
+		this.settings.sidebarPlaced = true;
+		await this.saveSettings();
 	}
 
 	async reveal(): Promise<void> {

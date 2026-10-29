@@ -23,8 +23,10 @@ The plugin reuses the desktop app's Electron-free modules
 
 ## Use
 
-Open it with the bot icon in the ribbon or the **omp: Open sidebar** command.
-The refresh button in the view's header reconnects.
+The first time the plugin loads in a vault it adds its view to the right
+sidebar, behind the tab showing there; once you close it, it stays closed.
+Open it again with the bot icon in the ribbon or the **omp: Open sidebar**
+command. The refresh button in the view's header reconnects.
 
 - It reads your login shell's environment, as a terminal would get it, and
   runs `omp gui --no-open --json --exit-on-stdin-close` with it. The omp it
