@@ -410,6 +410,7 @@ import {
 import { cfgPlanEnabled } from "./plan-mode/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import {
+	cfgContextFilesNested,
 	cfgSnapcompactShape,
 	cfgSnapcompactSystemPrompt,
 	cfgSnapcompactToolResults,
@@ -1875,16 +1876,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// startup does not perform a second recursive filesystem search. Subagents
 	// inherit the parent's resolved values via options.
 	const STARTUP_SCAN_DEADLINE_MS = 5000;
-	const emptyWorkspaceTree: WorkspaceTree = {
-		rootPath: cwd,
-		rendered: "",
-		truncated: false,
-		totalLines: 0,
-		agentsMdFiles: [],
-	};
-	const scanWorkspaceTree = (): Promise<WorkspaceTree> => {
+	const scanWorkspaceTree = (indexOnly = false): Promise<WorkspaceTree> => {
 		const scan = logger.time("buildWorkspaceTree", () =>
-			buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }),
+			buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS, indexOnly }),
 		);
 		scan.catch(() => {});
 		return scan;
@@ -1896,6 +1890,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		: cfgIncludeWorkspaceTree.get(settings)
 			? scanWorkspaceTree()
 			: undefined;
+	// The nested AGENTS.md index renders in every prompt, tree or not; without the tree the walk collects it alone.
+	const agentsMdIndexPromise: Promise<WorkspaceTree> = workspaceTreePromise ?? scanWorkspaceTree(true);
 	// Tree from a mid-session scan; supersedes the startup value handed to subagents.
 	let lateWorkspaceTree: WorkspaceTree | undefined;
 
@@ -2273,7 +2269,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const [initialContextFiles, resolvedWorkspaceTree, watchdogFiles, initialActiveRepoContext, discoveredAdvisors] =
 		await Promise.all([
 			contextFilesPromise,
-			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise ?? Promise.resolve(emptyWorkspaceTree)),
+			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise ?? agentsMdIndexPromise),
 			watchdogFilesPromise,
 			activeRepoContextPromise,
 			advisorConfigsPromise,
@@ -4172,8 +4168,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				writeTransportOnly:
 					toolSession.deviceOnlyWrite === true && toolSession.pendingFullWriteDescription !== true,
 				secretsEnabled: obfuscator?.obfuscates() === true,
-				workspaceTree: workspaceTreePromise ?? emptyWorkspaceTree,
+				workspaceTree: workspaceTreePromise ?? agentsMdIndexPromise,
 				includeWorkspaceTree,
+				nestedContextFiles: cfgContextFilesNested.get(settings),
 				memoryBackend: memoryBackend?.id,
 				securityEnabled: cfgSecurityEnabled.get(settings),
 				settingsApproval: toolSession.settingsApproval === true,
