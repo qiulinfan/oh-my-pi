@@ -4,6 +4,8 @@ import { listMayContinueAt } from "@oh-my-pi/pi-utils/marked-list";
 import type { ReactNode } from "react";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { escapeHtml } from "../../lib/format";
+import { getHljs } from "../../tool-render/util";
+import { footnoteExtension } from "./footnote";
 import { mathExtension } from "./math";
 
 function unescapeHtml(raw: string): string {
@@ -43,8 +45,16 @@ function unescapeHtml(raw: string): string {
 		}
 	});
 }
+/** A file name with a line (`notes.txt:12`, `a.ts:3:4`), which the URL parser would read as a scheme. */
+const FILE_WITH_LINE = /^[\w.-]+\.[\w-]+:\d+(?::\d+)?$/;
+
+/**
+ * The href a Markdown link may keep: web and mail links, relative paths, and `file:` links (omp writes a local path it
+ * resolved as one; a page that hosts omp, such as omp gui, opens them), or null for any other scheme.
+ */
 function safeHref(href: string): string | null {
 	const trimmed = href.trim();
+	if (FILE_WITH_LINE.test(trimmed)) return `./${trimmed}`;
 	let protocol: string;
 	try {
 		// Resolve the scheme exactly as the browser will: the URL parser strips leading
@@ -53,7 +63,7 @@ function safeHref(href: string): string | null {
 	} catch {
 		return null;
 	}
-	if (protocol === "https:" || protocol === "http:" || protocol === "mailto:") return trimmed;
+	if (protocol === "https:" || protocol === "http:" || protocol === "mailto:" || protocol === "file:") return trimmed;
 	return null; // unknown scheme (javascript:, data:, …)
 }
 
@@ -66,17 +76,29 @@ const md = new Marked({
 			if (cleaned === "") return "";
 			return escapeHtml(unescapeHtml(cleaned));
 		},
+		// A fenced block in a language the page's highlight.js knows is highlighted (omp gui and the HTML export
+		// load it); otherwise it stays plain. `language-*` names the fence either way (the GUI draws `mermaid`).
+		code({ text, lang }) {
+			const language = lang?.match(/^\S+/)?.[0];
+			const hljs = language ? getHljs() : null;
+			if (!language || !hljs?.getLanguage(language)) return false;
+			const body = hljs.highlight(text, { language, ignoreIllegals: true }).value;
+			return `<pre><code class="hljs language-${escapeHtml(language)}">${body}</code></pre>\n`;
+		},
 		link({ href, title, tokens }) {
 			const inner = this.parser.parseInline(tokens);
 			const url = safeHref(href);
 			if (url === null) return inner;
 			const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-			return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener">${inner}</a>`;
+			// Web pages open beside this one; a local path or page link stays for the host to handle.
+			const target = /^(?:https?|mailto):/i.test(url) ? ' target="_blank" rel="noopener"' : "";
+			return `<a href="${escapeHtml(url)}"${titleAttr}${target}>${inner}</a>`;
 		},
 	},
 	breaks: true,
 });
 md.use(mathExtension);
+md.use(footnoteExtension);
 
 function renderMarkdown(text: string): string {
 	try {

@@ -121,6 +121,19 @@ session at once, without redrawing it from the start; a restored session comes
 back in the mode it last ran in. The terminal is not affected: omp started from
 a terminal keeps its own display settings.
 
+In a session, each turn's work (thinking and tool calls) runs down a timeline
+on the left, and the assistant's answer sits at full width between those runs.
+Answers draw Markdown as the terminal reads it, plus what a browser can show:
+math typeset with KaTeX (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`; a `$` read as
+currency stays text, and a `|` inside a table cell's math stays in that cell),
+` ```mermaid ` fences as diagrams once the fence is closed, highlighted code
+fences, and footnotes. A web link opens in the browser. A link to a local path
+(`src/a.ts:12`, an absolute path, or the `file://` link omp writes for one)
+opens through the GUI server, relative to the session's directory: a folder is
+revealed in Finder, images, PDFs and other media open in their viewer, and
+every other file opens in the default text editor, so a link never runs a
+script or launches an app.
+
 Resuming a session the GUI already runs shows that session instead of starting
 a second omp on the same file. A session open in another omp process (a
 terminal, or one still shutting down) is waited for up to 10 s, then refused;

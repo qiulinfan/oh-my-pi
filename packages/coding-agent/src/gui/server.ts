@@ -46,6 +46,7 @@ import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-
 import { processStartToken } from "../utils/process-identity";
 import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } from "./hosted";
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
+import { openCommand, resolveLinkedPath } from "./open-link";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { isWorkDetail, WORK_DETAIL_INFO, WORK_DETAILS, type WorkDetail } from "@oh-my-pi/pi-tui/chat/work-detail";
@@ -1520,15 +1521,16 @@ class GuiHost implements SessionHost {
 	}
 
 	async #open(req: Request): Promise<Response> {
-		// Open a file the transcript links to (file:// hrefs) with the macOS default app.
-		const body = await readBody<{ href: string }>(req);
+		// Open a local file the transcript links to: a `file://` href, or a path written in Markdown (relative to the
+		// session's directory, `~/…`, or absolute, with an optional `:line[:col]`).
+		const body = await readBody<{ href: string; session?: string }>(req);
 		if (body instanceof Response) return body;
 		const href = typeof body.href === "string" ? body.href : "";
-		const file = href.startsWith("file://") ? decodeURIComponent(new URL(href).pathname) : "";
-		if (!file || !(await fs.promises.stat(file).catch(() => null)))
-			return fail(400, "bad-request", "not a local file");
-		Bun.spawn(["open", file], { stdout: "ignore", stderr: "ignore" });
-		return Response.json({ ok: true });
+		const cwd = typeof body.session === "string" ? this.sessions.get(body.session)?.info.cwd : undefined;
+		const file = await resolveLinkedPath(href, cwd);
+		if (!file) return fail(400, "bad-request", "not a local file");
+		Bun.spawn(openCommand(file.path, file.directory), { stdout: "ignore", stderr: "ignore" });
+		return Response.json({ ok: true, path: file.path });
 	}
 
 	async #peers(): Promise<Response> {

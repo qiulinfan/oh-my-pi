@@ -7,6 +7,7 @@ import {
 	PUNCTUATION,
 } from "./inline-closers";
 import { TextRun, TextStops } from "./inline-text";
+import { MathSpans } from "../math-delimiters";
 
 /** Token shapes emitted by the Markdown lexer. */
 export namespace Tokens {
@@ -762,15 +763,24 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 	return undefined;
 }
 
+/**
+ * The cells of a table row. A `|` inside an inline math span (`$|D|=3$`, `\\(p(x|y)\\)`) belongs to the formula,
+ * not the row, as the math renderers read it; a currency `$` opens no span, so "$5 | $10" still splits.
+ */
 function splitTableRow(line: string): string[] {
 	let value = line.trim();
 	if (value.startsWith("|")) value = value.slice(1);
 	if (value.endsWith("|") && !value.endsWith("\\|")) value = value.slice(0, -1);
 	const cells: string[] = [];
 	let cell = "";
+	const spans = value.includes("|") ? new MathSpans(value) : undefined;
 	for (let i = 0; i < value.length; i++) {
 		const char = value[i]!;
-		if (char === "|" && value[i - 1] !== "\\") {
+		const span = (char === "$" || char === "\\") && spans ? spans.spanAt(i) : undefined;
+		if (span && !span.display && value[i - 1] !== "\\") {
+			cell += value.slice(i, span.end);
+			i = span.end - 1;
+		} else if (char === "|" && value[i - 1] !== "\\") {
 			cells.push(cell.trim());
 			cell = "";
 		} else cell += char;

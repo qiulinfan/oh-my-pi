@@ -15,8 +15,10 @@
 	"dependencies": {
 		"@oh-my-pi/collab-web": "workspace:*",
 		"@oh-my-pi/pi-wire": "workspace:*",
+		"highlight.js": "catalog:",
 		"katex": "catalog:",
 		"lucide-react": "catalog:",
+		"mermaid": "catalog:",
 		"react": "catalog:",
 		"react-dom": "catalog:"
 	},

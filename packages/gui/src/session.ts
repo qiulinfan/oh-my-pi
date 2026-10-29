@@ -289,9 +289,12 @@ export class SessionConnection {
 		this.#send({ t: "ev", ev });
 	}
 
-	/** Open a `file://` link with the machine's default app (the server runs `open`). */
+	/**
+	 * Open a local link: a `file://` href, or a path from Markdown, which the server reads relative to this session's
+	 * directory. The server opens it with the machine's viewer or text editor, never running it.
+	 */
 	openHref(href: string): void {
-		api("/api/open", { href }).catch(() => {});
+		api("/api/open", { href, session: this.info?.id }).catch(() => {});
 	}
 
 	/** The view's size; sent now and again with every `init`, so omp lays out for this view after a reconnect. */

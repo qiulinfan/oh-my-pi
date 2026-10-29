@@ -17,14 +17,26 @@ function typesettable(span: MathSpan): boolean {
 	return !span.body.includes("`");
 }
 
+/**
+ * KaTeX's output for transcript math. MathML alone needs no stylesheet, but Chromium's MathML Core ignores
+ * `mathvariant`, so `\\mathbb{R}` and `\\mathcal{L}` draw as plain letters there; a page that loads
+ * `katex.min.css` (omp gui) switches to KaTeX's HTML, with the MathML kept for screen readers.
+ */
+let katexOutput: "mathml" | "htmlAndMathml" = "mathml";
+
+/** Draw transcript math with KaTeX's HTML; call once at startup on a page that loads `katex.min.css`. */
+export function drawMathWithKatexHtml(): void {
+	katexOutput = "htmlAndMathml";
+}
+
 function renderMath(token: Tokens.Generic): string | false {
 	if (token.type !== "math" || typeof token.text !== "string" || typeof token.display !== "boolean") return false;
 	try {
 		const math = renderToString(token.text, {
 			displayMode: token.display,
 			// KaTeX's HTML output needs katex.min.css, which bundles to ~940 KB
-			// gzipped here because Bun inlines its 60 @font-face sources.
-			output: "mathml",
+			// gzipped here because Bun inlines its 60 @font-face sources (see katexOutput).
+			output: katexOutput,
 			throwOnError: false,
 			// `trust: false` refuses \href, \htmlClass, \includegraphics.
 			strict: false,
@@ -47,11 +59,9 @@ function renderMath(token: Tokens.Generic): string | false {
  * scan hint come from `@oh-my-pi/pi-utils/math-delimiters`, so this renderer and
  * the TUI agree on what counts as math; only presentation policy lives here.
  *
- * Two limits follow from that shared behavior, both matching the TUI: a rejected
- * opener hides later spans on its line ("it costs $5, and the growth is $x^2$"
- * typesets nothing, since marked drops a start hint at its own position), and a
- * display block whose body contains a blank line must be preceded by one —
- * attached blocks are tokenized by the inline rule, which a blank line ends.
+ * One limit follows from that shared behavior, matching the TUI: a display block
+ * whose body contains a blank line must be preceded by one — attached blocks are
+ * tokenized by the inline rule, which a blank line ends.
  */
 export const mathExtension: MarkedExtension = {
 	extensions: [

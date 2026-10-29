@@ -8,7 +8,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { TspNode } from "@oh-my-pi/pi-wire";
 import type { KeyboardEvent } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { disclosureHead, N, SurfaceContext } from "../src/render";
+import { disclosureHead, N, SurfaceContext, Transcript } from "../src/render";
 import type { SessionConnection } from "../src/session";
 import { SurfaceStore } from "../src/store";
 
@@ -146,5 +146,36 @@ describe("json", () => {
 		const html = draw({ id: "j", k: "json", p: { value, open: 1 } });
 		expect(html.match(/<details class="json-node" open="">/g)?.length).toBe(2);
 		expect(html).toContain("item-29");
+	});
+});
+
+// The answer used to sit on the timeline rail with the work; it belongs at full width, between runs of work.
+describe("turns", () => {
+	const md = (id: string, text: string): TspNode => ({ id, k: "md", p: { text } });
+	const thought: TspNode = { id: "a1.think", k: "section", p: { role: "omp.thinking", title: "Thought" }, c: [] };
+
+	test("thinking and tools ride the rail; the assistant's prose sits between them off it", () => {
+		const main: TspNode = {
+			id: "main",
+			k: "col",
+			c: [
+				{ id: "u", k: "md", p: { role: "omp.user", text: "explain" } },
+				{ id: "a1", k: "col", p: { role: "omp.assistant" }, c: [thought, md("a1.text", "First, a look.")] },
+				tool({ collapsible: true, collapsed: true }),
+				{ id: "a2", k: "col", p: { role: "omp.assistant" }, c: [md("a2.text", "The answer.")] },
+			],
+		};
+		const store = new SurfaceStore(SF, { id: SF, k: "col", c: [main] });
+		const html = renderToStaticMarkup(
+			<SurfaceContext.Provider value={{ store, sf: SF, session: {} as unknown as SessionConnection }}>
+				<Transcript id="main" />
+			</SurfaceContext.Provider>,
+		);
+		const blocks = Array.from(html.matchAll(/<div class="(steps|answer)">/g), match => match[1]);
+		expect(blocks).toEqual(["steps", "answer", "steps", "answer"]);
+		const [, rail, first, , second] = html.split(/<div class="(?:steps|answer)">/);
+		expect(rail).toContain("Thought");
+		expect(first).toContain("First, a look.");
+		expect(second).toContain("The answer.");
 	});
 });
