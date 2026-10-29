@@ -93,6 +93,7 @@ const fastWorkspacePackages = [
 	"packages/snapcompact",
 	"packages/agent",
 	"packages/mnemopi",
+	"packages/gui",
 ];
 
 // These suites cover the native package, TUI/browser-ish behavior, local servers,
@@ -104,6 +105,33 @@ const nativeAndIntegrationPackages = [
 	"packages/collab-web",
 	"packages/typescript-edit-benchmark",
 ];
+
+// desktop/ is not a workspace package (Electron's Node runs it), and the root type check skips it.
+// Its `bun run check` type-checks it, then runs its tests, which import only its Electron-free
+// modules; bun appends the extra args here and the runner's `--parallel`/`--timeout` to the end of
+// that script, so they reach its closing `bun test`.
+const desktopTestCommand: TestCommand = {
+	label: "desktop (type check and tests)",
+	cwd: "desktop",
+	command: ["bun", "run", "check", ...onlyFailuresArgs],
+	parallel: 8,
+};
+
+// The type check needs desktop's own dependencies (Electron's typings), which the root install does
+// not provide: install them in a checkout that never did. `--ignore-scripts` skips the Electron
+// runtime download, which neither the type check nor the tests need.
+async function ensureDesktopDependencies(): Promise<void> {
+	const desktop = path.join(repoRoot, "desktop");
+	if (await Bun.file(path.join(desktop, "node_modules", "electron", "electron.d.ts")).exists()) return;
+	console.log("==> desktop: installing its dependencies for the type check (without the Electron runtime)");
+	const proc = Bun.spawn(["bun", "install", "--frozen-lockfile", "--ignore-scripts"], {
+		cwd: desktop,
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	const exitCode = await proc.exited;
+	if (exitCode !== 0) throw new Error(`desktop: bun install failed with exit code ${exitCode}`);
+}
 
 const projectToolTestCommand: TestCommand = {
 	label: ".omp/tests (project-local TUI debug tool)",
@@ -332,7 +360,7 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
-			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
+			return [...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8)), desktopTestCommand];
 		case "native":
 			return [...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4)), projectToolTestCommand];
 		case "coding-agent-singleton":
@@ -364,6 +392,7 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "local-ts":
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
+				desktopTestCommand,
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				projectToolTestCommand,
 				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
@@ -1023,6 +1052,9 @@ const poolWidth = pooled
 	? testConcurrency(requestedCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
 	: 1;
 const testCommands = applyChunkBudget(requestedCommands, poolWidth);
+if (!isDryRun && requestedCommands.includes(desktopTestCommand)) {
+	await ensureDesktopDependencies();
+}
 if (pooled && !isDryRun) {
 	await runTestCommandsInParallel(testCommands, poolWidth);
 } else {
