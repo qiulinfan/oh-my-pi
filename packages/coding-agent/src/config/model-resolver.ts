@@ -11,11 +11,13 @@ import {
  * Layering:
  * - `matchModel` is the single matching engine. Order: exact `provider/id`
  *   reference (with variant-alias and OpenRouter routed/date fallbacks) →
- *   exact bare id → retired variant alias → provider-scoped fuzzy → substring
- *   with alias-vs-dated pick.
+ *   exact bare id → retired variant alias → taxonomy family selector →
+ *   provider-scoped fuzzy → substring with alias-vs-dated pick.
  * - `parseModelPatternWithContext`/`parseModelPattern` layer the selector
  *   grammar on top: trailing `:level` thinking suffixes (`splitThinkingSuffix`)
- *   and `@upstream` provider routing (`splitUpstreamRouting`).
+ *   and `@upstream` provider routing (`splitUpstreamRouting`). `parseSelector`
+ *   applies the match policy: a fuzzy/substring pick carries a substitution
+ *   warning, and `model.exactMatch` refuses it.
  * - Everything else (`resolveModelFromString`, `resolveModelOverride*`,
  *   `resolveRoleSelection`, `resolveModelScope`, `resolveCliModel`,
  *   `findSmolModel`/`findSlowModel`) adapts inputs — roles, settings patterns,
@@ -29,7 +31,8 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { resolveBareVariantSelector, resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
-import { collapseVariantId, stripThinkingVariantSuffix } from "@oh-my-pi/pi-catalog/compat/taxonomy";
+import { collapseVariantId, familySelector, stripThinkingVariantSuffix } from "@oh-my-pi/pi-catalog/compat/taxonomy";
+import { compareRevision, parseRevision, type Revision } from "@oh-my-pi/pi-catalog/compat/revision";
 import { modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -58,7 +61,7 @@ import {
 } from "./model-roles";
 import type { Settings } from "./settings";
 
-import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
+import { cfgDisabledProviders, cfgEnabledModels, cfgModelExactMatch, cfgModelProviderOrder } from "./model-settings";
 import { cfgRetryFallbackChains } from "../session/settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
@@ -510,6 +513,11 @@ export interface ModelMatchPreferences {
 	providerOrder?: readonly string[];
 	/** Providers to deprioritize when no recent usage or provider priority is available. */
 	deprioritizeProviders?: string[];
+	/**
+	 * Refuse approximate matches of user-written selectors (`model.exactMatch`):
+	 * only exact ids, `provider/id` references, and catalog-defined aliases resolve.
+	 */
+	exactMatch?: boolean;
 }
 
 export type ModelLookupRegistry = Pick<ModelRegistry, "getAvailable">;
@@ -541,6 +549,7 @@ interface ModelPreferenceContext {
 	providerPriorityRank: Map<string, number>;
 	deprioritizedProviders: Set<string>;
 	modelOrder: Map<string, number>;
+	exactMatch: boolean;
 }
 
 function buildPreferenceContext(
@@ -564,7 +573,14 @@ function buildPreferenceContext(
 	const deprioritizedProviders = new Set(preferences?.deprioritizeProviders ?? []);
 	const modelOrder = getModelOrderIndex(availableModels);
 
-	return { modelUsageRank, providerUsageRank, providerPriorityRank, deprioritizedProviders, modelOrder };
+	return {
+		modelUsageRank,
+		providerUsageRank,
+		providerPriorityRank,
+		deprioritizedProviders,
+		modelOrder,
+		exactMatch: preferences?.exactMatch === true,
+	};
 }
 
 export function getModelMatchPreferences(settings?: Settings): ModelMatchPreferences {
@@ -572,6 +588,7 @@ export function getModelMatchPreferences(settings?: Settings): ModelMatchPrefere
 	return {
 		usageOrder: settings.getStorage()?.getModelUsageOrder(),
 		providerOrder: cfgModelProviderOrder.get(settings),
+		exactMatch: cfgModelExactMatch.get(settings),
 	};
 }
 
@@ -584,6 +601,7 @@ function mergeModelMatchPreferences(
 		usageOrder: preferences?.usageOrder ?? settingsPreferences.usageOrder,
 		providerOrder: preferences?.providerOrder ?? settingsPreferences.providerOrder,
 		deprioritizeProviders: preferences?.deprioritizeProviders,
+		exactMatch: preferences?.exactMatch ?? settingsPreferences.exactMatch,
 	};
 }
 
@@ -722,11 +740,78 @@ function findExactModelReferenceMatch(modelReference: string, availableModels: M
 	return undefined;
 }
 /**
+ * A model's revision for ordering family members. Ids that drop the separator
+ * between major and minor (`claude-opus-45`) classify as a two-digit whole
+ * number; the class rules read `>=10` revisions as that collapsed form, and so
+ * does this ordering (`45` → 4.5), so such an id never outranks a real 5.x.
+ */
+function familyOrderRevision(model: Model<Api>): Revision | undefined {
+	const revision = model.identity.revision ? parseRevision(model.identity.revision) : undefined;
+	if (revision && revision[0] >= 10 && revision[1] === 0 && revision[2] === 0) {
+		return [Math.floor(revision[0] / 10), revision[0] % 10, 0];
+	}
+	return revision;
+}
+
+/**
+ * Resolve a family selector word (`haiku`, or `anthropic/haiku` within one
+ * provider) to the newest available revision of that family. Only families the
+ * catalog taxonomy declares with `selector=#true` qualify; membership comes from
+ * each model's classified identity, never from its id spelling. Among the
+ * newest revision, chat models, plain ids (no collapsed effort or thinking
+ * variant) and undated aliases win before the usual preference ranking.
+ */
+function resolveFamilySelector(
+	modelPattern: string,
+	availableModels: Model<Api>[],
+	context: ModelPreferenceContext,
+): Model<Api> | undefined {
+	const slashIndex = modelPattern.indexOf("/");
+	const selector = familySelector(slashIndex === -1 ? modelPattern : modelPattern.slice(slashIndex + 1));
+	if (!selector) return undefined;
+	const provider = slashIndex === -1 ? undefined : modelPattern.slice(0, slashIndex).trim().toLowerCase();
+	let members = availableModels.filter(
+		model =>
+			model.identity.class === selector.class &&
+			model.identity.family === selector.family &&
+			(provider === undefined || model.provider.toLowerCase() === provider),
+	);
+	const narrow = (keep: (model: Model<Api>) => boolean) => {
+		const kept = members.filter(keep);
+		if (kept.length > 0) members = kept;
+	};
+	narrow(model => modelKind(model) === "chat");
+	narrow(model => model.identity.effort === undefined && model.identity.thinkingVariant !== true);
+	let newestRevision: Revision | undefined;
+	let newest: Model<Api>[] = [];
+	for (const model of members) {
+		const revision = familyOrderRevision(model);
+		const order =
+			newest.length === 0
+				? 1
+				: revision === undefined || newestRevision === undefined
+					? Number(revision !== undefined) - Number(newestRevision !== undefined)
+					: compareRevision(revision, newestRevision);
+		if (order > 0) {
+			newestRevision = revision;
+			newest = [model];
+		} else if (order === 0) {
+			newest.push(model);
+		}
+	}
+	if (newest.length === 0) return undefined;
+	members = newest;
+	narrow(model => isAlias(model.id));
+	return pickPreferredModel(members, context);
+}
+
+/**
  * The single model-matching engine. Tries, in order:
  * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
  *    fallbacks included),
  * 2. exact bare id (preference-ranked),
- * 3. retired effort-tier variant alias (collapsed catalog entries),
+ * 3. retired effort-tier variant alias (collapsed catalog entries) and
+ *    taxonomy family selectors (`haiku` → the newest Haiku),
  * 4. provider-scoped fuzzy match,
  * 5. substring match with the alias-vs-dated pick.
  * Returns the matched model or undefined if no match found.
@@ -782,6 +867,11 @@ function matchModel(
 			const preferred = bareAlias ? aliasMatches.filter(m => bareAlias.providers.includes(m.provider)) : [];
 			return pickPreferredModel(preferred.length > 0 ? preferred : aliasMatches, context);
 		}
+	}
+
+	const familyMatch = resolveFamilySelector(modelPattern, availableModels, context);
+	if (familyMatch) {
+		return familyMatch;
 	}
 
 	// Exact phases exhausted. Fuzzy/substring fallbacks (below) subsequence-match
@@ -890,8 +980,36 @@ export interface ParsedModelResult {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Upstream provider slug from an `@upstream` routing selector, if present. */
 	upstream?: string;
+	/**
+	 * User-facing warning: an approximate match that runs a different model than
+	 * the selector names, and/or an invalid `:level` suffix that was ignored.
+	 */
 	warning: string | undefined;
 	explicitThinkingLevel: boolean;
+}
+
+/** A parse plus whether its model came from the fuzzy/substring phases. */
+interface PatternParse extends ParsedModelResult {
+	inexact: boolean;
+}
+
+interface PatternParseOptions {
+	allowInvalidThinkingSelectorFallback?: boolean;
+	/** Skip the fuzzy/substring phases at every level of the selector grammar. */
+	exactOnly?: boolean;
+}
+
+const NO_MATCH: PatternParse = {
+	model: undefined,
+	thinkingLevel: undefined,
+	warning: undefined,
+	explicitThinkingLevel: false,
+	inexact: false,
+};
+
+/** A substring match on the display name that equals the selector names that model exactly. */
+function isNameMatch(pattern: string, model: Model<Api>): boolean {
+	return model.name?.toLowerCase() === pattern.trim().toLowerCase();
 }
 
 /**
@@ -904,14 +1022,15 @@ export interface ParsedModelResult {
  *    - If the suffix is a valid thinking level, use it and recurse on the prefix
  *    - If the suffix is invalid, warn and recurse on the prefix
  *
- * @internal Exported for testing
+ * The result records whether the model came from the fuzzy/substring phases
+ * (`inexact`); {@link parseSelector} turns that into the substitution warning.
  */
 function parseModelPatternWithContext(
 	pattern: string,
 	availableModels: Model<Api>[],
 	context: ModelPreferenceContext,
-	options?: { allowInvalidThinkingSelectorFallback?: boolean },
-): ParsedModelResult {
+	options?: PatternParseOptions,
+): PatternParse {
 	// Exact match on the full pattern first (no fuzzy): a literal id that
 	const exactMatch = matchModel(pattern, availableModels, context, { exactOnly: true });
 	if (exactMatch) {
@@ -921,6 +1040,7 @@ function parseModelPatternWithContext(
 			thinkingLevel,
 			warning: undefined,
 			explicitThinkingLevel: thinkingLevel !== undefined,
+			inexact: false,
 		};
 	}
 
@@ -929,13 +1049,14 @@ function parseModelPatternWithContext(
 	// fuzzy results (e.g. `kimi-for-coding-highspeed`) cannot absorb the suffix.
 	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
-		const literalSuffixMatch = matchModel(pattern, availableModels, context);
+		const literalSuffixMatch = options?.exactOnly ? undefined : matchModel(pattern, availableModels, context);
 		if (literalSuffixMatch?.id.toLowerCase().endsWith(`:${level}`)) {
 			return {
 				model: literalSuffixMatch,
 				thinkingLevel: undefined,
 				warning: undefined,
 				explicitThinkingLevel: false,
+				inexact: !isNameMatch(pattern, literalSuffixMatch),
 			};
 		}
 
@@ -953,6 +1074,7 @@ function parseModelPatternWithContext(
 				thinkingLevel: explicitThinkingLevel ? level : undefined,
 				warning: result.warning,
 				explicitThinkingLevel,
+				inexact: result.inexact,
 			};
 		}
 		return result;
@@ -960,22 +1082,28 @@ function parseModelPatternWithContext(
 
 	// No valid thinking suffix: fall back to fuzzy/substring matching on the
 	// whole pattern.
-	const fallbackMatch = matchModel(pattern, availableModels, context);
+	const fallbackMatch = options?.exactOnly ? undefined : matchModel(pattern, availableModels, context);
 	if (fallbackMatch) {
-		return { model: fallbackMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return {
+			model: fallbackMatch,
+			thinkingLevel: undefined,
+			warning: undefined,
+			explicitThinkingLevel: false,
+			inexact: !isNameMatch(pattern, fallbackMatch),
+		};
 	}
 
 	const lastColonIndex = pattern.lastIndexOf(":");
 	if (lastColonIndex === -1) {
 		// No colons, pattern simply doesn't match any model
-		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return NO_MATCH;
 	}
 	const prefix = pattern.substring(0, lastColonIndex);
 	const suffix = pattern.substring(lastColonIndex + 1);
 
 	const allowFallback = options?.allowInvalidThinkingSelectorFallback ?? true;
 	if (!allowFallback) {
-		return { model: undefined, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
+		return NO_MATCH;
 	}
 
 	// Invalid suffix - recurse on prefix and warn
@@ -986,9 +1114,51 @@ function parseModelPatternWithContext(
 			thinkingLevel: undefined,
 			warning: `Invalid thinking level "${suffix}" in pattern "${pattern}". Using default instead.`,
 			explicitThinkingLevel: false,
+			inexact: result.inexact,
 		};
 	}
 	return result;
+}
+
+let catalogRoleSelectors: Set<string> | undefined;
+
+/**
+ * Whether `pattern` is one of the selectors the catalog's own role chains
+ * declare (`role-defaults` in KDL, e.g. `haiku-4.5`, `flash-lite`). Those are
+ * catalog aliases, not user typos: they keep their approximate resolution under
+ * `model.exactMatch` and never warn. A trailing `:level` suffix is ignored.
+ */
+function isCatalogRoleSelector(pattern: string): boolean {
+	catalogRoleSelectors ??= new Set(
+		Object.values(roleDefaultModels()).flatMap(selectors => selectors.map(selector => selector.toLowerCase())),
+	);
+	const lower = pattern.trim().toLowerCase();
+	if (catalogRoleSelectors.has(lower)) return true;
+	const { base, level } = splitThinkingSuffix(lower, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	return level !== undefined && catalogRoleSelectors.has(base);
+}
+
+/**
+ * Parse one selector under the match policy. With `exactMatch` on, the
+ * fuzzy/substring phases are skipped (catalog role selectors excepted). With it
+ * off, a model those phases pick comes back with a substitution warning naming
+ * what actually runs, so a typo or a version missing from the catalog never
+ * silently runs another model.
+ */
+function parseSelector(
+	pattern: string,
+	availableModels: Model<Api>[],
+	context: ModelPreferenceContext,
+	options?: { allowInvalidThinkingSelectorFallback?: boolean },
+): ParsedModelResult {
+	const catalogSelector = isCatalogRoleSelector(pattern);
+	const { inexact, ...result } = parseModelPatternWithContext(pattern, availableModels, context, {
+		...options,
+		exactOnly: context.exactMatch && !catalogSelector,
+	});
+	if (!result.model || !inexact || catalogSelector) return result;
+	const substitution = `"${pattern}" is not a known model; using ${formatModelString(result.model)}`;
+	return { ...result, warning: result.warning ? `${substitution}. ${result.warning}` : substitution };
 }
 
 /** Match a single pattern with a pre-built preference context (direct match plus
@@ -1000,7 +1170,7 @@ function matchPatternWithContext(
 	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean },
 ): ParsedModelResult {
-	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
+	const direct = parseSelector(pattern, availableModels, context, options);
 	if (direct.model) return direct;
 
 	// No direct match: a trailing `@upstream` may be a provider-routing selector.
@@ -1008,7 +1178,7 @@ function matchPatternWithContext(
 	// Vercel Gateway); otherwise `@` stays part of the id and `direct` stands.
 	const routing = splitUpstreamRouting(pattern);
 	if (routing) {
-		const routed = parseModelPatternWithContext(routing.base, availableModels, context, options);
+		const routed = parseSelector(routing.base, availableModels, context, options);
 		if (routed.model && supportsUpstreamRouting(routed.model)) {
 			return { ...routed, model: applyUpstreamRouting(routed.model, routing.upstream), upstream: routing.upstream };
 		}
@@ -1606,6 +1776,36 @@ export function resolveRoleChain(role: string, settings: Settings, pool: Model<A
 }
 
 /**
+ * Startup check of the configured `modelRoles`: one warning per role whose
+ * selector only approximately matches a model (it would run another model than
+ * it names) or, under `model.exactMatch`, matches nothing. A role is resolved
+ * against the authenticated models first and the full catalog second, so a
+ * provider without credentials is not reported as a typo. Roles whose value is
+ * another role alias (`@smol`) are skipped: the aliased role reports itself.
+ */
+export function modelRoleSelectorWarnings(
+	settings: Settings,
+	modelRegistry: Pick<ModelRegistry, "getAll" | "getAvailable">,
+): string[] {
+	const warnings: string[] = [];
+	const matchPreferences = getModelMatchPreferences(settings);
+	const roles = settings.getModelRoles();
+	for (const role of Object.keys(roles)) {
+		const value = roles[role]?.trim();
+		if (!value || value === DEFAULT_MODEL_ROLE || modelRoleAliasPrefixLength(value) !== undefined) continue;
+		const options = { settings, matchPreferences };
+		const available = resolveModelRoleValue(value, modelRegistry.getAvailable(), options);
+		const resolved = available.model ? available : resolveModelRoleValue(value, modelRegistry.getAll(), options);
+		if (resolved.model) {
+			if (resolved.warning) warnings.push(`modelRoles.${role}: ${resolved.warning}`);
+		} else if (matchPreferences.exactMatch) {
+			warnings.push(`modelRoles.${role}: "${value}" matches no model exactly (model.exactMatch is on)`);
+		}
+	}
+	return warnings;
+}
+
+/**
  * Resolve a list of override patterns to the first matching model.
  */
 export function resolveModelOverride(
@@ -1826,12 +2026,16 @@ export function resolveAdvisorRoleSelection(
  * Supports models with colons in their IDs (e.g., OpenRouter's model:exacto).
  * The algorithm tries to match the full pattern first, then progressively
  * strips colon-suffixes to find a match.
+ *
+ * Resolution warnings (an approximate match, an invalid `:level`) go to
+ * `onWarning`; it defaults to the log so settings-driven rebuilds stay quiet.
  */
 export async function resolveModelScope(
 	patterns: string[],
 	modelRegistry: Pick<ModelRegistry, "getAvailable">,
 	preferences?: ModelMatchPreferences,
 	settings?: Settings,
+	onWarning: (warning: string) => void = warning => logger.warn(warning),
 ): Promise<ScopedModel[]> {
 	const availableModels = modelRegistry.getAvailable();
 	const context = buildPreferenceContext(availableModels, preferences);
@@ -1854,8 +2058,7 @@ export async function resolveModelScope(
 		runnerModels ??= modelRegistry.getAvailable("all").filter(model => modelKind(model) !== "chat");
 		const namesRunner = glob
 			? resolveGlobScopePattern(pattern, runnerModels).models.length > 0
-			: parseModelPatternWithContext(pattern, runnerModels, buildPreferenceContext(runnerModels, preferences))
-					.model !== undefined;
+			: parseSelector(pattern, runnerModels, buildPreferenceContext(runnerModels, preferences)).model !== undefined;
 		if (namesRunner) {
 			logger.debug(`Scope pattern "${pattern}" names a non-chat model; it stays out of the chat scope`);
 			return;
@@ -1891,7 +2094,7 @@ export async function resolveModelScope(
 		// glob above; scope semantics, not the default-role alias.)
 		if (settings && modelRoleAliasPrefixLength(pattern) !== undefined) {
 			const resolved = resolveModelRoleValue(pattern, availableModels, { settings, matchPreferences: preferences });
-			if (resolved.warning) logger.warn(resolved.warning);
+			if (resolved.warning) onWarning(resolved.warning);
 			if (!resolved.model) {
 				logger.warn(`No models match pattern "${pattern}"`);
 				continue;
@@ -1904,14 +2107,10 @@ export async function resolveModelScope(
 			continue;
 		}
 
-		const { model, thinkingLevel, warning, explicitThinkingLevel } = parseModelPatternWithContext(
-			pattern,
-			availableModels,
-			context,
-		);
+		const { model, thinkingLevel, warning, explicitThinkingLevel } = parseSelector(pattern, availableModels, context);
 
 		if (warning) {
-			logger.warn(warning);
+			onWarning(warning);
 		}
 
 		if (!model) {
@@ -1986,7 +2185,9 @@ export function filterAvailableModelsByEnabledPatterns(
 ): Model<Api>[] {
 	if (patterns.length === 0) return available;
 
-	const context = buildPreferenceContext(available, undefined);
+	const context = buildPreferenceContext(available, {
+		exactMatch: settings ? cfgModelExactMatch.get(settings) : undefined,
+	});
 	const allowedModels: Model<Api>[] = [];
 	const addAllowed = (model: Model<Api>) => {
 		allowedModels.push(model);
@@ -2007,7 +2208,7 @@ export function filterAvailableModelsByEnabledPatterns(
 			continue;
 		}
 
-		const { model } = parseModelPatternWithContext(pattern, available, context);
+		const { model } = parseSelector(pattern, available, context);
 		if (model) {
 			addAllowed(model);
 		}
@@ -2143,6 +2344,14 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 	};
 }
 
+/** The CLI "not found" error; under `model.exactMatch` it says why a near match was not used. */
+function modelNotFoundError(selector: string, preferences: ModelMatchPreferences): string {
+	const hint = preferences.exactMatch
+		? " Exact model matching is on (model.exactMatch / --exact-model), so near matches are not used."
+		: "";
+	return `Model "${selector}" not found.${hint} Run "omp models" to see available models.`;
+}
+
 function resolveCliModelInScope(
 	options: CliModelOptions & { cliModel: string },
 	scope: CliModelScope,
@@ -2259,7 +2468,7 @@ function resolveCliModelInScope(
 					selector: undefined,
 					thinkingLevel: undefined,
 					warning: resolved.warning,
-					error: `Model "${trimmedModel}" not found. Run "omp models" to see available models.`,
+					error: modelNotFoundError(trimmedModel, preferences),
 				};
 			}
 		}
@@ -2319,7 +2528,7 @@ function resolveCliModelInScope(
 			selector: undefined,
 			thinkingLevel: undefined,
 			warning,
-			error: `Model "${display}" not found. Run "omp models" to see available models.`,
+			error: modelNotFoundError(display, preferences),
 		};
 	}
 

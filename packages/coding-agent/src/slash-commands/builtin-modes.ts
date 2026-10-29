@@ -72,6 +72,11 @@ function resolveSessionModelSelector(
 	});
 }
 
+/** Command output for a model switch, led by the resolver's warning when the selector only approximately matched. */
+function withSelectorWarning(message: string, resolved: ResolveCliModelResult): string {
+	return resolved.warning ? `Warning: ${resolved.warning}\n${message}` : message;
+}
+
 async function runWithDetachedModeDraft(
 	command: ParsedSlashCommand,
 	runtime: TuiSlashCommandRuntime,
@@ -476,7 +481,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					await runtime.session.setModel(match);
 					if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
-					await runtime.output(`Model set to ${match.provider}/${match.id}.`);
+					await runtime.output(withSelectorWarning(`Model set to ${match.provider}/${match.id}.`, resolved));
 					await runtime.notifyTitleChanged?.();
 					await runtime.notifyConfigChanged?.();
 					return commandConsumed();
@@ -523,7 +528,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (!resolved.model) return usage(`Unknown model: ${selector}`, runtime);
 			try {
 				await runtime.session.setModelTemporary(resolved.model, resolved.thinkingLevel);
-				await runtime.output(`Session-only model: ${formatModelString(resolved.model)}.`);
+				await runtime.output(
+					withSelectorWarning(`Session-only model: ${formatModelString(resolved.model)}.`, resolved),
+				);
 				await runtime.notifyTitleChanged?.();
 				await runtime.notifyConfigChanged?.();
 				return commandConsumed();
@@ -543,7 +550,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showError(`Unknown model: ${selector}`);
 				return;
 			}
-			if (resolved.warning) runtime.ctx.showStatus(resolved.warning);
+			if (resolved.warning) runtime.ctx.showWarning(resolved.warning);
 			await runtime.ctx.switchSessionModel(resolved.model, resolved.thinkingLevel);
 		},
 	},

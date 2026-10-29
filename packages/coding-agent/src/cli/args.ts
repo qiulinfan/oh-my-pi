@@ -56,6 +56,8 @@ export interface Args {
 	workDetail?: WorkDetail;
 	advisor?: boolean;
 	externalThinking?: boolean;
+	/** `--exact-model`: a model selector must name a model exactly for this run (`model.exactMatch`). */
+	exactModel?: boolean;
 	continue?: boolean;
 	resume?: string | true;
 	/**
@@ -365,6 +367,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.advisor = true;
 		} else if (arg === "--external-thinking") {
 			result.externalThinking = true;
+		} else if (arg === "--exact-model") {
+			result.exactModel = true;
 		} else if (arg === "--prewalk") {
 			result.prewalk = true;
 		} else if (arg === "--no-prewalk") {

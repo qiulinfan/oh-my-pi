@@ -3010,6 +3010,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		resolvedThinkingLevel: progress.resolvedThinkingLevel,
 		resolvedModelIsFallback: progress.resolvedModelIsFallback,
 		resolvedModelRoute: progress.resolvedModelRoute,
+		resolvedModelWarning: progress.resolvedModelWarning,
 		advisor: progress.advisor,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
 		aborted: wasAborted,
@@ -4447,6 +4448,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					warning: modelResolutionWarning,
 					requested: modelPatterns,
 				});
+				// Shown under the task row, so an approximate match
+				// (`"claude-haku-4-5" is not a known model; using …`) is never silent.
+				progress.resolvedModelWarning = modelResolutionWarning;
 			}
 			if (authFallbackUsed && model) {
 				logger.warn("Subagent model has no working credentials; falling back to parent session model", {

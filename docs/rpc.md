@@ -49,6 +49,8 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
 }
 ```
 
+Right after `ready`, the server sends one unfiltered `{ type: "notice", level: "warning", source: "model-resolution", message }` frame per model selector that resolved only approximately at startup (`--model`, `--models`, configured `modelRoles`), for example `"anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5`. Hosts should show these to the user; with `--exact-model` (or `model.exactMatch`) such a selector is an error instead.
+
 Clients that support protocol v2 SHOULD immediately send:
 
 ```json
@@ -873,7 +875,7 @@ Extension runner errors are emitted separately as:
 
 `message_start`, `message_update`, and `message_end` carry a `messageId` string assigned by RPC mode. One message keeps the same id from its start through every update to its end; ids are unique within the process. Records injected mid-stream (advisor cards, IRC messages) get their own id and do not disturb the id of the reply streaming around them.
 
-`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence and `btw-history` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
+`set_event_filter` restricts which session event frames are written: pass the event `type` strings to forward, or `null` to forward everything (the default). The response echoes the active selection as `{ events, messageUpdates }`. The filter applies to all events emitted through the session subscription, not just the common types listed above; every other outbound category (responses, `prompt_result`, `session_settled`, extension UI and host tool/URI requests, `extension_error`, `available_commands_update`, subagent frames, side-question frames, builtin slash-command side channels, and session-persistence, `btw-history` and startup `model-resolution` `notice` frames) is unaffected by this filter. Hosts that fail closed on unknown event kinds can pin the set they understand here instead of breaking when OMP adds an event.
 
 The optional `messageUpdates: "delta"` projects only `message_update` frames to `{ type: "message_update", messageId, message: { role }, assistantMessageEvent }`: `assistantMessageEvent.partial` is omitted, while all other event fields (including subtype, `delta`, and `contentIndex`) are preserved. `message_start`, `message_end`, and all other frames are unchanged; `message_end` still carries the full message. Block-ending events such as `text_end`, `thinking_end`, and `toolcall_end` retain their block content or tool call, so hosts must still accept chunked protocol-v2 frames for large blocks and full messages. Switching modes mid-message does not change its `messageId`. The projection applies to the session's own frames only: `subagent_event` payloads forwarded under `set_subagent_subscription` level `"events"` keep their full `message_update` snapshots.
 

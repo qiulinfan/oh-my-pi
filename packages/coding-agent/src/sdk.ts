@@ -79,6 +79,7 @@ import {
 	resolveAllowedModels,
 	resolveCliModel,
 	type ResolveCliModelResult,
+	modelRoleSelectorWarnings,
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 	resolveSessionModelSelector,
@@ -654,6 +655,13 @@ export interface CreateAgentSessionOptions {
 	deferredPrewalk?: { target: string; patterns: string[] };
 	/** Host-owned display sink for non-fatal startup prewalk warnings. */
 	onPrewalkWarning?: (warning: string) => void;
+	/**
+	 * Host-owned display sink for model-selector warnings found while the session
+	 * starts: a deferred `--model` that only approximately matched, and configured
+	 * `modelRoles` that would run another model than they name. Unset (subagents,
+	 * embedders) skips the configured-role check.
+	 */
+	onModelSelectorWarning?: (warning: string) => void;
 	/** Keep `prewalk.auto` away from the startup session (`--no-prewalk`); `/new` lifts it. */
 	suppressAutoPrewalk?: boolean;
 	/** Force read-only plan mode at start, auto-approve on the model's first resolve call, then switch to execute. */
@@ -3044,6 +3052,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						settings,
 						preferences: matchPreferences,
 					});
+					if (resolved.model && resolved.warning) options.onModelSelectorWarning?.(resolved.warning);
 					if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
 						const primaryPatterns: Array<{
 							pattern: string;
@@ -3446,6 +3455,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					patterns && patterns.length > 0
 						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
 						: "No default model selected. Use /login, set an API key environment variable, or select a local model with /model or --model.";
+			}
+		}
+
+		// Extension providers have registered by now, so a role naming one of their
+		// models is not mistaken for a typo of a bundled id.
+		if (options.onModelSelectorWarning) {
+			for (const warning of modelRoleSelectorWarnings(settings, modelRegistry)) {
+				options.onModelSelectorWarning(warning);
 			}
 		}
 

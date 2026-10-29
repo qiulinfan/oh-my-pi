@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import type {
 	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
@@ -799,7 +800,7 @@ describe("ACP builtin slash commands", () => {
 		const available = [
 			{ provider: "anthropic", id: "claude-opus-4-5", contextWindow: 200_000 },
 			{ provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 200_000 },
-		];
+		].map(model => ({ ...model, identity: classifyModel(model.provider, model.id) }));
 		session.getAvailableModels = () => available;
 		const temporarySpy = spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
 		const setModelSpy = spyOn(session, "setModel").mockResolvedValue(undefined);
@@ -810,6 +811,23 @@ describe("ACP builtin slash commands", () => {
 		expect(temporarySpy).toHaveBeenCalledWith(available[0], "low");
 		expect(setModelSpy).not.toHaveBeenCalled();
 		expect(output[0]).toContain("Session-only model: anthropic/claude-opus-4-5");
+	});
+
+	it("switch with a typo tells the client which model it runs instead", async () => {
+		const { output, runtime, session } = createRuntime();
+		const available = [{ provider: "anthropic", id: "claude-haiku-4-5", contextWindow: 200_000 }].map(model => ({
+			...model,
+			identity: classifyModel(model.provider, model.id),
+		}));
+		session.getAvailableModels = () => available;
+		const temporarySpy = spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+
+		await executeAcpBuiltinSlashCommand("/switch anthropic/claude-haku-4-5", runtime);
+
+		expect(temporarySpy).toHaveBeenCalledWith(available[0], undefined);
+		expect(output[0]).toContain(
+			'Warning: "anthropic/claude-haku-4-5" is not a known model; using anthropic/claude-haiku-4-5',
+		);
 	});
 
 	it("switch @smol: resolves the configured role alias", async () => {

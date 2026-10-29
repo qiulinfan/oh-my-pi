@@ -486,6 +486,26 @@ function classifyModelUncached(provider: string, modelId: string, opts?: Classif
 	return identity;
 }
 
+let familySelectorIndex: Map<string, { class: string; family: string }> | undefined;
+
+/**
+ * The class and family a bare family selector word names (`haiku` → anthropic
+ * `haiku`), when a taxonomy `family` rule declares `selector=#true`. Matching is
+ * ASCII-case-insensitive; the compiler guarantees one class per selector word.
+ */
+export function familySelector(word: string): { class: string; family: string } | undefined {
+	if (familySelectorIndex === undefined) {
+		familySelectorIndex = new Map();
+		const classes: readonly CompiledClass[] = rules.taxonomy.classes;
+		for (const cls of classes) {
+			for (const family of cls.families) {
+				if (family.selector) familySelectorIndex.set(family.id.toLowerCase(), { class: cls.id, family: family.id });
+			}
+		}
+	}
+	return familySelectorIndex.get(word.trim().toLowerCase());
+}
+
 /**
  * Strips a declared billing-variant suffix (`-free`, `-contributor`) from a
  * wire identifier, returning the base id it shares a transport with.

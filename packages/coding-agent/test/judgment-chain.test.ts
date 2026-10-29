@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, ChoiceQuestion, ImageContent, Model, NoulQuestion } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -28,6 +29,7 @@ const JEV_PREVIEW = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128_000,
 	maxTokens: 4096,
+	identity: classifyModel("typesafe", "jev-preview"),
 } as Model<Api>;
 
 const OPENROUTER_DECISIONS_URL = "https://decisions.example.test/decisions";

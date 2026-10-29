@@ -17,7 +17,12 @@ export const launchHelp = {
 	},
 	flags: {
 		model: Flags.string({
-			description: 'Model to use (fuzzy match: "opus", "gpt-5.2", or "openai/gpt-5.2")',
+			description:
+				'Model to use ("opus", "gpt-5.2", or "openai/gpt-5.2"; a near match runs with a warning unless --exact-model)',
+		}),
+		"exact-model": Flags.boolean({
+			description:
+				"Require model selectors to name a model exactly (id, provider/id, or catalog alias); a near match is an error (see model.exactMatch)",
 		}),
 		smol: Flags.string({ description: "Smol/fast model for lightweight tasks (or PI_SMOL_MODEL env)" }),
 		slow: Flags.string({ description: "Slow/reasoning model for thorough analysis (or PI_SLOW_MODEL env)" }),
