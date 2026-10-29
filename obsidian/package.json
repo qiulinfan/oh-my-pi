@@ -1,0 +1,14 @@
+{
+	"name": "omp-obsidian",
+	"private": true,
+	"description": "Obsidian plugin for omp: a sidebar onto this machine's omp gui server",
+	"type": "module",
+	"scripts": {
+		"build": "bun scripts/build.ts",
+		"install-vault": "bun scripts/build.ts --vault",
+		"check": "../node_modules/.bin/tsgo -p tsconfig.json --noEmit"
+	},
+	"devDependencies": {
+		"obsidian": "1.14.4"
+	}
+}

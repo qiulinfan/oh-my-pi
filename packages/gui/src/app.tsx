@@ -1331,6 +1331,8 @@ export function App(): ReactNode {
 	const [copied, setCopied] = useState<string | null>(null);
 	const [open, setOpen] = useState<string[]>([]);
 	const [active, setActive] = useState<string | null>(null);
+	/** Whether the session list is pulled out over the page, where the window is too narrow to keep it beside it. */
+	const [drawer, setDrawer] = useState(false);
 	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
 	const [chosen, setChosen] = useState<string | null>(null);
 	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
@@ -1373,6 +1375,9 @@ export function App(): ReactNode {
 			return null;
 		}
 	}, []);
+
+	// Picking a session, a new one or a project in the drawer is done with it.
+	useEffect(() => setDrawer(false), [active, target]);
 
 	useEffect(() => {
 		void refresh();
@@ -1617,7 +1622,18 @@ export function App(): ReactNode {
 		setActive(null);
 	};
 	return (
-		<div className="app">
+		<div className={`app ${drawer ? "drawer-open" : ""}`}>
+			<button
+				type="button"
+				className="drawer-toggle"
+				title={drawer ? "Hide sessions" : "Show sessions"}
+				aria-label={drawer ? "Hide sessions" : "Show sessions"}
+				aria-expanded={drawer}
+				onClick={() => setDrawer(open => !open)}
+			>
+				<Icon name="panel-left" size={16} />
+			</button>
+			<div className="drawer-backdrop" onClick={() => setDrawer(false)} />
 			<aside className="sidebar">
 				<div className="side-top">
 					<div className="brand">

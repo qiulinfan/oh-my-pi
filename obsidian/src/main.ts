@@ -1,0 +1,193 @@
+/**
+ * omp in an Obsidian sidebar: the page this machine's GUI server serves, in an
+ * Electron <webview>. An <iframe> would not do: the server refuses requests a
+ * browser marks cross-site, and a frame inside app://obsidian.md is one, while
+ * a <webview> navigates at its own top level.
+ *
+ * Finding omp, reading the login shell's environment and the `omp gui`
+ * handshake are the desktop app's (desktop/src), which need no Electron. Like
+ * the desktop app, the plugin attaches to the running server or starts one,
+ * and a server it started stops with Obsidian, ending the sessions it hosts.
+ *
+ * The page opens web links with window.open. A <webview> drops those unless it
+ * allows popups, so it allows them and denies every one from the main
+ * process, handing http(s) and mail links to the system instead.
+ */
+import * as os from "node:os";
+import * as path from "node:path";
+import { remote, shell } from "electron";
+import { ItemView, Plugin, PluginSettingTab, Setting, type WorkspaceLeaf } from "obsidian";
+import { type LoginShellEnv, readLoginShellEnv } from "../../desktop/src/login-shell";
+import { findOmp, type GuiAddress, GuiProcess, pingGui } from "../../desktop/src/supervisor";
+
+const VIEW_TYPE = "omp-sidebar";
+const EXTERNAL_LINK = /^(https?|mailto):/i;
+
+/** The <webview> element's methods this plugin calls; the DOM typings do not know the tag. */
+interface Webview extends HTMLElement {
+	getWebContentsId(): number;
+}
+
+interface Settings {
+	/** An absolute path to the omp to run; empty searches the login shell's PATH, then ~/.local/bin/omp. */
+	ompPath: string;
+}
+
+const DEFAULT_SETTINGS: Settings = { ompPath: "" };
+
+interface Connection {
+	address: GuiAddress;
+	/** Set when the login shell's environment could not be read and this plugin's server started without it. */
+	degraded: boolean;
+}
+
+export default class OmpPlugin extends Plugin {
+	override settings: Settings = { ...DEFAULT_SETTINGS };
+	#env: Promise<LoginShellEnv> | null = null;
+	/** The `omp gui` that serves, when this plugin started the server rather than attaching to one. */
+	#owned: GuiProcess | null = null;
+	#connection: Promise<Connection> | null = null;
+
+	override async onload(): Promise<void> {
+		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+		this.registerView(VIEW_TYPE, leaf => new OmpView(leaf, this));
+		this.addRibbonIcon("bot", "Open omp", () => void this.reveal());
+		this.addCommand({ id: "open", name: "Open sidebar", callback: () => void this.reveal() });
+		this.addSettingTab(new OmpSettingTab(this));
+	}
+
+	override onunload(): void {
+		// Quitting Obsidian closes the server's stdin, which stops it anyway; this covers disabling the plugin.
+		void this.#owned?.stop();
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	async reveal(): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
+		if (!leaf) {
+			leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
+			await leaf.setViewState({ type: VIEW_TYPE, active: true });
+		}
+		await workspace.revealLeaf(leaf);
+	}
+
+	/** The page to load: the running server's when it still answers, else one `omp gui` attaches or starts one. */
+	async pageUrl(): Promise<string> {
+		let connection = this.#connection && (await this.#connection.catch(() => null));
+		if (connection) {
+			const ping = await pingGui(connection.address, connection.address);
+			if (ping.state !== "ok" && ping.state !== "slow") connection = null;
+		}
+		if (!connection) {
+			this.#connection = this.#connect();
+			connection = await this.#connection;
+		}
+		return `${connection.address.url}${connection.degraded ? "&env=degraded" : ""}`;
+	}
+
+	async #connect(): Promise<Connection> {
+		if (this.#owned?.alive) await this.#owned.stop();
+		this.#owned = null;
+		this.#env ??= readLoginShellEnv();
+		const env = await this.#env;
+		const omp = await findOmp(this.settings.ompPath || undefined, env.env.PATH, os.homedir()).catch(err => {
+			const why = env.failure ? ` (The login shell's environment could not be read: ${env.failure}.)` : "";
+			throw new Error(`${err instanceof Error ? err.message : String(err)}${why}`);
+		});
+		const proc = new GuiProcess(omp, env.env, { cwd: os.homedir() });
+		const address = await proc.ready();
+		if (!address.attached) this.#owned = proc;
+		return { address, degraded: env.failure !== undefined && !address.attached };
+	}
+}
+
+class OmpView extends ItemView {
+	readonly #plugin: OmpPlugin;
+	/** Bumped by each load, so a slow load that a newer one replaced does not draw. */
+	#generation = 0;
+
+	constructor(leaf: WorkspaceLeaf, plugin: OmpPlugin) {
+		super(leaf);
+		this.#plugin = plugin;
+	}
+
+	getViewType(): string {
+		return VIEW_TYPE;
+	}
+
+	getDisplayText(): string {
+		return "omp";
+	}
+
+	override getIcon(): string {
+		return "bot";
+	}
+
+	override async onOpen(): Promise<void> {
+		this.addAction("refresh-cw", "Reconnect", () => void this.#load());
+		await this.#load();
+	}
+
+	async #load(): Promise<void> {
+		const generation = ++this.#generation;
+		const root = this.contentEl;
+		root.empty();
+		root.addClass("omp-sidebar");
+		const status = root.createDiv({ cls: "omp-sidebar-status", text: "Starting omp gui…" });
+		let url: string;
+		try {
+			url = await this.#plugin.pageUrl();
+		} catch (err) {
+			if (generation !== this.#generation) return;
+			status.setText(err instanceof Error ? err.message : String(err));
+			const retry = status.createEl("button", { text: "Retry" });
+			retry.addEventListener("click", () => void this.#load());
+			return;
+		}
+		if (generation !== this.#generation) return;
+		status.remove();
+		const page = document.createElement("webview") as Webview;
+		// Its own persistent partition keeps the page's remembered picks across restarts, apart from Obsidian's storage.
+		page.setAttribute("partition", "persist:omp-gui");
+		page.setAttribute("allowpopups", "");
+		page.addEventListener("dom-ready", () => {
+			remote.webContents.fromId(page.getWebContentsId())?.setWindowOpenHandler(({ url }) => {
+				if (EXTERNAL_LINK.test(url)) void shell.openExternal(url);
+				return { action: "deny" };
+			});
+		});
+		page.setAttribute("src", url);
+		root.appendChild(page);
+	}
+}
+
+class OmpSettingTab extends PluginSettingTab {
+	readonly #plugin: OmpPlugin;
+
+	constructor(plugin: OmpPlugin) {
+		super(plugin.app, plugin);
+		this.#plugin = plugin;
+	}
+
+	override display(): void {
+		this.containerEl.empty();
+		new Setting(this.containerEl)
+			.setName("omp executable")
+			.setDesc(
+				"An absolute path to the omp to run. Empty uses the first omp on the login shell's PATH, then ~/.local/bin/omp. Used the next time the plugin has to start or find the GUI server.",
+			)
+			.addText(text =>
+				text
+					.setPlaceholder(path.join(os.homedir(), ".local", "bin", "omp"))
+					.setValue(this.#plugin.settings.ompPath)
+					.onChange(async value => {
+						this.#plugin.settings.ompPath = value.trim();
+						await this.#plugin.saveSettings();
+					}),
+			);
+	}
+}
