@@ -1,0 +1,74 @@
+{
+	"name": "omp-vscode",
+	"displayName": "omp",
+	"description": "Shows this machine's omp gui in VS Code's secondary side bar",
+	"version": "0.1.0",
+	"publisher": "qiulinfan",
+	"private": true,
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.140.0"
+	},
+	"extensionKind": ["ui"],
+	"categories": ["AI", "Chat"],
+	"main": "./dist/extension.js",
+	"activationEvents": [],
+	"contributes": {
+		"viewsContainers": {
+			"secondarySidebar": [
+				{
+					"id": "omp",
+					"title": "omp",
+					"icon": "media/omp.svg"
+				}
+			]
+		},
+		"views": {
+			"omp": [
+				{
+					"type": "webview",
+					"id": "omp.gui",
+					"name": "omp"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "omp.reconnect",
+				"title": "Reconnect",
+				"category": "omp",
+				"icon": "$(refresh)"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "omp.reconnect",
+					"when": "view == omp.gui",
+					"group": "navigation"
+				}
+			]
+		},
+		"configuration": {
+			"title": "omp",
+			"properties": {
+				"omp.executable": {
+					"type": "string",
+					"default": "",
+					"scope": "machine",
+					"markdownDescription": "An absolute path to the omp to run. Empty uses the first `omp` on the login shell's `PATH`, then `~/.local/bin/omp`. Used the next time the extension has to start or find the GUI server."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"build": "bun scripts/build.ts",
+		"package": "bun scripts/build.ts --package",
+		"install-app": "bun scripts/build.ts --install",
+		"check": "../node_modules/.bin/tsgo -p tsconfig.json --noEmit"
+	},
+	"devDependencies": {
+		"@types/vscode": "1.140.0",
+		"@vscode/vsce": "3.9.2"
+	}
+}
