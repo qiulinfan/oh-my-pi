@@ -1,5 +1,60 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { hasFsCode, isEexist, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
+
+/**
+ * Errors where a directory cannot be synced at all, skipped without a word: a filesystem that refuses
+ * fsync on a directory (EINVAL, ENOTSUP/EOPNOTSUPP), a directory this process may change but not open
+ * (EACCES, EPERM), or one removed meanwhile, which has nothing left to flush (ENOENT).
+ */
+const UNSYNCABLE_DIRECTORY_CODES = ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "EACCES", "EPERM", "ENOENT"];
+
+function noteDirectorySyncFailure(dir: string, error: unknown): void {
+	if (UNSYNCABLE_DIRECTORY_CODES.some(code => hasFsCode(error, code))) return;
+	logger.warn("Failed to sync directory", { dir, error: toError(error).message });
+}
+
+/**
+ * Flush `dir`'s entries, so a file renamed into it or removed from it stays that way after a system
+ * crash. On Linux that holds for a power loss too; macOS fsync stops at the drive's own cache (only
+ * F_FULLFSYNC empties it, and Bun's fsync does not issue it).
+ *
+ * Best effort: it follows a rename or removal that has already happened, so it never fails one. Windows
+ * has no directory fsync, the errors above are skipped, and any other failure is logged.
+ */
+export async function syncDirectory(dir: string): Promise<void> {
+	if (process.platform === "win32") return;
+	let handle: fs.promises.FileHandle | undefined;
+	try {
+		handle = await fs.promises.open(dir, "r");
+		await handle.sync();
+	} catch (error) {
+		noteDirectorySyncFailure(dir, error);
+	} finally {
+		// The descriptor is released either way; a close error leaves nothing to undo.
+		await handle?.close().catch(() => {});
+	}
+}
+
+/** Synchronous sibling of {@link syncDirectory}. */
+export function syncDirectorySync(dir: string): void {
+	if (process.platform === "win32") return;
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(dir, "r");
+		fs.fsyncSync(fd);
+	} catch (error) {
+		noteDirectorySyncFailure(dir, error);
+	} finally {
+		if (fd !== undefined) {
+			try {
+				fs.closeSync(fd);
+			} catch {
+				// The descriptor is released either way; a close error leaves nothing to undo.
+			}
+		}
+	}
+}
 
 /**
  * Publish a staged sibling file atomically, preserving an existing destination
@@ -63,7 +118,11 @@ async function replaceAfterWindowsRenameFailure(
 /**
  * Write a file through a private temp sibling and publish it with a single
  * rename, so a reader never observes a half-written file and a failed write
- * leaves the destination untouched.
+ * leaves the destination untouched. The content is flushed before the rename
+ * and the directory after it ({@link syncDirectory}), so a system crash (on
+ * Linux, a power loss too) cannot roll the destination back to its previous
+ * content or leave it empty. Once the rename has landed the write succeeds:
+ * a directory flush that fails is only logged.
  *
  * The staged file is created with `mode` (0600 by default) and published with
  * that mode, so the destination stays readable only by its owner even when it
@@ -85,6 +144,7 @@ export async function writeFileAtomically(filePath: string, content: string, mod
 		await fs.promises.chmod(tempPath, mode);
 		await replaceFileAtomically(tempPath, filePath);
 		removeTemp = false;
+		await syncDirectory(path.dirname(filePath));
 	} finally {
 		if (removeTemp) {
 			await fs.promises.rm(tempPath, { force: true }).catch(() => {});
@@ -119,6 +179,7 @@ export function writeFileAtomicallySync(filePath: string, content: string, mode:
 		fs.rmSync(tempPath, { force: true });
 		throw error;
 	}
+	syncDirectorySync(path.dirname(filePath));
 }
 
 /**

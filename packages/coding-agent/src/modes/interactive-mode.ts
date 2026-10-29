@@ -2479,7 +2479,11 @@ export class InteractiveMode implements InteractiveModeContext {
 					`Session persistence failed: ${detail}. Unsaved entries remain in memory; persistence will retry on the next entry.`,
 				);
 			}),
-			this.sessionManager.onPersistenceNotice(notice => this.showWarning(formatPersistenceNotice(notice))),
+			this.sessionManager.onPersistenceNotice(notice => {
+				this.showWarning(formatPersistenceNotice(notice));
+				// The session moved to a sibling file: Tern and the GUI server must resume that one.
+				reportTernSession();
+			}),
 			this.sessionManager.onSessionNameChanged(() => {
 				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 				this.#handleSessionAccentInputsChanged();

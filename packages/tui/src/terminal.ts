@@ -2526,7 +2526,10 @@ export class ProcessTerminal implements Terminal {
 		}
 
 		if (process.platform === "win32") {
-			void postmortem.quit(129, { drainStdout: false });
+			// Windows cannot signal itself, so run the SIGHUP listeners directly: postmortem
+			// then tears the session down as a hangup and exits 129, as on POSIX. A quit
+			// would record the exit as a normal one, and a reply it cut off as stopped.
+			if (!process.emit("SIGHUP", "SIGHUP")) void postmortem.quit(129, { drainStdout: false });
 			return;
 		}
 		try {

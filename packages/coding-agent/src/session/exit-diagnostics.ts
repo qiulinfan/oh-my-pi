@@ -1,5 +1,11 @@
-import { createSyntheticToolResultMessage, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import {
+	createSyntheticToolResultMessage,
+	isSyntheticToolResultMessage,
+	type AgentMessage,
+} from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-tui/chat/messages";
+import { postmortem } from "@oh-my-pi/pi-utils";
 import type { SessionEntry } from "./session-entries";
 
 export const TOOL_EXECUTION_START_CUSTOM_TYPE = "tool_execution_start";
@@ -98,7 +104,12 @@ function readSessionExit(entry: SessionEntry): SessionExitData | undefined {
 	};
 }
 
-/** Why an interrupted-turn abort record ends a turn its process never finished. */
+/**
+ * Why an interrupted-turn abort record ends a turn its process never finished: exit
+ * recovery writes it for a turn a gone process left open (one the user stopped with
+ * SIGINT gets the user-interrupt label instead), and a teardown that cuts the turn off
+ * (a signal other than SIGINT, a crash) aborts the reply in flight with it.
+ */
 export const INTERRUPTED_TURN_ERROR = "Previous OMP process exited before completing the turn.";
 
 /** How exit recovery reads a branch whose last process may have died without recording its exit. */
@@ -110,11 +121,36 @@ export interface InterruptedTurnOptions {
 	assumeExit?: boolean;
 }
 
-/** A turn its process left unfinished: the branch's last message and when the process ended. */
+/**
+ * A turn its process left unfinished: the branch's last message, when the process
+ * ended, and whether the user stopped it ({@link exitStoppedByUser}).
+ */
 interface UnfinishedTurn {
 	tail: AgentMessage;
 	previousAssistant: AssistantMessage | undefined;
 	recordedAt: string;
+	stoppedByUser: boolean;
+}
+
+/**
+ * Whether `exit`, recorded at `exitIndex`, is the user stopping the turn: a SIGINT
+ * (End in the GUI, Ctrl+C where omp's terminal is not raw, as in `omp -p`), followed
+ * only by what that SIGINT's own teardown writes, the results of the tool calls it
+ * aborted and the reply it aborted. Its record is written as the signal arrives, so it
+ * holds even when the process is killed or crashes before that teardown has written
+ * the aborted reply. A later process's turn (a prompt, a retried reply) ends it.
+ */
+function exitStoppedByUser(entries: readonly SessionEntry[], exitIndex: number, exit: SessionExitData): boolean {
+	if (exit.reason !== postmortem.Reason.SIGINT) return false;
+	for (let index = exitIndex + 1; index < entries.length; index++) {
+		const entry = entries[index]!;
+		if (entry.type !== "message") continue;
+		const { message } = entry;
+		if (message.role === "toolResult") continue;
+		if (message.role === "assistant" && message.stopReason === "aborted") continue;
+		return false;
+	}
+	return true;
 }
 
 /**
@@ -122,7 +158,8 @@ interface UnfinishedTurn {
  * (a prompt or tool results the model never answered, tool calls without results)
  * followed by a process exit, recorded or (with `assumeExit`) assumed. A recorded
  * normal exit with nothing pending, a terminal assistant tail, and tool results that
- * close an aborted or failed turn leave nothing unfinished.
+ * close an aborted or failed turn leave nothing unfinished. A turn the user stopped
+ * is still unfinished, so resume can close it, but nothing goes on with it.
  */
 function findUnfinishedTurn(
 	entries: readonly SessionEntry[],
@@ -148,7 +185,9 @@ function findUnfinishedTurn(
 		break;
 	}
 	if (!tail) return undefined;
-	if (!exit || tailIndex > exitIndex) {
+	// A SIGINT's own teardown writes after its exit record; that exit still ends the turn.
+	const stoppedByUser = exit !== undefined && exitStoppedByUser(entries, exitIndex, exit);
+	if (!exit || (tailIndex > exitIndex && !stoppedByUser)) {
 		if (!options?.assumeExit) return undefined;
 		exit = { reason: "restore", kind: "process_exit", recordedAt: new Date().toISOString() };
 	} else if (exit.kind === "normal" && !exit.pendingToolCalls?.length) {
@@ -169,10 +208,13 @@ function findUnfinishedTurn(
 	) {
 		return undefined;
 	}
-	return { tail, previousAssistant, recordedAt: exit.recordedAt };
+	return { tail, previousAssistant, recordedAt: exit.recordedAt, stoppedByUser };
 }
 
-/** Whether `message` is the record exit recovery closed an unfinished turn with. */
+/**
+ * Whether `message` is the interrupted-turn record: the one exit recovery closed an
+ * unfinished turn with, or the reply a signal or crash teardown aborted.
+ */
 export function isInterruptedTurnAbort(message: AgentMessage): boolean {
 	return (
 		message.role === "assistant" &&
@@ -183,25 +225,36 @@ export function isInterruptedTurnAbort(message: AgentMessage): boolean {
 
 /**
  * Whether `omp --restore` has a turn to go on with on this branch: one its last
- * process left unfinished ({@link findUnfinishedTurn}, the exit assumed), or one exit
- * recovery already closed that nothing followed, not even a normal exit.
+ * process left unfinished ({@link findUnfinishedTurn}, the exit assumed) and the user
+ * did not stop, or one closed by the interrupted-turn record ({@link isInterruptedTurnAbort},
+ * followed only by the synthetic results of tool calls the reply it ended had streamed)
+ * that nothing followed, not even an exit the user chose (a quit, or a SIGINT such as the
+ * GUI's End to the process that reopened it): the user left that turn as it was.
  */
 export function hasRestorableTurn(entries: readonly SessionEntry[]): boolean {
+	let pastSyntheticResults = false;
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index]!;
 		const exit = readSessionExit(entry);
-		if (exit?.kind === "normal") return false;
+		if (exit?.kind === "normal" || exit?.reason === postmortem.Reason.SIGINT) {
+			if (!pastSyntheticResults) return false;
+			break;
+		}
 		if (entry.type !== "message") continue;
 		if (isInterruptedTurnAbort(entry.message)) return true;
-		break;
+		// A teardown's record comes before the synthetic results of the tool calls it cut off.
+		if (!isSyntheticToolResultMessage(entry.message)) break;
+		pastSyntheticResults = true;
 	}
-	return findUnfinishedTurn(entries, { assumeExit: true }) !== undefined;
+	const turn = findUnfinishedTurn(entries, { assumeExit: true });
+	return turn !== undefined && !turn.stoppedByUser;
 }
 
 /**
  * createInterruptedTurnAbortMessage returns a terminal assistant record when
  * the latest persisted process exit follows a non-terminal conversation tail
- * ({@link findUnfinishedTurn}; with `assumeExit`, also when no exit was recorded).
+ * ({@link findUnfinishedTurn}; with `assumeExit`, also when no exit was recorded):
+ * the interrupted-turn record, or a user interrupt for a turn the user stopped.
  */
 export function createInterruptedTurnAbortMessage(
 	entries: readonly SessionEntry[],
@@ -229,7 +282,7 @@ export function createInterruptedTurnAbortMessage(
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "aborted",
-		errorMessage: INTERRUPTED_TURN_ERROR,
+		errorMessage: turn.stoppedByUser ? USER_INTERRUPT_LABEL : INTERRUPTED_TURN_ERROR,
 		timestamp: Number.isFinite(recordedAt) ? recordedAt : Date.now(),
 	};
 }

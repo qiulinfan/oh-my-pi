@@ -666,8 +666,8 @@ export function nerdGlyphsActive(): boolean {
 	return typeof theme !== "undefined" && theme.getSymbolPreset() === "nerd";
 }
 
-/** The OSC 1337 user variable Tern reads the session file from. */
-const TERN_SESSION_FILE_VAR = "omp_session_file";
+/** The OSC 1337 user variable Tern and the GUI server (`omp gui`) read the session file from. */
+const SESSION_FILE_VAR = "omp_session_file";
 /**
  * The OSC 1337 user variable telling Tern this omp understands `--restore`, set to
  * `1` before each session file report: Tern's daemon then relaunches it after a
@@ -675,7 +675,7 @@ const TERN_SESSION_FILE_VAR = "omp_session_file";
  */
 const TERN_RESTORE_VAR = "omp_restore";
 
-/** The live session as Tern hears about it (read from the interactive session manager). */
+/** The live session as the terminal host hears about it (read from the interactive session manager). */
 export interface TerminalSessionSource {
 	/** The session file, if the session persists to one. */
 	file(): string | undefined;
@@ -685,7 +685,7 @@ export interface TerminalSessionSource {
 
 /** Where the current session's file and directory are read from. */
 let sessionSource: TerminalSessionSource | undefined;
-/** The session file Tern was last told about. */
+/** The session file the terminal host was last told about. */
 let reportedSessionFile: string | undefined;
 /** The working directory Tern was last told about. */
 let reportedCwd: string | undefined;
@@ -695,7 +695,7 @@ let reportedCwd: string | undefined;
  * session, resume, cwd switch) and {@link reportTernSession} re-read it and, in
  * Tern, report what changed: the file, so Tern's daemon can relaunch
  * `omp --resume <file>` after it restarts, and the directory, which Tern names
- * in omp's composer bar.
+ * in omp's composer bar. The GUI server hears the file too.
  */
 export function setTerminalSessionSource(source: TerminalSessionSource | undefined): void {
 	sessionSource = source;
@@ -703,22 +703,31 @@ export function setTerminalSessionSource(source: TerminalSessionSource | undefin
 }
 
 /**
- * Tell Tern (`TERM_PROGRAM=tern`, nowhere else) what changed about the session:
- * the file as an OSC 1337 user variable holding its absolute path in base64 (no
+ * Tell the terminal host what changed about the session. Tern (`TERM_PROGRAM=tern`)
+ * hears the file as an OSC 1337 user variable holding its absolute path in base64 (no
  * file removes the variable), preceded by {@link TERN_RESTORE_VAR}, and the working
  * directory as OSC 7 (`file://host/path`), as a shell reports it at each prompt.
+ *
+ * The GUI server (`TERM_PROGRAM=omp-gui`) hears only each new file, never its
+ * removal: it restores a session from the last file it heard, including after omp's
+ * UI let go of the session on the way out. It needs no {@link TERN_RESTORE_VAR}: it
+ * launched this omp, so it knows `--restore` is there. Other terminals hear nothing.
  */
 export function reportTernSession(): void {
-	if (terminalTitleRuntime.disposed || $env.TERM_PROGRAM?.toLowerCase() !== "tern") return;
+	if (terminalTitleRuntime.disposed) return;
+	const host = $env.TERM_PROGRAM?.toLowerCase();
+	if (host !== "tern" && host !== "omp-gui") return;
 	if (!process.stdout.isTTY || isTerminalHeadless()) return;
+	const tern = host === "tern";
 	const file = sessionSource?.file();
 	const resolvedFile = file ? path.resolve(file) : undefined;
 	if (resolvedFile !== reportedSessionFile) {
 		reportedSessionFile = resolvedFile;
 		const value = resolvedFile ? `=${Buffer.from(resolvedFile).toString("base64")}` : "";
-		if (resolvedFile) writeTerminalSequence(`\x1b]1337;SetUserVar=${TERN_RESTORE_VAR}=MQ==\x07`);
-		writeTerminalSequence(`\x1b]1337;SetUserVar=${TERN_SESSION_FILE_VAR}${value}\x07`);
+		if (tern && resolvedFile) writeTerminalSequence(`\x1b]1337;SetUserVar=${TERN_RESTORE_VAR}=MQ==\x07`);
+		if (tern || resolvedFile) writeTerminalSequence(`\x1b]1337;SetUserVar=${SESSION_FILE_VAR}${value}\x07`);
 	}
+	if (!tern) return;
 	// Without a session the shell takes the directory back at its next prompt.
 	const cwd = sessionSource ? path.resolve(sessionSource.cwd()) : undefined;
 	if (cwd && cwd !== reportedCwd) {

@@ -9,6 +9,7 @@
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
 import { $ } from "bun";
+import { processStartToken } from "../utils/process-identity";
 
 const { IsoBackendKind } = natives;
 
@@ -22,38 +23,34 @@ export interface IsolationOwner {
 	/** Task id the sandbox was materialised for. */
 	id: string;
 	/**
-	 * Process-instance start-time token for {@link pid}, when the OS can report
-	 * it. Distinguishes the owning process from an unrelated process that later
-	 * inherits a recycled pid, so a crashed sandbox is never pinned live.
+	 * Process-instance start-time token for {@link pid} ({@link processStartToken}),
+	 * when the OS can report it. Distinguishes the owning process from an unrelated
+	 * process that later inherits a recycled pid, so a crashed sandbox is never
+	 * pinned live.
 	 */
 	startToken?: string;
+	/**
+	 * How {@link startToken} was made: {@link START_TOKEN_FORMAT} for {@link processStartToken}.
+	 * Absent on markers older omps wrote; off Linux their token is {@link legacyStartToken}'s.
+	 */
+	startTokenFormat?: number;
 }
 
+/** The {@link IsolationOwner.startTokenFormat} of a token {@link processStartToken} made. */
+const START_TOKEN_FORMAT = 2;
+
 /**
- * Boot-stable start-time token for `pid`, or `null` when the process is gone or
- * the platform cannot report it. Read from the same source on write and
- * validate so an exact string compare rejects a recycled pid.
+ * The start-time token isolation markers carried before {@link processStartToken} pinned `ps` to the
+ * C locale and UTC: `ps -o lstart` in the caller's own locale and time zone, or null where that format
+ * never differed (Linux always read `/proc`) or `ps` gives nothing. A marker without a
+ * {@link IsolationOwner.startTokenFormat} carries this format; matching it keeps the sandbox of an
+ * older omp that is still running alive.
  *
- * Linux reads `/proc/<pid>/stat` field 22 (start time in clock ticks since
- * boot); other Unixes shell out to `ps -o lstart`. Platforms that report
- * neither (e.g. Windows) yield `null`, degrading to a pid-only liveness check.
+ * Remove it, with its use in {@link hasLiveIsolationOwner}, once no running omp predates this build:
+ * a marker without a `startTokenFormat` whose pid is still alive belongs to one that does.
  */
-async function processStartToken(pid: number): Promise<string | null> {
-	if (process.platform === "linux") {
-		let stat: string;
-		try {
-			stat = await Bun.file(`/proc/${pid}/stat`).text();
-		} catch {
-			return null;
-		}
-		// The comm field (2) may embed spaces and parens, so parse the numeric
-		// fields after the final ')'. `starttime` is field 22 overall, i.e. the
-		// 20th token once `pid` and `(comm)` are dropped.
-		const commEnd = stat.lastIndexOf(")");
-		if (commEnd < 0) return null;
-		const starttime = stat.slice(commEnd + 2).split(" ")[19];
-		return starttime && starttime.length > 0 ? starttime : null;
-	}
+async function legacyStartToken(pid: number): Promise<string | null> {
+	if (process.platform === "linux" || process.platform === "win32") return null;
 	const res = await $`ps -o lstart= -p ${pid}`.quiet().nothrow();
 	if (res.exitCode !== 0) return null;
 	const started = res.text().trim();
@@ -68,7 +65,11 @@ async function processStartToken(pid: number): Promise<string | null> {
  */
 export async function writeIsolationOwner(baseDir: string, id: string): Promise<void> {
 	const startToken = await processStartToken(process.pid);
-	const owner: IsolationOwner = { pid: process.pid, id, ...(startToken ? { startToken } : {}) };
+	const owner: IsolationOwner = {
+		pid: process.pid,
+		id,
+		...(startToken ? { startToken, startTokenFormat: START_TOKEN_FORMAT } : {}),
+	};
 	await Bun.write(path.join(baseDir, ISOLATION_OWNER_FILE), JSON.stringify(owner));
 }
 
@@ -81,7 +82,9 @@ export async function writeIsolationOwner(baseDir: string, id: string): Promise<
  * `ESRCH` ("no such process") counts as dead; any other error is treated as
  * alive to avoid deleting a sandbox that is actually in use. When the marker
  * carries a {@link IsolationOwner.startToken}, a live pid whose current token no
- * longer matches is a recycled pid — a different process — and counts as dead.
+ * longer matches is a recycled pid — a different process — and counts as dead;
+ * a token in a format this build does not know cannot be checked, so its live
+ * pid counts.
  */
 export async function hasLiveIsolationOwner(baseDir: string): Promise<boolean> {
 	let decoded: unknown;
@@ -100,10 +103,16 @@ export async function hasLiveIsolationOwner(baseDir: string): Promise<boolean> {
 	}
 	// The pid is live (or unknowable via EPERM). Reject a recycled pid: if the
 	// marker pinned the owner's start-time token, the process wearing that pid
-	// now must still present the same token.
+	// now must still present the same token, in the format the marker names. A
+	// marker naming none is an older omp's: its token is in the legacy format,
+	// unless it came from /proc (Linux), where both formats are the same.
 	if ("startToken" in decoded && typeof decoded.startToken === "string" && decoded.startToken.length > 0) {
+		const recorded = decoded.startToken;
+		const format = "startTokenFormat" in decoded ? decoded.startTokenFormat : undefined;
+		if (format !== undefined && format !== START_TOKEN_FORMAT) return true;
 		const current = await processStartToken(pid);
-		if (current !== null && current !== decoded.startToken) return false;
+		if (current === null || current === recorded) return true;
+		return format === undefined && (await legacyStartToken(pid)) === recorded;
 	}
 	return true;
 }
