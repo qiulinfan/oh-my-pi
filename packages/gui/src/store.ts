@@ -2,6 +2,11 @@
  * Browser-side surface document: the TSP ops applied to mutable nodes, each
  * with a version that bumps on change, so a React component re-renders only
  * when its own node changed (props, text or its child list).
+ *
+ * The server forwards only the ops its own document accepted, so an op this
+ * store cannot apply (a node, parent or sibling it lacks, a splice past the
+ * text) means the store has drifted from the server's document: `apply`
+ * reports it and the connection asks for a fresh snapshot.
  */
 import type { TspNode, TspOp } from "@oh-my-pi/pi-wire";
 
@@ -28,7 +33,7 @@ export class SurfaceStore {
 
 	constructor(id: string, root?: TspNode) {
 		this.id = id;
-		this.nodes.set(id, { id, k: "col", p: {}, c: [], parent: null, v: 0 });
+		this.nodes.set(id, { id, k: "col", p: { ...root?.p }, c: [], parent: null, v: 0 });
 		if (root) for (const child of root.c ?? []) this.#build(child, id, null);
 	}
 
@@ -60,18 +65,22 @@ export class SurfaceStore {
 		return [own, ...kids].filter(Boolean).join(node.k === "row" ? " " : "\n");
 	}
 
-	apply(ops: readonly TspOp[]): void {
+	/** Apply a frame's ops; false when one of them did not fit this document (see the module comment). */
+	apply(ops: readonly TspOp[]): boolean {
+		let fits = true;
 		for (const op of ops) {
 			try {
-				this.#apply(op);
+				if (!this.#apply(op)) fits = false;
 			} catch (error) {
 				console.warn("tsp op failed", op, error);
+				fits = false;
 			}
 		}
 		for (const id of this.#pending) {
 			for (const listener of this.#listeners.get(id) ?? []) listener();
 		}
 		this.#pending.clear();
+		return fits;
 	}
 
 	#touch(id: string): void {
@@ -99,19 +108,27 @@ export class SurfaceStore {
 		if (this.focus === id) this.focus = null;
 	}
 
-	#apply(op: TspOp): void {
+	/** Whether `before` is null or a child of `parent`, as the server's applier requires. */
+	#slot(parent: string, before: string | null): boolean {
+		return before === null || this.nodes.get(before)?.parent === parent;
+	}
+
+	#apply(op: TspOp): boolean {
 		switch (op[0]) {
 			case "add": {
 				const [, id, parent, before, wire] = op;
-				if (this.nodes.has(id)) this.#detach(id);
+				if (!this.nodes.has(parent) || !this.#slot(parent, before)) return false;
+				// The server refuses an id it already holds, so one this store holds is drift; replace it all the same.
+				const fresh = !this.nodes.has(id);
+				if (!fresh) this.#detach(id);
 				this.#build({ ...wire, id }, parent, before);
 				this.#touch(parent);
-				return;
+				return fresh;
 			}
 			case "set": {
 				const [, id, props] = op;
 				const node = this.nodes.get(id);
-				if (!node) return;
+				if (!node) return false;
 				const next = { ...node.p };
 				for (const key in props) {
 					const value = props[key];
@@ -120,57 +137,66 @@ export class SurfaceStore {
 				}
 				node.p = next;
 				this.#touch(id);
-				return;
+				return true;
 			}
 			case "text": {
 				const [, id, mode, text] = op;
 				const node = this.nodes.get(id);
-				if (!node) return;
-				node.p = { ...node.p, text: mode === "append" ? `${node.p.text ?? ""}${text}` : text };
+				if (!node) return false;
+				const current: string = typeof node.p.text === "string" ? node.p.text : "";
+				node.p = { ...node.p, text: mode === "append" ? current + text : text };
 				this.#touch(id);
-				return;
+				return true;
 			}
 			case "splice": {
 				const [, id, at, del, text] = op;
 				const node = this.nodes.get(id);
-				if (!node) return;
-				const current: string = node.p.text ?? "";
+				if (!node) return false;
+				const current: string = typeof node.p.text === "string" ? node.p.text : "";
+				if (at < 0 || del < 0 || at + del > current.length) return false;
 				node.p = { ...node.p, text: current.slice(0, at) + text + current.slice(at + del) };
 				this.#touch(id);
-				return;
+				return true;
 			}
 			case "move": {
 				const [, id, parent, before] = op;
 				const node = this.nodes.get(id);
 				const target = this.nodes.get(parent);
-				if (!node || !target) return;
+				if (!node || !target || !this.#slot(parent, before)) return false;
 				this.#detach(id, false);
 				const at = before === null ? -1 : target.c.indexOf(before);
 				if (at === -1) target.c.push(id);
 				else target.c.splice(at, 0, id);
 				node.parent = parent;
 				this.#touch(parent);
-				return;
+				return true;
 			}
 			case "del": {
 				const [, id] = op;
+				if (!this.nodes.has(id)) return false;
 				this.#detach(id);
-				return;
+				return true;
 			}
 			case "focus": {
-				this.focus = op[1];
+				const [, id] = op;
+				if (id !== null && !this.nodes.has(id)) return false;
+				this.focus = id;
 				this.focusVersion++;
 				this.#touch(this.id);
-				if (op[1]) this.#touch(op[1]);
-				return;
+				if (id) this.#touch(id);
+				return true;
 			}
 			case "reveal": {
+				if (!this.nodes.has(op[1])) return false;
 				this.reveal = { id: op[1], n: (this.reveal?.n ?? 0) + 1 };
 				this.#touch(this.id);
-				return;
+				return true;
 			}
+			case "settle":
+			case "scroll":
+				return this.nodes.has(op[1]);
 			default:
-				return;
+				return true;
 		}
 	}
 

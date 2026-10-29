@@ -1,0 +1,1610 @@
+/**
+ * The app shell, laid out like Claude Code's desktop app: a session sidebar
+ * (the sessions this server hosts, saved sessions grouped by project and the
+ * no-project chats, other omp sessions on this Mac) and one session at a time
+ * beside it, under a header naming it. "New session" opens a start page whose
+ * first message becomes omp's positional prompt; it runs in the chosen
+ * project, or as a chat in its own empty directory. Keys typed outside the composer go to omp as pty
+ * bytes, so every omp shortcut (Ctrl+S agent hub, Shift+Tab effort, Esc)
+ * works as in a terminal.
+ */
+import {
+	Fragment,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
+import { ApiError, api, errorText, link, type ServerIdentity } from "./api";
+import { Icon } from "./icons";
+import { keyBytes } from "./keys";
+import { N, OmpMark, SurfaceContext, type SurfaceContextValue, Transcript } from "./render";
+import { type ExitInfo, SessionConnection, type SessionInfo, type SurfaceMeta } from "./session";
+
+/** The transcript column (see --column): omp lays its rows out for this width, not the window's. */
+const COLUMN_PX = 760;
+/** Dismisses an interrupted entry, or a live session that has exited: it leaves the list and the roster. */
+const DISMISS_PATH = "/api/interrupted/dismiss";
+/** How long a resume or restore runs before the page says it is waiting for the previous omp. */
+const WAITING_MS = 1000;
+/** The desktop app adds `env=degraded` when it could not read the login shell's environment. */
+const DEGRADED_ENV = new URLSearchParams(location.search).get("env") === "degraded";
+
+function stored(key: string, fallback: string): string {
+	try {
+		return localStorage.getItem(key) ?? fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+function store(key: string, value: string): void {
+	try {
+		localStorage.setItem(key, value);
+	} catch {}
+}
+
+type LiveSession = SessionInfo;
+
+/** omp's terminal title is "<icon> <session title>" (or "π <dir>" before one exists): keep the words. */
+function sessionTitle(session: LiveSession, chat: boolean): string {
+	const title = session.title?.replace(/^[-\u{F0000}-\u{FFFFD}π\s]+/u, "").trim();
+	// Before omp names it, a session reads as its directory; a chat's directory name means nothing.
+	if (title && title !== "omp" && title !== basename(session.cwd)) return title;
+	return chat ? "New chat" : basename(session.cwd);
+}
+
+interface PeerSession {
+	short: string;
+	name: string | null;
+	cwd: string;
+	mode: string;
+	busy: boolean;
+	accepts: boolean;
+	pid: number;
+	guiId: string | null;
+	sessionId: string;
+}
+
+interface SavedSession {
+	id: string;
+	path: string;
+	cwd: string;
+	title: string;
+	prompt: string;
+	modified: string;
+	/** omp's listing status: "interrupted" or "pending" when the last turn was cut off. */
+	status?: string;
+	/** `omp --restore` has a turn to continue; narrower than an interrupted or pending status. */
+	restorable?: boolean;
+}
+
+/** A session this server's predecessor hosted when it stopped (its hosted roster). */
+interface InterruptedSession {
+	guiId: string;
+	cwd: string;
+	sessionFile?: string;
+	title?: string;
+	prompt?: string;
+	chat: boolean;
+	/** Its omp is still running, outliving the server that hosted it. */
+	orphan: boolean;
+	status?: string;
+	/** Its file has a turn `omp --restore` continues. */
+	restorable?: boolean;
+	/** omp exited on its own before the server stopped (a crash, a signal), as the server recorded it. */
+	exit?: { code: number | null; signal: string | number | null };
+	/** You ended it while the previous server stopped it, and its omp still runs: it can only be ended. */
+	ending?: boolean;
+}
+
+interface Project {
+	root: string;
+	name: string;
+	modified: string;
+	sessions: SavedSession[];
+}
+
+/** GET /api/sessions. */
+interface Listing {
+	live: LiveSession[];
+	projects: Project[];
+	chats: SavedSession[];
+	chatsDir: string;
+	home: string;
+	server?: ServerIdentity;
+	interrupted?: InterruptedSession[];
+}
+
+/** A POST /api/spawn body. */
+interface SpawnRequest {
+	project?: string;
+	resume?: { path: string; cwd: string };
+	/** `--restore` instead of `--resume`: continue the turn that was cut off. */
+	restore?: boolean;
+	/**
+	 * The session this restores: an interrupted roster entry, or one of this server run that has exited.
+	 * Alone, the server restores it as recorded: it continues its session file with `--restore`, or starts
+	 * the first message of a session that died before omp wrote its file again, on its model.
+	 */
+	from?: string;
+	model?: string;
+	prompt?: string;
+}
+
+/** Where a new session runs: a project root, or "" for a chat in its own empty directory. */
+type Target = string;
+
+function basename(path: string): string {
+	return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+function tildePath(path: string, home: string): string {
+	return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
+function ago(timestamp: string): string {
+	const ms = Date.now() - Date.parse(timestamp);
+	if (!Number.isFinite(ms)) return "";
+	const m = Math.round(ms / 60_000);
+	if (m < 1) return "now";
+	if (m < 60) return `${m}m`;
+	const h = Math.round(m / 60);
+	if (h < 24) return `${h}h`;
+	return `${Math.round(h / 24)}d`;
+}
+
+/** Strip omp's leading Nerd Font glyph from a title ("󰒿 SORT: Fix …"). */
+function plainTitle(title: string): string {
+	return title.replace(/^[-\u{F0000}-\u{FFFFD}\s]+/u, "").trim();
+}
+
+function savedLabel(session: SavedSession): string {
+	return plainTitle(session.title) || session.prompt || basename(session.cwd);
+}
+
+/** What a Restore of a session file says: restoring continues the cut-off turn from where omp recorded it. */
+const RESTORE_COST = "A command cut off mid-run runs again, and the turn may spend tokens.";
+/** What a Restore of a session omp never saved says: the server starts its first message again. */
+const RERUN_COST =
+	"omp saved nothing of it, so its first message runs again in a new session, and the task spends tokens again.";
+
+/**
+ * The exit codes omp's own signal handlers end with (128 + the signal's number, after its teardown), and
+ * the ones a shell reports for a child a signal killed: an exit with one of them was that signal.
+ */
+const SIGNAL_EXIT_CODES: Record<number, string> = {
+	129: "SIGHUP",
+	130: "SIGINT",
+	131: "SIGQUIT",
+	134: "SIGABRT",
+	137: "SIGKILL",
+	143: "SIGTERM",
+};
+
+/** An exit omp did not choose (a signal or a failure code), in words; null for a clean exit. */
+function exitCause(exit: { code: number | null; signal: string | number | null } | null | undefined): string | null {
+	if (exit?.signal !== null && exit?.signal !== undefined)
+		return `omp was killed by ${typeof exit.signal === "number" ? `signal ${exit.signal}` : exit.signal}`;
+	if (typeof exit?.code !== "number" || exit.code === 0) return null;
+	const signal = SIGNAL_EXIT_CODES[exit.code];
+	return signal ? `omp was stopped by ${signal}` : `omp exited with code ${exit.code}`;
+}
+
+/** Why a session ended, for its banner; `gone` is a session the server dropped while this view reconnected. */
+function exitText(exit: ExitInfo | null | undefined, gone: boolean): string {
+	// Within one server run, only End session or a resume of its file takes a session off the server's list.
+	if (gone) return "This session was ended, or opened again, while this view was reconnecting.";
+	if (exit?.endedBy === "user") return "You ended this session.";
+	if (exit?.endedBy === "server") return "This session stopped with the GUI server.";
+	const cause = exitCause(exit);
+	return cause ? `${cause}.` : "This omp session has ended.";
+}
+
+/**
+ * The spawn that brings an interrupted roster entry back, or null when it holds nothing to restore. The
+ * server restores it as recorded: its session file, or the first message of one that died before omp wrote it.
+ */
+function restoreRequest(entry: InterruptedSession): SpawnRequest | null {
+	return entry.sessionFile || entry.prompt ? { from: entry.guiId } : null;
+}
+
+/** What restoring an interrupted entry does, for its Restore button. */
+function restoreTitle(entry: InterruptedSession): string {
+	return entry.sessionFile
+		? `Open it again, continuing a turn that was cut off. ${RESTORE_COST}`
+		: `Start it again. ${RERUN_COST}`;
+}
+
+/** Restore all's question: how many it starts, and what each kind runs again. */
+function restoreAllQuestion(entries: InterruptedSession[]): string {
+	const reruns = entries.filter(entry => !entry.sessionFile).length;
+	const resumes = entries.length - reruns;
+	const parts = [`Restore ${entries.length} sessions?`];
+	if (resumes > 0)
+		parts.push(
+			`${reruns === 0 ? "In each" : `In ${resumes === 1 ? "one" : resumes} of them`}, a command cut off mid-run runs again, and the turn may spend tokens.`,
+		);
+	if (reruns > 0)
+		parts.push(
+			resumes === 0
+				? "omp saved none of them, so each starts its first message again in a new session, and the task spends tokens again."
+				: reruns === 1
+					? "omp saved nothing of the other one, so its first message runs again in a new session, and the task spends tokens again."
+					: `omp saved nothing of the other ${reruns}, so their first messages run again in new sessions, and the tasks spend tokens again.`,
+		);
+	return parts.join(" ");
+}
+
+/** An unreachable, stopping or refusing server: the page has its own notice for it, and the link watches it. */
+function serverWide(err: unknown): boolean {
+	return err instanceof ApiError && (err.code === "unreachable" || err.status === 403 || err.status === 503);
+}
+
+function interruptedLabel(entry: InterruptedSession): string {
+	return plainTitle(entry.title ?? "") || entry.prompt || (entry.chat ? "New chat" : basename(entry.cwd));
+}
+
+/** What Dismiss of a session whose omp still runs means; it asks first. */
+const DISMISS_RUNNING = "omp is still running; dismissing leaves it running with no way to end it from here.";
+
+/** Why an interrupted entry is listed: its omp still runs, it exited on its own, or the server stopped under it. */
+function interruptedCause(entry: InterruptedSession): string {
+	if (entry.orphan)
+		return entry.ending ? "Still running after you ended it" : "Still running from the previous server";
+	// "omp" stays lower case: it is the program's name.
+	if (entry.exit) return exitCause(entry.exit) ?? "omp exited";
+	return "Running when the GUI server stopped";
+}
+
+type ThemeChoice = "system" | "light" | "dark";
+
+function useAppearance(): {
+	theme: ThemeChoice;
+	setTheme: (theme: ThemeChoice) => void;
+	prose: string;
+	setProse: (prose: string) => void;
+} {
+	const [theme, setThemeState] = useState<ThemeChoice>(() => stored("omp-gui.theme", "system") as ThemeChoice);
+	const [prose, setProseState] = useState(() => stored("omp-gui.prose", "sans"));
+	useEffect(() => {
+		const media = matchMedia("(prefers-color-scheme: dark)");
+		const apply = () => {
+			document.documentElement.dataset.theme = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+		};
+		apply();
+		media.addEventListener("change", apply);
+		return () => media.removeEventListener("change", apply);
+	}, [theme]);
+	useEffect(() => {
+		document.documentElement.dataset.prose = prose;
+	}, [prose]);
+	return {
+		theme,
+		setTheme: value => {
+			store("omp-gui.theme", value);
+			setThemeState(value);
+		},
+		prose,
+		setProse: value => {
+			store("omp-gui.prose", value);
+			setProseState(value);
+		},
+	};
+}
+
+function useSession(connection: SessionConnection): number {
+	return useSyncExternalStore(
+		listener => connection.subscribe(listener),
+		() => connection.version,
+	);
+}
+
+const NO_PALETTE: Record<string, string> = {};
+
+function Surface({ connection, meta }: { connection: SessionConnection; meta: SurfaceMeta }): ReactNode {
+	const surface = connection.surfaces.get(meta.id)!;
+	// Spans may name omp palette tokens; the stylesheet gives every known token this GUI's colour.
+	const palette = meta.palette?.dark ?? meta.palette?.light ?? NO_PALETTE;
+	const ctx = useMemo<SurfaceContextValue>(
+		() => ({ session: connection, store: surface.store, sf: meta.id, palette }),
+		[connection, surface.store, meta.id, palette],
+	);
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const innerRef = useRef<HTMLDivElement>(null);
+	const stick = useRef(true);
+	// A screen surface (settings, full-screen pickers) opens empty and gets its regions in later frames.
+	useSyncExternalStore(
+		listener => surface.store.subscribe(meta.id, listener),
+		() => surface.store.get(meta.id)?.v ?? -1,
+	);
+
+	useEffect(() => {
+		const scroller = scrollRef.current;
+		const inner = innerRef.current;
+		if (!scroller || !inner) return;
+		const onScroll = () => {
+			stick.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
+		};
+		const observer = new ResizeObserver(() => {
+			if (stick.current) scroller.scrollTop = scroller.scrollHeight;
+		});
+		observer.observe(inner);
+		scroller.addEventListener("scroll", onScroll);
+		return () => {
+			observer.disconnect();
+			scroller.removeEventListener("scroll", onScroll);
+		};
+	}, []);
+
+	const regions = surface.store.get(meta.id)?.c ?? [];
+	const has = (id: string) => regions.includes(id);
+	if (meta.mode === "screen") {
+		return (
+			<SurfaceContext.Provider value={ctx}>
+				<div className="surface screen">
+					<div className="screen-body">
+						{regions.map(id => (
+							<N key={id} id={id} />
+						))}
+					</div>
+				</div>
+			</SurfaceContext.Provider>
+		);
+	}
+	return (
+		<SurfaceContext.Provider value={ctx}>
+			<div className={`surface inline ${meta.closed ? "closed" : ""}`}>
+				<div className="main-scroll" ref={scrollRef}>
+					<div className="main-inner" ref={innerRef}>
+						{has("main") ? <Transcript id="main" /> : null}
+					</div>
+				</div>
+				{has("dock") ? (
+					<div className="dock">
+						<N id="dock" />
+					</div>
+				) : null}
+				{has("layer") ? (
+					<div className="layer">
+						<N id="layer" />
+					</div>
+				) : null}
+			</div>
+		</SurfaceContext.Provider>
+	);
+}
+
+/** The line above a running session's transcript, if any. */
+function viewStatus(connection: SessionConnection, drawn: boolean): string | null {
+	if (connection.info?.stopping) return "Stopping omp…";
+	if (!connection.connected) return connection.synced ? "Reconnecting…" : "Connecting…";
+	return drawn ? null : "Starting omp…";
+}
+
+function SessionView({
+	connection,
+	active,
+	spawning,
+	onRestore,
+}: {
+	connection: SessionConnection;
+	active: boolean;
+	spawning: boolean;
+	onRestore: () => void;
+}): ReactNode {
+	useSession(connection);
+	const rootRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const el = rootRef.current;
+		if (!el || !active) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const observer = new ResizeObserver(entries => {
+			const rect = entries[0]!.contentRect;
+			clearTimeout(timer);
+			timer = setTimeout(
+				() =>
+					connection.resize(
+						Math.floor((Math.min(rect.width, COLUMN_PX) - 56) / 7.6),
+						Math.floor(rect.height / 19),
+					),
+				120,
+			);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [connection, active]);
+
+	const onKeyDown = useCallback(
+		(event: React.KeyboardEvent) => {
+			const target = event.target as HTMLElement;
+			if (target.closest("textarea, input, select")) return;
+			const bytes = keyBytes(event.nativeEvent);
+			if (bytes === null) return;
+			event.preventDefault();
+			connection.keys(bytes);
+		},
+		[connection],
+	);
+
+	const surfaces = [...connection.surfaces.values()].map(surface => surface.meta);
+	const inline = surfaces.filter(meta => meta.mode === "inline");
+	const screens = surfaces.filter(meta => meta.mode === "screen");
+	const ended = connection.exited || connection.gone;
+	const exit = connection.exit;
+	// Restore continues the session from its file, or starts its first message again when omp never wrote one;
+	// the server says whether either exists (never after a clean exit: /exit cut nothing off). Ending it yourself
+	// means you did not want it to go on, and a gone session was ended so, or opened again.
+	const restorable = connection.exited && exit?.endedBy !== "user" && exit?.restorable === true;
+	const status = ended ? null : viewStatus(connection, inline.length > 0);
+	return (
+		<div
+			className="session-view"
+			ref={rootRef}
+			tabIndex={-1}
+			onKeyDown={onKeyDown}
+			style={{ display: active ? undefined : "none" }}
+		>
+			{status ? <div className="banner">{status}</div> : null}
+			{ended ? (
+				<div className="banner ended">
+					<div className="ended-line">
+						<span>{exitText(exit, connection.gone)}</span>
+						{restorable ? (
+							<button
+								type="button"
+								className="btn"
+								disabled={spawning}
+								title={`Open the session again and continue a turn that was cut off, or start its first message again if omp saved nothing. ${RESTORE_COST}`}
+								onClick={onRestore}
+							>
+								<Icon name="restart" size={13} /> Restore
+							</button>
+						) : null}
+					</div>
+					{exit?.lastOutput ? (
+						<details className="ended-output">
+							<summary>Show omp's last output</summary>
+							<pre>{exit.lastOutput}</pre>
+						</details>
+					) : null}
+				</div>
+			) : null}
+			{inline.slice(-1).map(meta => (
+				<Surface key={meta.id} connection={connection} meta={meta} />
+			))}
+			{/* A screen omp left open when it ended takes no input any more, and would cover the banner's Restore. */}
+			{ended ? null : screens.map(meta => <Surface key={meta.id} connection={connection} meta={meta} />)}
+		</div>
+	);
+}
+
+/** The bar above a session: its name, where it runs, whether it works, and End session while it runs. */
+function SessionHead({
+	connection,
+	listed,
+	home,
+	isChat,
+	ending,
+	onEnd,
+}: {
+	connection: SessionConnection;
+	/** The server's listing of the session; it lags the view's own status frames and stops when the server does. */
+	listed: LiveSession | undefined;
+	home: string;
+	isChat: (cwd: string) => boolean;
+	ending: boolean;
+	onEnd: () => void;
+}): ReactNode {
+	useSession(connection);
+	const info = connection.info ?? listed;
+	const running = !(connection.exited || connection.gone || info?.exited);
+	const stopping = running && (info?.stopping === true || ending);
+	return (
+		<header className="session-head">
+			<span className="head-title">{info ? sessionTitle(info, isChat(info.cwd)) : "Session"}</span>
+			{info ? <span className="head-path">{isChat(info.cwd) ? "Chat" : tildePath(info.cwd, home)}</span> : null}
+			{running && !stopping && info?.busy ? (
+				<span className="head-state">
+					<span className="starburst" /> Working
+				</span>
+			) : null}
+			<span className="head-spacer" />
+			{listed && running ? (
+				<button type="button" className="ghost-btn danger" disabled={stopping} onClick={onEnd}>
+					<Icon name="square" size={11} />
+					{stopping ? "Ending…" : "End session"}
+				</button>
+			) : null}
+		</header>
+	);
+}
+
+/** Closes a popover when the pointer goes down outside `ref`. */
+function useDismiss(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void): void {
+	useEffect(() => {
+		if (!open) return;
+		const onDown = (event: MouseEvent) => {
+			if (!ref.current?.contains(event.target as Node)) close();
+		};
+		addEventListener("mousedown", onDown);
+		return () => removeEventListener("mousedown", onDown);
+	}, [ref, open, close]);
+}
+
+function ProjectPicker({
+	target,
+	projects,
+	home,
+	onPick,
+	onChoose,
+}: {
+	target: Target;
+	projects: Project[];
+	home: string;
+	onPick: (target: Target) => void;
+	onChoose: () => void;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+	useDismiss(
+		ref,
+		open,
+		useCallback(() => setOpen(false), []),
+	);
+	const pick = (value: Target) => {
+		setOpen(false);
+		onPick(value);
+	};
+	return (
+		<div className="picker" ref={ref}>
+			<button
+				type="button"
+				className="field-chip project"
+				title={target ? tildePath(target, home) : "A chat in its own empty folder"}
+				onClick={() => setOpen(value => !value)}
+			>
+				<Icon name={target ? "folder" : "message-circle"} size={14} />
+				<span className="chip-label">{target ? basename(target) : "No project"}</span>
+				<Icon name="chev-down" size={12} />
+			</button>
+			{open ? (
+				<div className="picker-menu">
+					<div className={`picker-item ${target ? "" : "on"}`} onClick={() => pick("")}>
+						<Icon name="message-circle" size={14} />
+						<span className="side-label">No project</span>
+						<span className="side-meta">chat</span>
+					</div>
+					{projects.length ? <div className="picker-sep" /> : null}
+					<div className="picker-scroll">
+						{projects.map(project => (
+							<div
+								key={project.root}
+								className={`picker-item ${project.root === target ? "on" : ""}`}
+								title={tildePath(project.root, home)}
+								onClick={() => pick(project.root)}
+							>
+								<Icon name="folder" size={14} />
+								<span className="side-label">{project.name}</span>
+								<span className="side-meta">{project.modified ? ago(project.modified) : "new"}</span>
+							</div>
+						))}
+					</div>
+					<div className="picker-sep" />
+					<div
+						className="picker-item"
+						onClick={() => {
+							setOpen(false);
+							onChoose();
+						}}
+					>
+						<Icon name="folder-open" size={14} />
+						<span className="side-label">Choose folder…</span>
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+interface ModelChoice {
+	selector: string;
+	name: string;
+	provider: string;
+}
+
+interface ModelList {
+	models: ModelChoice[];
+	/** omp's `default` model role, e.g. "anthropic/claude-opus-5-5:high". */
+	default: string | null;
+}
+
+function modelName(selector: string, list: ModelList | null): string {
+	const [base, effort] = selector.split(":");
+	const name = list?.models.find(model => model.selector === base)?.name ?? base!.split("/").pop()!;
+	return effort ? `${name} · ${effort}` : name;
+}
+
+function ModelPicker({
+	value,
+	list,
+	onPick,
+}: {
+	/** A model selector, or "" for omp's default. */
+	value: string;
+	list: ModelList | null;
+	onPick: (value: string) => void;
+}): ReactNode {
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const ref = useRef<HTMLDivElement>(null);
+	useDismiss(
+		ref,
+		open,
+		useCallback(() => setOpen(false), []),
+	);
+	const pick = (selector: string) => {
+		setOpen(false);
+		setQuery("");
+		onPick(selector);
+	};
+	const needle = query.trim().toLowerCase();
+	const matches = (list?.models ?? []).filter(
+		model => !needle || model.name.toLowerCase().includes(needle) || model.selector.toLowerCase().includes(needle),
+	);
+	const providers = [...new Set(matches.map(model => model.provider))];
+	const fallback = list?.default ? modelName(list.default, list) : "omp's default";
+	return (
+		<div className="picker model-picker" ref={ref}>
+			<button
+				type="button"
+				className="field-chip project"
+				title={value || `Default model: ${list?.default ?? "omp's default"}`}
+				onClick={() => setOpen(current => !current)}
+			>
+				<Icon name="cpu" size={14} />
+				<span className="chip-label">{value ? modelName(value, list) : fallback}</span>
+				<Icon name="chev-down" size={12} />
+			</button>
+			{open ? (
+				<div className="picker-menu">
+					<input
+						className="picker-search"
+						autoFocus
+						value={query}
+						placeholder="Search models"
+						spellCheck={false}
+						onChange={event => setQuery(event.target.value)}
+						onKeyDown={event => {
+							if (event.key === "Escape") setOpen(false);
+							if (event.key === "Enter" && matches[0]) pick(matches[0].selector);
+						}}
+					/>
+					{needle ? null : (
+						<>
+							<div className={`picker-item ${value ? "" : "on"}`} onClick={() => pick("")}>
+								<Icon name="sparkles" size={14} />
+								<span className="side-label">{fallback}</span>
+								<span className="side-meta">default</span>
+							</div>
+							<div className="picker-sep" />
+						</>
+					)}
+					<div className="picker-scroll">
+						{list === null ? <div className="side-empty">Loading models…</div> : null}
+						{list && matches.length === 0 ? <div className="side-empty">No model matches</div> : null}
+						{providers.map(provider => (
+							<div key={provider}>
+								<div className="picker-group">{provider}</div>
+								{matches
+									.filter(model => model.provider === provider)
+									.map(model => (
+										<div
+											key={model.selector}
+											className={`picker-item ${model.selector === value ? "on" : ""}`}
+											title={model.selector}
+											onClick={() => pick(model.selector)}
+										>
+											<span className="side-label">{model.name}</span>
+										</div>
+									))}
+							</div>
+						))}
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function StartPage({
+	picker,
+	modelPicker,
+	interrupted,
+	recent,
+	spawning,
+	isCutOff,
+	onStart,
+	onResume,
+	onRestore,
+}: {
+	picker: ReactNode;
+	modelPicker: ReactNode;
+	/** The "Running when the GUI server stopped" section, when there is one. */
+	interrupted: ReactNode;
+	recent: SavedSession[];
+	spawning: boolean;
+	isCutOff: (session: SavedSession) => boolean;
+	onStart: (prompt: string) => void;
+	onResume: (session: SavedSession) => void;
+	onRestore: (session: SavedSession) => void;
+}): ReactNode {
+	const [prompt, setPrompt] = useState("");
+	const ref = useRef<HTMLTextAreaElement>(null);
+	useEffect(() => ref.current?.focus(), []);
+	const start = () => onStart(prompt);
+	return (
+		<div className="start">
+			<div className="start-inner">
+				<h1 className="start-title">
+					<OmpMark size={40} />
+					omp
+				</h1>
+				<div className="start-box">
+					<textarea
+						ref={ref}
+						value={prompt}
+						onChange={event => setPrompt(event.target.value)}
+						onKeyDown={event => {
+							if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+								event.preventDefault();
+								// A held Enter repeats; only the first press starts a session.
+								if (!event.repeat) start();
+							}
+						}}
+						placeholder="Describe a task for omp, or start with an empty session"
+						spellCheck={false}
+					/>
+					<div className="start-bar">
+						{picker}
+						{modelPicker}
+						<button
+							type="button"
+							className="send-btn"
+							onClick={start}
+							disabled={spawning}
+							title="Start session  ⏎"
+						>
+							<Icon name="arrow-up" size={16} />
+						</button>
+					</div>
+				</div>
+				<div className="start-hint">Enter starts the session, Shift+Enter adds a line.</div>
+				{interrupted}
+				{recent.length ? (
+					<div className="start-recent">
+						<div className="side-title">Pick up where you left off</div>
+						{recent.slice(0, 5).map(session => (
+							<SavedItem
+								key={session.id}
+								className=""
+								session={session}
+								lead={<Icon name="history" size={13} />}
+								cutOff={isCutOff(session)}
+								spawning={spawning}
+								onResume={() => onResume(session)}
+								onRestore={() => onRestore(session)}
+							/>
+						))}
+					</div>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * A saved session: a click resumes it. One whose last turn was cut off is marked, and only its own
+ * Restore button continues that turn, since continuing spends tokens.
+ */
+function SavedItem({
+	session,
+	className = "recent",
+	lead = null,
+	cutOff,
+	spawning,
+	onResume,
+	onRestore,
+}: {
+	session: SavedSession;
+	className?: string;
+	lead?: ReactNode;
+	cutOff: boolean;
+	spawning: boolean;
+	onResume: () => void;
+	onRestore: () => void;
+}): ReactNode {
+	return (
+		<div
+			className={`side-item ${className} ${spawning ? "waiting" : ""}`}
+			onClick={onResume}
+			title={`${session.cwd}\n${session.prompt}`}
+		>
+			<span className="side-lead">{lead}</span>
+			<span className="side-label">{savedLabel(session)}</span>
+			{cutOff ? (
+				<>
+					<span className="side-mark" title="Its last turn was cut off">
+						Interrupted
+					</span>
+					<button
+						type="button"
+						className="side-restore"
+						disabled={spawning}
+						title={`Restore: open it and continue the turn that was cut off. ${RESTORE_COST}`}
+						aria-label="Restore"
+						onClick={event => {
+							event.stopPropagation();
+							onRestore();
+						}}
+					>
+						<Icon name="restart" size={12} />
+					</button>
+				</>
+			) : (
+				<span className="side-meta">{ago(session.modified)}</span>
+			)}
+		</div>
+	);
+}
+
+/** Sessions the previous GUI server hosted that did not finish: bring each back, or let it go. */
+function InterruptedList({
+	entries,
+	home,
+	spawning,
+	acting,
+	onRestore,
+	onDismiss,
+	onEnd,
+}: {
+	entries: InterruptedSession[];
+	home: string;
+	spawning: boolean;
+	/** Entries with a dismiss or end request in flight. */
+	acting: ReadonlySet<string>;
+	onRestore: (entries: InterruptedSession[]) => void;
+	/** `force` forgets sessions whose omp still runs, which nothing here can end afterwards. */
+	onDismiss: (entries: InterruptedSession[], force?: boolean) => void;
+	onEnd: (entry: InterruptedSession) => void;
+}): ReactNode {
+	const restorable = entries.filter(entry => !entry.orphan && restoreRequest(entry));
+	/** Dismiss all forgets only sessions whose omp is gone; one still running is dismissed on its own, after a question. */
+	const finished = entries.filter(entry => !entry.orphan);
+	/** Restore all asks first: every one of them may run a command again and spend tokens. */
+	const [confirming, setConfirming] = useState(false);
+	const asking = confirming && restorable.length > 1;
+	/** The still-running session whose Dismiss is asking first. */
+	const [dismissing, setDismissing] = useState<string | null>(null);
+	return (
+		<div className="start-recent interrupted">
+			<div className="side-title interrupted-head">
+				<span>Unfinished sessions</span>
+				<span className="head-spacer" />
+				{restorable.length > 1 ? (
+					<button
+						type="button"
+						className="ghost-btn"
+						disabled={spawning || asking}
+						title={`Restore every session listed here. ${RESTORE_COST}${restorable.every(entry => entry.sessionFile) ? "" : " A session omp never saved starts its first message again, and the task spends tokens again."}`}
+						onClick={() => setConfirming(true)}
+					>
+						Restore all
+					</button>
+				) : null}
+				{finished.length > 1 ? (
+					<button
+						type="button"
+						className="ghost-btn"
+						title={
+							finished.length < entries.length
+								? "Forget every session listed here whose omp has ended; one still running stays"
+								: "Forget every session listed here"
+						}
+						onClick={() => onDismiss(finished)}
+					>
+						Dismiss all
+					</button>
+				) : null}
+			</div>
+			{asking ? (
+				<div className="restore-confirm" role="alertdialog" aria-label="Restore all">
+					<span className="restore-confirm-text">{restoreAllQuestion(restorable)}</span>
+					<button
+						type="button"
+						className="btn"
+						disabled={spawning}
+						onClick={() => {
+							setConfirming(false);
+							onRestore(restorable);
+						}}
+					>
+						Restore {restorable.length}
+					</button>
+					<button type="button" className="ghost-btn" onClick={() => setConfirming(false)}>
+						Cancel
+					</button>
+				</div>
+			) : null}
+			{entries.map(entry => (
+				<Fragment key={entry.guiId}>
+					<div className="side-item interrupted-item" title={tildePath(entry.cwd, home)}>
+						<span className="side-lead">
+							<Icon name={entry.orphan ? "activity" : entry.chat ? "message-circle" : "folder"} size={13} />
+						</span>
+						<span className="side-text">
+							<span className="side-label">{interruptedLabel(entry)}</span>
+							<span className={`side-cause ${entry.exit && !entry.orphan ? "failed" : ""}`}>
+								{interruptedCause(entry)} · {entry.chat ? "chat" : basename(entry.cwd)}
+							</span>
+						</span>
+						{!entry.orphan && entry.restorable ? (
+							<span className="side-mark" title="Its last turn was cut off">
+								Interrupted
+							</span>
+						) : null}
+						{acting.has(entry.guiId) ? (
+							<span className="side-meta">{entry.orphan ? "Ending…" : "Dismissing…"}</span>
+						) : (
+							<span className="item-actions">
+								{entry.orphan ? (
+									<button
+										type="button"
+										className="ghost-btn danger"
+										title="Stop that omp and forget it"
+										onClick={() => onEnd(entry)}
+									>
+										End
+									</button>
+								) : restoreRequest(entry) ? (
+									<button
+										type="button"
+										className="ghost-btn"
+										disabled={spawning}
+										title={restoreTitle(entry)}
+										onClick={() => onRestore([entry])}
+									>
+										Restore
+									</button>
+								) : null}
+								<button
+									type="button"
+									className="ghost-btn"
+									title={entry.orphan ? `Forget it. ${DISMISS_RUNNING}` : "Forget it"}
+									onClick={() => (entry.orphan ? setDismissing(entry.guiId) : onDismiss([entry]))}
+								>
+									Dismiss
+								</button>
+							</span>
+						)}
+					</div>
+					{dismissing === entry.guiId && entry.orphan && !acting.has(entry.guiId) ? (
+						<div className="restore-confirm" role="alertdialog" aria-label="Dismiss">
+							<span className="restore-confirm-text">{DISMISS_RUNNING}</span>
+							<button
+								type="button"
+								className="btn"
+								onClick={() => {
+									setDismissing(null);
+									onDismiss([entry], true);
+								}}
+							>
+								Dismiss anyway
+							</button>
+							<button type="button" className="ghost-btn" onClick={() => setDismissing(null)}>
+								Cancel
+							</button>
+						</div>
+					) : null}
+				</Fragment>
+			))}
+		</div>
+	);
+}
+
+/** App-wide lines about the GUI server, a spawn that waits, and this window's environment. */
+function Notices({ waiting }: { waiting: boolean }): ReactNode {
+	const state = useSyncExternalStore(
+		listener => link.subscribe(listener),
+		() => link.state,
+	);
+	const replaced = useSyncExternalStore(
+		listener => link.subscribe(listener),
+		() => link.replaced,
+	);
+	const [envHidden, setEnvHidden] = useState(false);
+	const degraded = DEGRADED_ENV && !envHidden;
+	if (state === "up" && !replaced && !degraded && !waiting) return null;
+	return (
+		<div className="notices">
+			{waiting && state === "up" ? (
+				<div className="notice" role="status">
+					<span className="spin" />
+					<span className="notice-text">Waiting for the previous omp to finish shutting down…</span>
+				</div>
+			) : null}
+			{state === "down" ? (
+				<div className="notice warn">
+					<Icon name="warning" size={14} />
+					<span className="notice-text">GUI server not reachable</span>
+					<button type="button" className="btn" onClick={() => link.retryNow()}>
+						Reconnect now
+					</button>
+				</div>
+			) : null}
+			{state === "stopping" ? (
+				<div className="notice">
+					<Icon name="info" size={14} />
+					<span className="notice-text">The GUI server is stopping</span>
+				</div>
+			) : null}
+			{state === "rejected" ? (
+				<div className="notice warn">
+					<Icon name="warning" size={14} />
+					<span className="notice-text">
+						The GUI server no longer accepts this page; open it again with <code>omp gui</code>
+					</span>
+				</div>
+			) : null}
+			{replaced ? (
+				<div className="notice">
+					<Icon name="info" size={14} />
+					<span className="notice-text">omp was reinstalled; restart the GUI server to use the new version</span>
+				</div>
+			) : null}
+			{degraded ? (
+				<div className="notice">
+					<Icon name="info" size={14} />
+					<span className="notice-text">
+						Login-shell environment unavailable: tools on your PATH may be missing
+					</span>
+					<button
+						type="button"
+						className="notice-close"
+						title="Hide"
+						aria-label="Hide"
+						onClick={() => setEnvHidden(true)}
+					>
+						<Icon name="close" size={13} />
+					</button>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+export function App(): ReactNode {
+	const [live, setLive] = useState<LiveSession[]>([]);
+	const [projects, setProjects] = useState<Project[]>([]);
+	const [chats, setChats] = useState<SavedSession[]>([]);
+	const [chatsDir, setChatsDir] = useState("");
+	const [peers, setPeers] = useState<PeerSession[]>([]);
+	const [home, setHome] = useState("");
+	const [copied, setCopied] = useState<string | null>(null);
+	const [open, setOpen] = useState<string[]>([]);
+	const [active, setActive] = useState<string | null>(null);
+	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
+	const [chosen, setChosen] = useState<string | null>(null);
+	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
+	const [modelList, setModelList] = useState<ModelList | null>(null);
+	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);
+	/** What the last action (spawn, end, choose folder) failed with; cleared by the next. */
+	const [error, setError] = useState<string | null>(null);
+	/** What the last listing failed with; cleared by the next that succeeds. */
+	const [listError, setListError] = useState<string | null>(null);
+	const [spawning, setSpawning] = useState(false);
+	/** A spawn that opens a session file has waited over a second: the server may be waiting for the omp that held it. */
+	const [waiting, setWaiting] = useState(false);
+	/** Live sessions with an End request in flight. */
+	const [ending, setEnding] = useState<ReadonlySet<string>>(new Set());
+	/** Interrupted entries, and exited live sessions, with a Dismiss or End request in flight. */
+	const [acting, setActing] = useState<ReadonlySet<string>>(new Set());
+	const connections = useRef(new Map<string, SessionConnection>());
+	/** One spawn at a time, whichever button or key asked for it; state lags a fast double press, a ref does not. */
+	const spawnInFlight = useRef(false);
+	const appearance = useAppearance();
+
+	/** Fetch the listing into state; it resolves with the listing, or null when that failed. */
+	const refresh = useCallback(async (): Promise<Listing | null> => {
+		try {
+			const data = await api<Listing>("/api/sessions");
+			link.observe(data.server);
+			setLive(data.live);
+			setProjects(data.projects);
+			setChats(data.chats);
+			setChatsDir(data.chatsDir);
+			setHome(data.home);
+			setInterrupted(data.interrupted ?? []);
+			setPeers(await api<PeerSession[]>("/api/peers"));
+			setListError(null);
+			return data;
+		} catch (err) {
+			if (!serverWide(err)) setListError(errorText(err));
+			return null;
+		}
+	}, []);
+
+	useEffect(() => {
+		void refresh();
+		// While the server is not answering the link probes it with a backoff, and refreshes once it is back.
+		const timer = setInterval(() => {
+			if (link.state === "up") void refresh();
+		}, 5000);
+		let state = link.state;
+		const unsubscribe = link.subscribe(() => {
+			if (link.state === "up" && state !== "up") void refresh();
+			state = link.state;
+		});
+		return () => {
+			clearInterval(timer);
+			unsubscribe();
+		};
+	}, [refresh]);
+
+	const connect = (id: string) => {
+		if (!connections.current.has(id)) connections.current.set(id, new SessionConnection(id));
+	};
+
+	const show = (id: string) => {
+		connect(id);
+		setOpen(list => (list.includes(id) ? list : [...list, id]));
+		setActive(id);
+	};
+
+	/** Close a session's view (its omp keeps running unless it was ended). */
+	const forget = (id: string) => {
+		connections.current.get(id)?.close();
+		connections.current.delete(id);
+		setOpen(list => list.filter(item => item !== id));
+		setActive(current => (current === id ? null : current));
+	};
+
+	useEffect(() => {
+		api<ModelList>("/api/models").then(setModelList, err => {
+			if (!serverWide(err)) setError(errorText(err));
+		});
+	}, []);
+
+	const setModel = (value: string) => {
+		store("omp-gui.model", value);
+		setModelState(value);
+	};
+
+	const setTarget = (value: Target) => {
+		store("omp-gui.project", value);
+		setTargetState(value);
+	};
+
+	const chooseFolder = async () => {
+		setError(null);
+		try {
+			const { path } = await api<{ path: string | null }>("/api/choose-folder", {});
+			if (!path) return;
+			setChosen(path);
+			setTarget(path);
+		} catch (err) {
+			setError(errorText(err));
+		}
+	};
+
+	/**
+	 * Start sessions, one request after another, and show the first. Every entry point (start page, recent and
+	 * sidebar items, Restore) comes through here, and a request while one is in flight is dropped, so a double
+	 * press never starts two agents.
+	 */
+	/**
+	 * A spawn the server may hold, waiting for the omp that has its session file to let go: a resume, or a
+	 * restore of a session that has a file. A restore of a first message opens none.
+	 */
+	const opensFile = (request: SpawnRequest): boolean =>
+		request.resume !== undefined ||
+		(request.from !== undefined &&
+			Boolean(
+				interrupted.find(entry => entry.guiId === request.from)?.sessionFile ??
+				connections.current.get(request.from)?.info?.sessionFile,
+			));
+
+	const spawn = async (requests: SpawnRequest[], replaces?: string) => {
+		if (spawnInFlight.current) return;
+		spawnInFlight.current = true;
+		setSpawning(true);
+		setError(null);
+		try {
+			const ids: string[] = [];
+			const errors: string[] = [];
+			for (const request of requests) {
+				// The server waits up to 10 s for another omp to let go of the session file (one still tearing down).
+				const timer = opensFile(request) ? setTimeout(() => setWaiting(true), WAITING_MS) : undefined;
+				try {
+					ids.push((await api<{ id: string }>("/api/spawn", request)).id);
+				} catch (err) {
+					errors.push(errorText(err));
+				} finally {
+					clearTimeout(timer);
+					setWaiting(false);
+				}
+			}
+			if (errors.length) setError(errors.join("\n"));
+			if (replaces && ids.length) forget(replaces);
+			if (requests.length) await refresh();
+			// Two requests may come back as one session: the server answers a resume of a file it already runs
+			// with that session, as when two roster entries name the same file.
+			const unique = [...new Set(ids)];
+			for (const id of unique.slice(1)) connect(id);
+			if (unique.length) {
+				setOpen(current => [...current, ...unique.filter(id => !current.includes(id))]);
+				show(unique[0]!);
+			}
+		} finally {
+			spawnInFlight.current = false;
+			setSpawning(false);
+		}
+	};
+
+	const resumeRequest = (session: SavedSession): SpawnRequest => ({
+		resume: { path: session.path, cwd: session.cwd },
+		model: model || undefined,
+	});
+
+	// --restore takes no prompt, and the turn continues on the model it was running.
+	const restoreSaved = (session: SavedSession) =>
+		void spawn([{ resume: { path: session.path, cwd: session.cwd }, restore: true }]);
+
+	const stopSession = async (id: string) => {
+		if (ending.has(id)) return;
+		setEnding(set => new Set(set).add(id));
+		setError(null);
+		try {
+			// Returns once omp has exited, or the server gave up on it; the view shows "Stopping omp…" meanwhile.
+			const { ok } = await api<{ ok: boolean }>("/api/kill", { id });
+			if (ok) forget(id);
+			else {
+				const pid = connections.current.get(id)?.info?.pid ?? live.find(session => session.id === id)?.pid;
+				setError(`omp did not exit when ended; it may still be running${pid ? ` (pid ${pid})` : ""}.`);
+			}
+		} catch (err) {
+			setError(errorText(err));
+		} finally {
+			setEnding(set => {
+				const next = new Set(set);
+				next.delete(id);
+				return next;
+			});
+			void refresh();
+		}
+	};
+
+	/**
+	 * Dismiss (forget) or End (stop the orphaned omp, then forget) interrupted entries. A dismiss with `force`
+	 * forgets one whose omp still runs; the server refuses that without it.
+	 */
+	const settleInterrupted = async (entries: InterruptedSession[], verb: "dismiss" | "end", force = false) => {
+		const pending = entries.filter(entry => !acting.has(entry.guiId));
+		if (pending.length === 0) return;
+		const ids = pending.map(entry => entry.guiId);
+		setActing(set => new Set([...set, ...ids]));
+		setError(null);
+		const results = await Promise.allSettled(
+			ids.map(guiId => api<{ ok: boolean }>(`/api/interrupted/${verb}`, force ? { guiId, force } : { guiId })),
+		);
+		const failed = results.flatMap((result, index) => {
+			if (result.status === "rejected") return [errorText(result.reason)];
+			// An orphan that outlived SIGINT and the SIGKILL of its process group stays listed, still running.
+			return result.value.ok ? [] : [`${interruptedLabel(pending[index]!)}: omp did not exit; it is still running.`];
+		});
+		if (failed.length) setError(failed.join("\n"));
+		setActing(set => new Set([...set].filter(id => !ids.includes(id))));
+		await refresh();
+	};
+
+	/** Take a session that has exited off the list, with its roster entry; its view closes. */
+	const dismissLive = async (id: string) => {
+		if (acting.has(id)) return;
+		setActing(set => new Set(set).add(id));
+		setError(null);
+		try {
+			await api<{ ok: boolean }>(DISMISS_PATH, { guiId: id });
+			forget(id);
+		} catch (err) {
+			// Already gone from the server (another window dismissed or restored it): only the view is left to close.
+			if (err instanceof ApiError && err.status === 404) forget(id);
+			else setError(errorText(err));
+		} finally {
+			setActing(set => new Set([...set].filter(item => item !== id)));
+			void refresh();
+		}
+	};
+
+	// Sessions running right now, here or in another omp process, are not interrupted whatever their file says.
+	const running = new Set([
+		...live.flatMap(session => (!session.exited && session.sessionFile ? [session.sessionFile] : [])),
+		...peers.map(peer => peer.sessionId),
+	]);
+	const isCutOff = (session: SavedSession) =>
+		session.restorable === true && !running.has(session.path) && !running.has(session.id);
+
+	const activeConnection = active === null ? undefined : connections.current.get(active);
+	const isChat = (cwd: string) => Boolean(chatsDir) && (cwd === chatsDir || cwd.startsWith(`${chatsDir}/`));
+	// A folder just chosen (or remembered from last time) may have no saved session yet, so the store does not list it.
+	const extra = [chosen, target].find(root => root && !projects.some(project => project.root === root));
+	const pickable = extra
+		? [{ root: extra, name: basename(extra), modified: "", sessions: [] }, ...projects]
+		: projects;
+	const recentForTarget = target ? (projects.find(project => project.root === target)?.sessions ?? []) : chats;
+	/** The first `count` sessions, plus every later one whose turn was cut off, so none hides below the fold. */
+	const listed = (sessions: SavedSession[], count: number) =>
+		sessions.filter((session, index) => index < count || isCutOff(session));
+	const savedItem = (session: SavedSession) => (
+		<SavedItem
+			key={session.id}
+			session={session}
+			cutOff={isCutOff(session)}
+			spawning={spawning}
+			onResume={() => void spawn([resumeRequest(session)])}
+			onRestore={() => restoreSaved(session)}
+		/>
+	);
+	const newIn = (value: Target) => {
+		setTarget(value);
+		setActive(null);
+	};
+	return (
+		<div className="app">
+			<aside className="sidebar">
+				<div className="side-top">
+					<div className="brand">
+						<OmpMark size={22} />
+						omp
+					</div>
+					<button
+						type="button"
+						className={`new-session ${active === null ? "active" : ""}`}
+						onClick={() => setActive(null)}
+					>
+						<Icon name="plus" size={15} /> New session
+					</button>
+				</div>
+				<div className="side-scroll">
+					{error ? <div className="error-text">{error}</div> : null}
+					{listError ? <div className="error-text">{listError}</div> : null}
+					<div className="side-title">Sessions</div>
+					{live.length === 0 ? <div className="side-empty">Nothing running</div> : null}
+					{live.map(session => {
+						const stopping = !session.exited && (session.stopping || ending.has(session.id));
+						return (
+							<div
+								key={session.id}
+								className={`side-item ${session.id === active ? "active" : ""}`}
+								onClick={() => show(session.id)}
+								title={session.cwd}
+							>
+								<span className="side-lead">
+									{session.busy && !stopping ? (
+										<span className="starburst" />
+									) : (
+										<span
+											className={`dot ${session.exited ? "tone-muted" : stopping ? "tone-pending" : "tone-success"}`}
+										/>
+									)}
+								</span>
+								<span className="side-label">{sessionTitle(session, isChat(session.cwd))}</span>
+								{stopping ? (
+									<span className="side-meta">Ending…</span>
+								) : session.exited ? (
+									acting.has(session.id) ? (
+										<span className="side-meta">Dismissing…</span>
+									) : (
+										<button
+											type="button"
+											className="side-stop side-dismiss"
+											title="Dismiss: take this ended session off the list"
+											aria-label="Dismiss"
+											onClick={event => {
+												event.stopPropagation();
+												void dismissLive(session.id);
+											}}
+										>
+											<Icon name="close" size={11} />
+										</button>
+									)
+								) : (
+									<button
+										type="button"
+										className="side-stop"
+										title="End this session"
+										onClick={event => {
+											event.stopPropagation();
+											void stopSession(session.id);
+										}}
+									>
+										<Icon name="square" size={11} />
+									</button>
+								)}
+							</div>
+						);
+					})}
+					<div className="side-title">On this Mac</div>
+					{peers.filter(peer => !peer.guiId).length === 0 ? (
+						<div className="side-empty">No other omp sessions</div>
+					) : null}
+					{peers
+						.filter(peer => !peer.guiId)
+						.map(peer => (
+							<div
+								key={`${peer.pid}-${peer.short}`}
+								className="side-item peer"
+								title={`${peer.cwd}\nagent://Main@${peer.short}${peer.accepts ? "" : "\n(editor session: listed, takes no messages)"}\nClick to copy the address`}
+								onClick={() => {
+									void navigator.clipboard?.writeText(`agent://Main@${peer.short}`);
+									setCopied(peer.short);
+									setTimeout(() => setCopied(value => (value === peer.short ? null : value)), 1500);
+								}}
+							>
+								<span className="side-lead">
+									{peer.busy ? (
+										<span className="starburst" />
+									) : (
+										<span className={`dot ${peer.accepts ? "tone-muted" : "tone-pending"}`} />
+									)}
+								</span>
+								<span className="side-label">
+									{copied === peer.short
+										? "Address copied"
+										: plainTitle(peer.name ?? "") || basename(peer.cwd)}
+								</span>
+								<span className="side-mode">{peer.mode}</span>
+							</div>
+						))}
+					<div className="side-title">Projects</div>
+					{projects.length === 0 ? <div className="side-empty">No projects yet</div> : null}
+					{projects.map(project => (
+						<div key={project.root} className="side-group">
+							<div
+								className={`side-item project ${active === null && target === project.root ? "active" : ""}`}
+								title={`${tildePath(project.root, home)}\nNew session in this project`}
+								onClick={() => newIn(project.root)}
+							>
+								<span className="side-lead">
+									<Icon name="folder" size={13} />
+								</span>
+								<span className="side-label">{project.name}</span>
+								<span className="side-add">
+									<Icon name="plus" size={13} />
+								</span>
+							</div>
+							{listed(project.sessions, 3).map(savedItem)}
+						</div>
+					))}
+					<div
+						className={`side-title side-title-action ${active === null && !target ? "active" : ""}`}
+						title="New chat without a project"
+						onClick={() => newIn("")}
+					>
+						<span>Chats</span>
+						<Icon name="plus" size={12} />
+					</div>
+					{chats.length === 0 ? <div className="side-empty">No chats yet</div> : null}
+					{listed(chats, 8).map(savedItem)}
+				</div>
+				<div className="side-foot">
+					<div className="seg-toggle" role="radiogroup" aria-label="Theme">
+						{(
+							[
+								["system", "monitor", "Match the system"],
+								["light", "sun", "Light"],
+								["dark", "moon", "Dark"],
+							] as const
+						).map(([value, icon, label]) => (
+							<button
+								key={value}
+								type="button"
+								className={appearance.theme === value ? "on" : ""}
+								title={label}
+								aria-label={label}
+								onClick={() => appearance.setTheme(value)}
+							>
+								<Icon name={icon} size={13} />
+							</button>
+						))}
+					</div>
+					<span className="foot-spacer" />
+					<div className="seg-toggle" role="radiogroup" aria-label="Reading font">
+						<button
+							type="button"
+							className={appearance.prose === "sans" ? "on" : ""}
+							title="Answers in sans"
+							onClick={() => appearance.setProse("sans")}
+						>
+							Aa
+						</button>
+						<button
+							type="button"
+							className={`serif-aa ${appearance.prose === "serif" ? "on" : ""}`}
+							title="Answers in serif"
+							onClick={() => appearance.setProse("serif")}
+						>
+							Aa
+						</button>
+					</div>
+				</div>
+			</aside>
+			<main className="content">
+				<Notices waiting={waiting} />
+				{activeConnection ? (
+					<SessionHead
+						key={activeConnection.id}
+						connection={activeConnection}
+						listed={live.find(item => item.id === activeConnection.id)}
+						home={home}
+						isChat={isChat}
+						ending={ending.has(activeConnection.id)}
+						onEnd={() => void stopSession(activeConnection.id)}
+					/>
+				) : (
+					<StartPage
+						picker={
+							<ProjectPicker
+								target={target}
+								projects={pickable}
+								home={home}
+								onPick={setTarget}
+								onChoose={() => void chooseFolder()}
+							/>
+						}
+						modelPicker={<ModelPicker value={model} list={modelList} onPick={setModel} />}
+						interrupted={
+							interrupted.length ? (
+								<InterruptedList
+									entries={interrupted}
+									home={home}
+									spawning={spawning}
+									acting={acting}
+									onRestore={entries => void spawn(entries.flatMap(entry => restoreRequest(entry) ?? []))}
+									onDismiss={(entries, force) => void settleInterrupted(entries, "dismiss", force)}
+									onEnd={entry => void settleInterrupted([entry], "end")}
+								/>
+							) : null
+						}
+						recent={recentForTarget}
+						spawning={spawning}
+						isCutOff={isCutOff}
+						onStart={prompt =>
+							void spawn([
+								{ project: target || undefined, model: model || undefined, prompt: prompt.trim() || undefined },
+							])
+						}
+						onResume={session => void spawn([resumeRequest(session)])}
+						onRestore={restoreSaved}
+					/>
+				)}
+				{open.map(id => {
+					const connection = connections.current.get(id);
+					return connection ? (
+						<SessionView
+							key={id}
+							connection={connection}
+							active={id === active}
+							spawning={spawning}
+							// The server restores it as recorded: its session file, or its first message when omp wrote none.
+							onRestore={() => void spawn([{ from: id }], id)}
+						/>
+					) : null;
+				})}
+			</main>
+		</div>
+	);
+}

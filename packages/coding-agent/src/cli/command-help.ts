@@ -69,6 +69,10 @@ export const galleryHelp = {
 } satisfies CommandMetadata;
 
 export const gcHelp = { description: "Run storage garbage collection" } satisfies CommandMetadata;
+export const guiHelp = {
+	description: "Open omp in a browser window: sessions by project, chats, and the agent hub",
+} satisfies CommandMetadata;
+
 export const ifBenchHelp = {
 	description:
 		"Benchmark instruction following and working memory: one cached thread of glyph array actions with a moving cat-sound directive",

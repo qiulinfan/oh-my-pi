@@ -132,15 +132,11 @@
         "@types/react-dom": "catalog:",
       },
     },
-    "packages/gui-spike": {
-      "name": "@oh-my-pi/gui-spike",
+    "packages/gui": {
+      "name": "@oh-my-pi/gui",
       "version": "0.0.0",
       "dependencies": {
         "@oh-my-pi/collab-web": "workspace:*",
-        "@oh-my-pi/pi-coding-agent": "workspace:*",
-        "@oh-my-pi/pi-natives": "workspace:*",
-        "@oh-my-pi/pi-tui": "workspace:*",
-        "@oh-my-pi/pi-utils": "workspace:*",
         "@oh-my-pi/pi-wire": "workspace:*",
         "katex": "catalog:",
         "lucide-react": "catalog:",
@@ -148,6 +144,7 @@
         "react-dom": "catalog:",
       },
       "devDependencies": {
+        "@oh-my-pi/pi-tui": "workspace:*",
         "@types/bun": "catalog:",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
@@ -722,7 +719,7 @@
 
     "@oh-my-pi/collab-web": ["@oh-my-pi/collab-web@workspace:packages/collab-web"],
 
-    "@oh-my-pi/gui-spike": ["@oh-my-pi/gui-spike@workspace:packages/gui-spike"],
+    "@oh-my-pi/gui": ["@oh-my-pi/gui@workspace:packages/gui"],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@workspace:packages/stats"],
 

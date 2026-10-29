@@ -257,6 +257,7 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `dry-balance` | Dry-run OAuth account balancing across random session ids. | |
 | `find` | Semantic search for implementing files and line ranges. | |
 | `gc` | Run storage garbage collection. | |
+| `gui` | Open omp in a browser window: sessions by project, no-project chats, and the agent hub. Attaches to this machine's running GUI server or starts one; `--no-open` skips the browser, `--json` prints the address for the desktop app, and `--exit-on-stdin-close` stops the server and the sessions it hosts when stdin closes (used by the desktop app). `OMP_GUI_RUNTIME_DIR` runs a separate server. | [gui](./gui.md) |
 | `grep` | Test the grep tool from the CLI. (The [`grep` tool](./tools/grep.md) is a separate agent tool.) | |
 | `gallery` | Preview tool, composer, and status-line renderers in a deterministic gallery. | |
 | `git` | Interactive fullscreen git UI: split diff viewer, staging sidebar, and commit composer. | |

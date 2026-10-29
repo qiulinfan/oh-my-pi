@@ -1,14 +1,21 @@
 /**
  * The composer: a native textarea that mirrors omp's editor node. Typing,
  * IME composition, selection and deletion stay native and reach omp as TSP
- * `edit` events (the minimal replaced range against the text the previous
- * edit produced); keys omp binds itself (Enter, Tab, Esc, Up/Down at the text
+ * `edit` events; keys omp binds itself (Enter, Tab, Esc, Up/Down at the text
  * edges, Ctrl/Alt chords) go to the pty as terminal bytes. omp echoes every
- * applied edit back as `text`/`splice` ops. An echo of a state this textarea
- * already moved past only acknowledges that edit; any other text is omp's own
- * change (sent, cleared, history, completion) and replaces the textarea's.
+ * applied edit back as `text`/`splice` ops; `ComposerSync` (composer.ts) tells
+ * an acknowledgement from omp's own change.
+ *
+ * While the session's socket is down, or omp has exited, the textarea is
+ * read-only and the keys omp binds do nothing; edits sent into a dying socket
+ * may never have reached omp.
+ * A reconnect's `init` brings new stores holding omp's text: the textarea is
+ * diffed against that text once more, so omp gets what it missed, unless
+ * omp's text changed in the gap, which then wins. Keys and events are never
+ * replayed.
  */
-import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { ComposerSync } from "./composer";
 import { keyBytes } from "./keys";
 import { Spans, useSurface } from "./render";
 import type { StoreNode } from "./store";
@@ -21,39 +28,59 @@ function plain(text: unknown): string {
 
 export function Editor({ node, common }: { node: StoreNode; common: Record<string, any> }): ReactNode {
 	const { session, store, sf } = useSurface();
+	// Its own subscription: the surface context does not change when the socket drops or omp exits.
+	const live = useSyncExternalStore(
+		listener => session.subscribe(listener),
+		() => session.connected && !session.exited,
+	);
 	const ref = useRef<HTMLTextAreaElement>(null);
 	const composing = useRef(false);
-	/** The text omp will hold once it has applied every edit sent so far; edits are computed against it. */
-	const known = useRef<string>(node.p.text ?? "");
-	/** Texts of the edits omp has not echoed yet, oldest first. */
-	const pending = useRef<string[]>([]);
 	const p = node.p;
 	const text: string = p.text ?? "";
+	const sync = useRef<ComposerSync | null>(null);
+	sync.current ??= new ComposerSync(text);
+	/** The store the text effect last saw: another one is a reconnect's fresh snapshot. */
+	const seen = useRef(store);
 	const focused = store.focus === node.id;
 	const cursor = typeof p.cursor === "number" ? Math.min(p.cursor, text.length) : text.length;
 	const props = useRef({ cursor, maxLines: p.maxLines as number | undefined });
 	props.current = { cursor, maxLines: p.maxLines };
 
-	useLayoutEffect(() => {
-		const acked = pending.current.indexOf(text);
-		if (acked >= 0) {
-			// omp caught up to an edit typed here; the textarea is already at or past it.
-			pending.current.splice(0, acked + 1);
-			return;
-		}
-		pending.current = [];
-		known.current = text;
+	/** Put omp's own text in the textarea (never mid-composition). */
+	const show = (value: string) => {
 		const el = ref.current;
-		if (!el || composing.current || el.value === text) return;
-		el.value = text;
+		if (!el || composing.current || el.value === value) return;
+		el.value = value;
 		if (document.activeElement === el) el.setSelectionRange(props.current.cursor, props.current.cursor);
 		autosize(el, props.current.maxLines);
-	}, [text]);
+	};
+
+	const sendEdit = () => {
+		const el = ref.current;
+		if (!el || composing.current) return;
+		const edit = sync.current!.edit(el.value);
+		if (!edit) return;
+		session.event({ ev: "edit", sf, id: node.id, ...edit, cursor: el.selectionStart });
+		autosize(el, p.maxLines);
+	};
+
+	useLayoutEffect(() => {
+		if (seen.current === store) {
+			// omp's text changed on the same snapshot: an echo of edits sent from here, or omp's own change.
+			if (sync.current!.heard(text)) show(text);
+			return;
+		}
+		// A reconnect's `init` made new stores holding omp's own text: send what omp missed, or take omp's text
+		// when it changed on its own in the gap.
+		seen.current = store;
+		if (sync.current!.rebase(text)) show(text);
+		else sendEdit();
+	}, [text, store]);
 
 	// A cursor omp moved on its own (a forwarded Ctrl+A, say); never while edits typed here are in flight.
 	useLayoutEffect(() => {
 		const el = ref.current;
-		if (!el || composing.current || pending.current.length > 0 || el.value !== known.current) return;
+		if (!el || composing.current || !sync.current!.settled(el.value)) return;
 		if (document.activeElement === el && el.selectionStart === el.selectionEnd) el.setSelectionRange(cursor, cursor);
 	}, [cursor]);
 
@@ -64,35 +91,6 @@ export function Editor({ node, common }: { node: StoreNode; common: Record<strin
 	useEffect(() => {
 		if (focused && !p.readonly) ref.current?.focus({ preventScroll: true });
 	}, [focused, store.focusVersion, p.readonly]);
-
-	const sendEdit = () => {
-		const el = ref.current;
-		if (!el || composing.current) return;
-		const before = known.current;
-		const after = el.value;
-		if (before === after) return;
-		let start = 0;
-		while (start < before.length && start < after.length && before[start] === after[start]) start++;
-		let endBefore = before.length;
-		let endAfter = after.length;
-		while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
-			endBefore--;
-			endAfter--;
-		}
-		session.event({
-			ev: "edit",
-			sf,
-			id: node.id,
-			from: start,
-			to: endBefore,
-			text: after.slice(start, endAfter),
-			cursor: el.selectionStart,
-			len: before.length,
-		});
-		known.current = after;
-		pending.current.push(after);
-		autosize(el, p.maxLines);
-	};
 
 	const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (composing.current || event.nativeEvent.isComposing) return;
@@ -111,10 +109,11 @@ export function Editor({ node, common }: { node: StoreNode; common: Record<strin
 		const bytes = keyBytes(event.nativeEvent);
 		if (bytes === null) return;
 		event.preventDefault();
+		// While the socket is down or omp has exited the key cannot reach omp: it does nothing, and the record of
+		// the edits in flight stays for the reconnect.
+		if (!session.connected || session.exited) return;
 		sendEdit();
-		// The key may change the text (submit clears it, Tab completes, Up recalls history), and omp can
-		// fold the echoes of the edits before it into that one change: from here omp's text wins.
-		pending.current = [];
+		sync.current!.keyed();
 		session.keys(bytes);
 	};
 
@@ -130,7 +129,7 @@ export function Editor({ node, common }: { node: StoreNode; common: Record<strin
 				ref={ref}
 				defaultValue={text}
 				rows={1}
-				readOnly={p.readonly === true}
+				readOnly={p.readonly === true || !live}
 				spellCheck={false}
 				placeholder={plain(p.placeholder)}
 				className={p.lang ? "mono" : ""}
