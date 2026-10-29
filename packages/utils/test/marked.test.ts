@@ -261,8 +261,8 @@ describe("marked compatibility", () => {
 				],
 			});
 		// Two spans, then an opener right after a span that the tokenizer
-		// rejects. There the lexer asks for a hint at its own position and must
-		// drop it, so the span after it stays text.
+		// rejects. The text step asks for the next hint from one past it, as
+		// marked asks `start` of `src.slice(1)`, so the span after it is math.
 		const source = "a $x$ b $y$$ 5, then $z$";
 		const fromHint = [...latex({ startFrom: dollar }).lexer(source)];
 		expect(fromHint).toEqual([...latex({ start: src => dollar(src, 0) }).lexer(source)]);
@@ -276,7 +276,8 @@ describe("marked compatibility", () => {
 					{ type: "latex", raw: "$x$", text: "x" },
 					{ type: "text", raw: " b ", text: " b ", escaped: false },
 					{ type: "latex", raw: "$y$", text: "y" },
-					{ type: "text", raw: "$ 5, then $z$", text: "$ 5, then $z$", escaped: false },
+					{ type: "text", raw: "$ 5, then ", text: "$ 5, then ", escaped: false },
+					{ type: "latex", raw: "$z$", text: "z" },
 				],
 			},
 		]);
@@ -877,9 +878,9 @@ describe("inline lexing stays linear on long paragraphs", () => {
 				},
 			],
 		});
-		// Every `_` ends a text step; the hint at the `$` holds across all of them.
+		// Every `_` ends a text step; the hint at the `$` holds across all of them, and the next is asked past it.
 		marked.lexer("a_b_c $x$ d_e");
-		expect(froms).toEqual([0, 9]);
+		expect(froms).toEqual([1, 10]);
 	});
 
 	// Generous bound: each shape takes quadratic lexing, or lexing that keeps an index per nesting level, several

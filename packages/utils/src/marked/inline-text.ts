@@ -27,6 +27,11 @@ function isMailLocalChar(code: number): boolean {
 	);
 }
 
+/** A `start` answer for the source one past a text step's position, as an offset from that position. */
+function startPastPos(start: number | void): number | void {
+	return typeof start === "number" && start >= 0 ? start + 1 : start;
+}
+
 /** Where `startFrom` answers at or after `from` in `src`, `Infinity` for none. Any other answer throws. */
 function askStartFrom(
 	extension: TokenizerExtension,
@@ -239,10 +244,12 @@ export class TextStops {
 		// extension, such as a search of `rest`, ahead of the loop, where it would run at every text step.
 		if (extensions.length !== 0) {
 			for (const extension of extensions) {
-				// A hint at `pos` itself yields 0, which is ignored exactly like `start` returning 0.
+				// A text step runs once every tokenizer passed `pos`, so a hint is asked from one past it, as marked asks
+				// `start` of `src.slice(1)`: a candidate the extension rejected at `pos`, such as the currency `$` of
+				// "costs $5, and $x^2$", must not hide a later one.
 				const hint = extension.startFrom
-					? this.#startFrom(extension, extension.startFrom, pos) - pos
-					: extension.start?.call({ lexer }, rest);
+					? this.#startFrom(extension, extension.startFrom, pos + 1) - pos
+					: startPastPos(extension.start?.call({ lexer }, rest.slice(1)));
 				if (typeof hint === "number" && hint > 0 && hint < next) next = hint;
 			}
 		}

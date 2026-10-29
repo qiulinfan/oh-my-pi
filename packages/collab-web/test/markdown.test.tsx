@@ -69,6 +69,17 @@ describe("Transcript Markdown", () => {
 		expect(html).toContain('href="#anchor"');
 	});
 
+	it("keeps local links for the page to open, and opens only web links in a new tab", () => {
+		const html = renderMarkdown(
+			"[f](file:///tmp/a.md) [line](notes.txt:12) [rel](src/a.ts:3) [web](https://example.com)",
+		);
+		expect(html).toContain('<a href="file:///tmp/a.md">f</a>');
+		// Read as a scheme otherwise, a file name with a line keeps its place as a relative path.
+		expect(html).toContain('<a href="./notes.txt:12">line</a>');
+		expect(html).toContain('<a href="src/a.ts:3">rel</a>');
+		expect(html).toContain('<a href="https://example.com" target="_blank" rel="noopener">web</a>');
+	});
+
 	it("typesets every delimiter form and marks display math", () => {
 		const inline = renderMarkdown("energy $E=mc^2$ and \\(x^2\\) here");
 		expect(inline).toContain('encoding="application/x-tex">E=mc^2</annotation>');
@@ -112,16 +123,11 @@ describe("Transcript Markdown", () => {
 		expect(html).toContain("<code>code</code>");
 	});
 
-	it("matches the TUI by not typesetting a span behind a rejected dollar opener", () => {
-		// marked drops a `start` hint of 0, so the rejected `$5` swallows the rest of
-		// the line. Accepted so both renderers agree; tracked as its own change.
-		expect(renderMarkdown("it costs $5, and the growth is $x^2$ per year")).toBe(
-			'<div class="tr-md"><p>it costs $5, and the growth is $x^2$ per year</p>\n</div>',
-		);
-		// The same line typesets once the currency is escaped or the math comes first.
-		expect(renderMarkdown("it costs \\$5, and the growth is $x^2$ per year")).toContain(
-			'encoding="application/x-tex">x^2</annotation>',
-		);
+	it("typesets a span behind a currency dollar on the same line", () => {
+		// The currency `$5` opens no span; the text step resumes past it, so it no longer swallows the line.
+		const html = renderMarkdown("it costs $5, and the growth is $x^2$ per year");
+		expect(html).toContain("<p>it costs $5, and the growth is <span");
+		expect(html).toContain('encoding="application/x-tex">x^2</annotation>');
 	});
 
 	it("typesets a span that follows a long run of ordinary prose", () => {
@@ -167,6 +173,45 @@ describe("Transcript Markdown", () => {
 		// blank line stays literal.
 		expect(renderMarkdown("prose\n\n$$\na\n\nb\n$$")).toContain('display="block"');
 		expect(renderMarkdown("prose\n$$\na\n\nb\n$$")).not.toContain("<math");
+	});
+
+	it("keeps a pipe inside a table cell's math in that cell, and still splits around currency", () => {
+		const html = renderMarkdown(
+			"| Sample | Formula | Note |\n| --- | --- | --- |\n| Cardinality | $|D|=3$ | one cell |\n| Money | $5 | $10 |",
+		);
+		const rows = html.split("<tr>").slice(1);
+		expect(rows.map(row => row.match(/<t[hd]>/g)?.length)).toEqual([3, 3, 3]);
+		expect(rows[1]).toContain('encoding="application/x-tex">|D|=3</annotation>');
+		expect(rows[1]).toContain("<td>one cell</td>");
+		expect(rows[2]).toContain("<td>$5</td>");
+	});
+
+	it("draws footnote references and definitions instead of links to their text", () => {
+		const html = renderMarkdown("Text[^1] and [^x](https://a.b).\n\n[^1]: The **note**.");
+		expect(html).toContain('Text<sup class="tr-footnote-ref">1</sup>');
+		expect(html).toContain('<p class="tr-footnote"><sup>1</sup> The <strong>note</strong>.</p>');
+		expect(html).toContain('<a href="https://a.b" target="_blank" rel="noopener">^x</a>');
+		expect(html).not.toContain('href="The');
+	});
+
+	it("highlights a fenced block through the page's highlight.js, and leaves it plain without one", () => {
+		const fence = "```ts\nconst a = 1;\n```";
+		expect(renderMarkdown(fence)).toContain('<code class="language-ts">const a = 1;\n</code>');
+		const host = globalThis as { hljs?: unknown };
+		host.hljs = {
+			getLanguage: (name: string) => (name === "ts" ? {} : undefined),
+			highlight: (code: string) => ({
+				value: `<span class="hljs-keyword">${code.slice(0, 5)}</span>${code.slice(5)}`,
+			}),
+		};
+		try {
+			expect(renderMarkdown(fence)).toContain(
+				'<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> a = 1;</code></pre>',
+			);
+			expect(renderMarkdown("```mermaid\nflowchart LR\n```")).toContain('<code class="language-mermaid">');
+		} finally {
+			delete host.hljs;
+		}
 	});
 
 	it("keeps the rest of a message when one span is invalid TeX", () => {

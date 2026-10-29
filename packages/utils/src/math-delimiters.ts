@@ -43,10 +43,17 @@ const MATH_BLOCK_BRACKET = / {0,3}\\\[[ \t]*\r?\n([\s\S]+?)\r?\n {0,3}\\\][ \t]*
  * Leftmost offset at or after `from` where an opener could begin. A scan hint,
  * not a decision: whether that candidate is really math — escaped, currency,
  * unclosed — is decided by {@link mathSpanAt}.
+ *
+ * The second `$` of a `$$` is no candidate: the hint feeds marked's text steps,
+ * which ask from one past an opener every tokenizer rejected, and an unclosed
+ * `$$x$` (a display span still streaming) must not reopen as `$` plus `$x$`.
+ * A span that starts right after another's closing `$` (`$a$$b$`) needs no
+ * hint: the lexer tries every tokenizer where the first span ends.
  */
 // One forward pass that stops at the first candidate.
 export function mathStartIndex(source: string, from = 0): number | undefined {
 	for (let at = from; at < source.length; at++) {
+		if (at > 0 && source.charCodeAt(at) === 0x24 /* $ */ && source.charCodeAt(at - 1) === 0x24) continue;
 		if (mathOpenerAt(source, at) !== undefined) return at;
 	}
 	return undefined;

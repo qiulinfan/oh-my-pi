@@ -475,3 +475,14 @@
 		display: none;
 	}
 }
+
+/* Footnotes: a reference is a small raised label; its note, written at the answer's end, is quiet text. */
+.tr-md .tr-footnote-ref {
+	font-size: 0.75em;
+	margin-left: 1px;
+}
+.tr-md .tr-footnote {
+	font-size: 0.88em;
+	opacity: 0.8;
+	margin: 2px 0;
+}
