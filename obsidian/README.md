@@ -17,9 +17,9 @@ Then enable **omp** under Settings → Community plugins. `install-vault`
 refuses a directory without `.obsidian/`, so it never makes a vault out of a
 folder Obsidian has not opened. `bun run check` type-checks the plugin.
 
-The plugin reuses the desktop app's Electron-free modules
-(`desktop/src/login-shell.ts` and `desktop/src/supervisor.ts`), bundled into
-`main.js`.
+The plugin reaches the GUI server through `desktop/src/attach.ts`, which it
+shares with the VS Code extension (`vscode/`) and which builds on the desktop
+app's Electron-free modules; all of it is bundled into `main.js`.
 
 ## Use
 
