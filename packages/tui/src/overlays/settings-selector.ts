@@ -604,6 +604,8 @@ export interface SettingsCallbacks {
 	describeStatusLinePreview?: () => NativeNode;
 	/** Called when plugins change */
 	onPluginsChanged?: () => void | Promise<void>;
+	/** Sign in to or out of a provider (`omp gui`'s Settings page asks through a page action). */
+	onAccounts?: (mode: "login" | "logout") => void;
 	/** Called when settings panel is closed */
 	onCancel: () => void;
 }
@@ -1013,6 +1015,8 @@ export class SettingsSelectorComponent implements Component {
 				} else if (event.act === "close") {
 					if (event.value === undefined) this.#callbacks.onCancel();
 					else if (list?.openSubmenu?.id === event.value) list.handleInput(ESCAPE);
+				} else if (event.act === "accounts" && (event.value === "login" || event.value === "logout")) {
+					this.#callbacks.onAccounts?.(event.value);
 				} else if (event.act === "edit" && event.value) {
 					list?.openSubmenuFor(event.value);
 				}

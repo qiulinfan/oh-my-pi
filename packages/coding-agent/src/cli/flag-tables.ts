@@ -346,6 +346,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--from-claude",
 	"--from-codex",
 	"--no-session",
+	"--settings-panel",
 	"--no-tools",
 	"--no-lsp",
 	"--no-pty",
@@ -429,6 +430,7 @@ const ONE_SHOT_LAUNCH_FLAGS: Readonly<Record<string, true>> = {
 	"--from-claude": true,
 	"--from-codex": true,
 	"--goal": true,
+	"--settings-panel": true,
 };
 
 /**

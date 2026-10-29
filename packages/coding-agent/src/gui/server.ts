@@ -48,6 +48,7 @@ import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } fro
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { openCommand, resolveLinkedPath } from "./open-link";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
+import { defaultModelRole, readInstructions, readModelRoles, writeInstructions, writeModelRole } from "./settings-api";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { isWorkDetail, WORK_DETAIL_INFO, WORK_DETAILS, type WorkDetail } from "@oh-my-pi/pi-tui/chat/work-detail";
 
@@ -865,13 +866,6 @@ async function listModels(): Promise<ModelList> {
 	const result = await $`${resolveCliEntryCmd()} models --json`.cwd(os.homedir()).env(env).quiet().nothrow();
 	if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || "omp models failed");
 	const { models } = result.json() as { models: ModelChoice[] };
-	let fallback: string | null = null;
-	try {
-		const config = Bun.YAML.parse(await Bun.file(path.join(getAgentDir(), "config.yml")).text()) as {
-			modelRoles?: { default?: string };
-		};
-		fallback = config?.modelRoles?.default ?? null;
-	} catch {}
 	return {
 		// omp works out both thinking fields itself (`omp models --json`), so the start page agrees with a session.
 		models: models.map(({ selector, name, provider, thinkingSelectors, thinkingStart }) => ({
@@ -881,7 +875,7 @@ async function listModels(): Promise<ModelList> {
 			thinkingSelectors: Array.isArray(thinkingSelectors) ? thinkingSelectors : [],
 			thinkingStart: typeof thinkingStart === "string" ? thinkingStart : null,
 		})),
-		default: fallback,
+		default: null,
 	};
 }
 
@@ -1060,6 +1054,11 @@ class GuiHost implements SessionHost {
 	readonly #restoring = new Map<string, Promise<string | undefined>>();
 	readonly #executable: ExecutableIdentity | undefined;
 	#models: Promise<ModelList> | null = null;
+	/**
+	 * The Settings page's omp (`--settings-panel`): no session, no roster entry, not listed. Closing its
+	 * panel ends it; the page ends it when it leaves.
+	 */
+	#settingsPanel: PtySession | undefined;
 
 	constructor(rosterDir: string | undefined) {
 		this.#roster = rosterDir ? new HostedRoster(rosterDir) : undefined;
@@ -1168,9 +1167,46 @@ class GuiHost implements SessionHost {
 		return holdsRestore(entry);
 	}
 
+	/** A session, or the Settings page's omp, by GUI id: what a view's socket attaches to. */
+	session(id: string): PtySession | undefined {
+		return this.sessions.get(id) ?? (this.#settingsPanel?.info.id === id ? this.#settingsPanel : undefined);
+	}
+
+	/** Start the Settings page's omp in the home directory (so no project layer applies), or name the running one. */
+	#openSettingsPanel(): Response {
+		const running = this.#settingsPanel;
+		if (running && !running.info.exited && !running.info.stopping) return Response.json({ id: running.info.id });
+		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
+		const gui = this;
+		const host: SessionHost = {
+			get stopping() {
+				return gui.stopping;
+			},
+			identity: () => this.identity(),
+			sessionFileChanged: () => {},
+			workDetailChanged: () => {},
+			exited: async session => {
+				if (this.#settingsPanel === session) this.#settingsPanel = undefined;
+				return false;
+			},
+		};
+		const panel = new PtySession(host, crypto.randomUUID().slice(0, 8), os.homedir(), [
+			"--no-session",
+			"--settings-panel",
+		]);
+		try {
+			panel.start();
+		} catch (err) {
+			return fail(500, "internal", `could not start omp: ${err}`);
+		}
+		this.#settingsPanel = panel;
+		return Response.json({ id: panel.info.id });
+	}
+
 	/** Stop every session, then wait for the roster to settle. Their roster entries stay for the next server. */
 	async stop(): Promise<void> {
 		this.stopping = true;
+		void this.#settingsPanel?.stop("server");
 		const sessions = [...this.sessions.values()];
 		await Promise.allSettled(sessions.map(session => session.stop("server")));
 		// One stopped while its entry was being written never started: there is nothing to offer the next server.
@@ -1187,7 +1223,7 @@ class GuiHost implements SessionHost {
 		switch (url.pathname) {
 			case "/pty": {
 				const id = url.searchParams.get("id") ?? "";
-				if (!this.sessions.has(id)) return fail(404, "no-session", `no session ${id}`);
+				if (!this.session(id)) return fail(404, "no-session", `no session ${id}`);
 				return server.upgrade(req, { data: { id } }) ? undefined : fail(400, "bad-request", "upgrade failed");
 			}
 			case "/api/ping":
@@ -1226,15 +1262,22 @@ class GuiHost implements SessionHost {
 				// Listing takes about two seconds, so it is fetched once per server run; ?refresh=1 asks again.
 				if (!this.#models || url.searchParams.has("refresh")) this.#models = listModels();
 				try {
-					return Response.json(await this.#models);
+					// The default role is read each time: the Settings page changes it.
+					return Response.json({ ...(await this.#models), default: await defaultModelRole() });
 				} catch (err) {
 					this.#models = null;
 					return fail(500, "internal", String(err));
 				}
 			case "/api/peers":
 				return this.#peers();
+			case "/api/instructions":
+				if (!post) return Response.json(await readInstructions());
+				break;
+			case "/api/model-roles":
+				if (!post) return Response.json(await readModelRoles());
+				break;
 			case "/api/doc": {
-				const session = this.sessions.get(url.searchParams.get("id") ?? "");
+				const session = this.session(url.searchParams.get("id") ?? "");
 				return Response.json(
 					session?.doc(url.searchParams.get("sf") ?? "s:1", url.searchParams.get("node") ?? undefined) ?? null,
 				);
@@ -1260,6 +1303,29 @@ class GuiHost implements SessionHost {
 				case "/api/interrupted/end":
 					server.timeout(req, 0);
 					return this.#endOrphan(req);
+				case "/api/settings-panel":
+					return this.#openSettingsPanel();
+				case "/api/model-roles": {
+					const body = await readBody<{ role?: unknown; value?: unknown }>(req);
+					if (body instanceof Response) return body;
+					const value = typeof body.value === "string" && body.value ? body.value : null;
+					if (typeof body.role !== "string" || !(await writeModelRole(body.role, value)))
+						return fail(400, "bad-request", "expected a chat model role");
+					return Response.json({ ok: true });
+				}
+				case "/api/instructions": {
+					const body = await readBody<{ text?: unknown; base?: unknown }>(req);
+					if (body instanceof Response) return body;
+					if (typeof body.text !== "string" || typeof body.base !== "string")
+						return fail(400, "bad-request", "expected text and base");
+					return (await writeInstructions(body.text, body.base))
+						? Response.json({ ok: true })
+						: fail(409, "conflict", "AGENTS.md changed elsewhere since this page read it");
+				}
+				case "/api/settings-panel/close":
+					server.timeout(req, 0);
+					await this.#settingsPanel?.stop("user");
+					return Response.json({ ok: true });
 			}
 		}
 		return fail(404, "not-found", `not found: ${url.pathname}`);
@@ -1539,13 +1605,17 @@ class GuiHost implements SessionHost {
 			[...this.sessions.values()].filter(({ info }) => !info.exited).map(({ info }) => [info.pid, info.id]),
 		);
 		const peers = await listPeers().catch(() => []);
+		// The Settings page's omp is no session to message.
+		const panel = this.#settingsPanel?.info.pid;
 		return Response.json(
 			peers.flatMap(peer =>
-				peer.snapshot.sessions.map(session => ({
-					...session,
-					pid: peer.snapshot.pid,
-					guiId: hosted.get(peer.snapshot.pid) ?? null,
-				})),
+				peer.snapshot.pid === panel
+					? []
+					: peer.snapshot.sessions.map(session => ({
+							...session,
+							pid: peer.snapshot.pid,
+							guiId: hosted.get(peer.snapshot.pid) ?? null,
+						})),
 			),
 		);
 	}
@@ -1721,15 +1791,15 @@ function serve(host: GuiHost, port: number, token: string): Bun.Server<SocketDat
 		},
 		websocket: {
 			open(ws) {
-				host.sessions.get(ws.data.id)?.attach(ws);
+				host.session(ws.data.id)?.attach(ws);
 			},
 			message(ws, message) {
 				try {
-					host.sessions.get(ws.data.id)?.receive(JSON.parse(String(message)) as ClientMessage);
+					host.session(ws.data.id)?.receive(JSON.parse(String(message)) as ClientMessage);
 				} catch {}
 			},
 			close(ws) {
-				host.sessions.get(ws.data.id)?.detach(ws);
+				host.session(ws.data.id)?.detach(ws);
 			},
 		},
 	});

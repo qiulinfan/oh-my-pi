@@ -70,14 +70,18 @@ function findNode(node: DocNode | null | undefined, match: (node: DocNode) => bo
 	return undefined;
 }
 
-function findEditor(node: DocNode | null | undefined): DocNode | undefined {
+function findKind(node: DocNode | null | undefined, kind: string): DocNode | undefined {
 	if (!node) return undefined;
-	if (node.k === "editor") return node;
+	if (node.k === kind) return node;
 	for (const child of node.c ?? []) {
-		const editor = findEditor(child);
-		if (editor) return editor;
+		const found = findKind(child, kind);
+		if (found) return found;
 	}
 	return undefined;
+}
+
+function findEditor(node: DocNode | null | undefined): DocNode | undefined {
+	return findKind(node, "editor");
 }
 
 function processGone(pid: number): boolean {
@@ -445,6 +449,31 @@ describe("omp gui: one server per runtime directory", () => {
 		expect(lease).not.toBeNull();
 		lease?.release();
 	}, 30_000);
+});
+
+describe("omp gui: Settings page", () => {
+	test("the Settings page's omp draws omp's settings, stays off the session list, and ends when closed", async () => {
+		const gui = await setup();
+		const served = await gui.start();
+		const open = async () => (await gui.api<{ id: string }>(served, "/api/settings-panel", {})).body.id;
+		const id = await open();
+		// A second open names the running one.
+		expect(await open()).toBe(id);
+		expect((await gui.live(served)).map(session => session.id)).not.toContain(id);
+		// omp's settings draw on a screen surface of their own.
+		const prefs = async () => {
+			for (const sf of ["s:1", "s:2", "s:3", "s:4"]) {
+				const found = findKind((await gui.api<DocNode | null>(served, `/api/doc?id=${id}&sf=${sf}`)).body, "prefs");
+				if (found) return found;
+			}
+			return undefined;
+		};
+		await waitFor(async () => (await prefs()) !== undefined, 30_000);
+
+		expect((await gui.api<{ ok: boolean }>(served, "/api/settings-panel/close", {})).body.ok).toBe(true);
+		expect((await gui.api(served, `/api/doc?id=${id}&sf=s:1`)).body).toBeNull();
+		expect(await open()).not.toBe(id);
+	}, 60_000);
 });
 
 describe("omp gui: token and request fence", () => {

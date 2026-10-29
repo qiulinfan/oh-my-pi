@@ -3772,9 +3772,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			...ctx,
 			options: { ...ctx.options, model: { ...ctx.options.model, showThinkingLevel: false } },
 		};
+		const sessionModel = ctx.session.state.model;
 		return {
 			context,
 			model: describeSegment("model", modelCtx) ?? { spans: [] },
+			modelSelector: sessionModel && `${sessionModel.provider}/${sessionModel.id}`,
 			extras: node("status", { role: "omp.composer.extras", transparent: true, grow: 1 }, facts, "extras"),
 			usage,
 		};

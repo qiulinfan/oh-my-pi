@@ -1297,6 +1297,7 @@ export class CustomEditor extends Editor {
 					tone: facts.model.tone,
 					title: modelKey ? `Switch model  ${formatTooltipKey(modelKey)}` : "Switch model",
 					actions: { click: "status.model" },
+					value: facts.modelSelector,
 				},
 				[
 					modelIcon ?? node("icon", { name: "model" }, undefined, "icon"),
@@ -1463,8 +1464,18 @@ export class CustomEditor extends Editor {
 				if (this.onSelectThinkingLevel) this.onSelectThinkingLevel();
 				else this.onCycleThinkingLevel?.();
 				return;
+			// A terminal drawing its own model and effort menus sends the choice as the value.
+			case "model.switch":
+				if (event.value) this.onSwitchModel?.(event.value);
+				return;
+			case "thinking.set":
+				if (event.value) this.onSetThinkingLevel?.(event.value);
+				return;
 			case "detail.select":
 				this.onSelectWorkDetail?.();
+				return;
+			case "settings.open":
+				this.onOpenSettings?.();
 				return;
 			case "dictation.toggle": {
 				const { dictation } = this.composerState();
@@ -1487,9 +1498,15 @@ export class CustomEditor extends Editor {
 	onClear?: () => void;
 	onExit?: () => void;
 	onDisplayReset?: () => void;
+	/** Opens settings again (`omp gui`'s Settings page, back from a sign-in it ran here). */
+	onOpenSettings?: () => void;
 	onCycleThinkingLevel?: () => void;
 	/** Opens the thinking-level picker (a click on the effort chip or glyph). */
 	onSelectThinkingLevel?: () => void;
+	/** Switches this session to a model selector (`provider/id`) chosen in the terminal's own menu. */
+	onSwitchModel?: (selector: string) => void;
+	/** Sets the thinking level chosen in the terminal's own menu. */
+	onSetThinkingLevel?: (level: string) => void;
 	/** Opens the work-detail picker (a click on the work-detail chip). */
 	onSelectWorkDetail?: () => void;
 	onCycleModelForward?: () => void;

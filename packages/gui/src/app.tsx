@@ -13,6 +13,7 @@ import {
 	Fragment,
 	type ReactNode,
 	useCallback,
+	useContext,
 	useEffect,
 	useMemo,
 	useRef,
@@ -22,8 +23,29 @@ import {
 import { ApiError, api, errorText, link, type ServerIdentity } from "./api";
 import { Icon } from "./icons";
 import { keyBytes } from "./keys";
-import { N, OmpMark, SurfaceContext, type SurfaceContextValue, Transcript, toggleTranscriptFocus } from "./render";
+import {
+	type Choice,
+	ChoicePicker,
+	EffortPicker,
+	findModel,
+	type ModelList,
+	ModelListContext,
+	ModelPicker,
+	thinkingFor,
+	useDismiss,
+} from "./pickers";
+import {
+	N,
+	OmpMark,
+	PrefsActionContext,
+	PrefsExtraContext,
+	SurfaceContext,
+	type SurfaceContextValue,
+	Transcript,
+	toggleTranscriptFocus,
+} from "./render";
 import { type ExitInfo, SessionConnection, type SessionInfo, type SurfaceMeta } from "./session";
+import type { SurfaceStore } from "./store";
 
 /** The transcript column (see --column): omp lays its rows out for this width, not the window's. */
 const COLUMN_PX = 760;
@@ -267,12 +289,14 @@ function interruptedCause(entry: InterruptedSession): string {
 
 type ThemeChoice = "system" | "light" | "dark";
 
-function useAppearance(): {
+interface Appearance {
 	theme: ThemeChoice;
 	setTheme: (theme: ThemeChoice) => void;
 	prose: string;
 	setProse: (prose: string) => void;
-} {
+}
+
+function useAppearance(): Appearance {
 	const [theme, setThemeState] = useState<ThemeChoice>(() => stored("omp-gui.theme", "system") as ThemeChoice);
 	const [prose, setProseState] = useState(() => stored("omp-gui.prose", "sans"));
 	useEffect(() => {
@@ -497,6 +521,420 @@ function SessionView({
 	);
 }
 
+const THEMES = [
+	["system", "monitor", "System"],
+	["light", "sun", "Light"],
+	["dark", "moon", "Dark"],
+] as const;
+
+/** The GUI's own settings, shown as the Settings page's General. */
+function GeneralSettings({ appearance }: { appearance: Appearance }): ReactNode {
+	return (
+		<div className="prefs-section">
+			<div className="prefs-section-title">Appearance</div>
+			<div className="prefs-row">
+				<div className="prefs-label">
+					Theme
+					<div className="s-dim prefs-hint">Light, dark, or whichever the system uses.</div>
+				</div>
+				<div className="prefs-control seg-toggle" role="radiogroup" aria-label="Theme">
+					{THEMES.map(([value, icon, label]) => (
+						<button
+							key={value}
+							type="button"
+							className={appearance.theme === value ? "on" : ""}
+							onClick={() => appearance.setTheme(value)}
+						>
+							<Icon name={icon} size={13} /> {label}
+						</button>
+					))}
+				</div>
+			</div>
+			<div className="prefs-row">
+				<div className="prefs-label">
+					Answer font
+					<div className="s-dim prefs-hint">The typeface of omp's answers in the transcript.</div>
+				</div>
+				<div className="prefs-control seg-toggle" role="radiogroup" aria-label="Answer font">
+					<button
+						type="button"
+						className={appearance.prose === "sans" ? "on" : ""}
+						onClick={() => appearance.setProse("sans")}
+					>
+						Sans
+					</button>
+					<button
+						type="button"
+						className={`serif-aa ${appearance.prose === "serif" ? "on" : ""}`}
+						onClick={() => appearance.setProse("serif")}
+					>
+						Serif
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+interface Instructions {
+	path: string;
+	target?: string;
+	text: string;
+}
+
+/** The global instructions every omp session loads (`AGENTS.md` in omp's agent directory). */
+function InstructionsSettings(): ReactNode {
+	const [loaded, setLoaded] = useState<Instructions | null>(null);
+	const [draft, setDraft] = useState("");
+	const [state, setState] = useState<{ kind: "idle" | "saving" | "saved" | "conflict" | "error"; text?: string }>({
+		kind: "idle",
+	});
+	const load = useCallback(() => {
+		api<Instructions>("/api/instructions").then(
+			file => {
+				setLoaded(file);
+				setDraft(file.text);
+				setState({ kind: "idle" });
+			},
+			err => setState({ kind: "error", text: errorText(err) }),
+		);
+	}, []);
+	useEffect(load, [load]);
+	const save = () => {
+		if (!loaded) return;
+		setState({ kind: "saving" });
+		api("/api/instructions", { text: draft, base: loaded.text }).then(
+			() => {
+				setLoaded({ ...loaded, text: draft });
+				setState({ kind: "saved" });
+			},
+			err =>
+				setState(
+					err instanceof ApiError && err.code === "conflict"
+						? { kind: "conflict" }
+						: { kind: "error", text: errorText(err) },
+				),
+		);
+	};
+	const dirty = loaded !== null && draft !== loaded.text;
+	return (
+		<div className="prefs-section instructions">
+			<div className="prefs-section-title">Global instructions</div>
+			<div className="s-dim prefs-hint">
+				Every omp session loads these, before a project's own AGENTS.md. New sessions see a change; running ones
+				keep what they loaded.
+			</div>
+			{loaded ? (
+				<div className="s-dim prefs-hint instructions-path">
+					{loaded.path}
+					{loaded.target ? ` → ${loaded.target}` : ""}
+				</div>
+			) : null}
+			<textarea
+				className="instructions-text"
+				wrap="off"
+				value={draft}
+				disabled={!loaded}
+				spellCheck={false}
+				placeholder={loaded ? "No global instructions yet" : "Loading…"}
+				onChange={event => {
+					setDraft(event.target.value);
+					if (state.kind === "saved") setState({ kind: "idle" });
+				}}
+				onKeyDown={event => {
+					if (event.key === "s" && (event.metaKey || event.ctrlKey)) {
+						event.preventDefault();
+						if (dirty) save();
+					}
+				}}
+			/>
+			<div className="instructions-bar">
+				<span className={`s-dim ${state.kind === "error" || state.kind === "conflict" ? "error-text" : ""}`}>
+					{state.kind === "saved"
+						? "Saved"
+						: state.kind === "conflict"
+							? "AGENTS.md changed elsewhere since this page read it. Reload shows that version and drops your edit here."
+							: state.kind === "error"
+								? state.text
+								: dirty
+									? "Unsaved changes"
+									: ""}
+				</span>
+				{state.kind === "conflict" ? (
+					<button type="button" className="btn" onClick={load}>
+						Reload
+					</button>
+				) : null}
+				<button
+					type="button"
+					className="btn primary"
+					disabled={!dirty || state.kind === "saving"}
+					onClick={save}
+					title="Save  ⌘S"
+				>
+					Save
+				</button>
+			</div>
+		</div>
+	);
+}
+
+interface RoleChoice {
+	id: string;
+	name: string;
+	value: string | null;
+}
+
+/** What each chat role is for, as omp uses it. */
+const ROLE_HINTS: Record<string, string> = {
+	default: "New sessions and the main conversation.",
+	smol: "Quick helper work: titles, summaries, small lookups.",
+	slow: "Hard problems that need deep reasoning.",
+	vision: "Reading images when the main model cannot.",
+	plan: "Plan mode.",
+	commit: "Commit messages.",
+	tiny: "The smallest jobs, often a local model.",
+	memory: "Remembering across sessions.",
+	task: "Subagents.",
+	advisor: "The advisor that reviews the main model's work.",
+	widget: "Background job widgets.",
+};
+
+/** One role's model and thinking level, written as `provider/id[:level]`. */
+function RoleRow({
+	role,
+	list,
+	onSet,
+}: {
+	role: RoleChoice;
+	list: ModelList | null;
+	onSet: (value: string | null) => void;
+}): ReactNode {
+	const value = role.value ?? "";
+	const found = list && value ? findModel(value, list) : undefined;
+	const model = found ? found.choice.selector : value;
+	const level = found?.level ?? "";
+	const compose = (nextModel: string, nextLevel: string) =>
+		onSet(nextModel ? (nextLevel ? `${nextModel}:${nextLevel}` : nextModel) : null);
+	return (
+		<div className="prefs-row">
+			<div className="prefs-label">
+				{role.name}
+				<div className="s-dim prefs-hint">{ROLE_HINTS[role.id] ?? `The ${role.id} role.`}</div>
+			</div>
+			<div className="prefs-control role-pickers">
+				<ModelPicker
+					value={model}
+					list={list}
+					unsetLabel={role.id === "default" ? "omp's default" : "Same as Default"}
+					onPick={next => compose(next, next === model ? level : "")}
+				/>
+				{model ? (
+					<EffortPicker value={level} model={model} list={list} onPick={next => compose(model, next)} />
+				) : null}
+			</div>
+		</div>
+	);
+}
+
+/** The models omp's chat roles use: the same assignments as omp's model hub (`/model`). */
+function ModelsSettings(): ReactNode {
+	const list = useContext(ModelListContext);
+	const [roles, setRoles] = useState<RoleChoice[] | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	useEffect(() => {
+		api<RoleChoice[]>("/api/model-roles").then(setRoles, err => setError(errorText(err)));
+	}, []);
+	const set = (id: string, value: string | null) => {
+		setRoles(current => current?.map(role => (role.id === id ? { ...role, value } : role)) ?? current);
+		api("/api/model-roles", { role: id, value }).catch(err => setError(errorText(err)));
+	};
+	return (
+		<div className="prefs-section">
+			<div className="prefs-section-title">Model roles</div>
+			<div className="s-dim prefs-hint">
+				Saved in omp's global config, like an assignment in /model. Running sessions keep the model they run on.
+			</div>
+			{error ? <div className="error-text">{error}</div> : null}
+			{roles === null && !error ? <div className="s-dim">Loading…</div> : null}
+			{roles?.map(role => (
+				<RoleRow key={role.id} role={role} list={list} onSet={value => set(role.id, value)} />
+			))}
+		</div>
+	);
+}
+
+/** Provider sign-in, through omp's own /login and /logout pickers. */
+function AccountsSettings(): ReactNode {
+	const act = useContext(PrefsActionContext);
+	return (
+		<div className="prefs-section">
+			<div className="prefs-section-title">Providers & sign-in</div>
+			<div className="s-dim prefs-hint">
+				omp's provider list with each one's status: sign in with an account (OAuth) or an API key, the same as
+				/login in a session. Credentials go to omp's credential store and every session uses them.
+			</div>
+			<div className="prefs-row">
+				<div className="prefs-label">
+					Sign in
+					<div className="s-dim prefs-hint">Pick a provider; a browser opens for an account sign-in.</div>
+				</div>
+				<div className="prefs-control">
+					<button type="button" className="btn primary" onClick={() => act("accounts", "login")}>
+						Sign in…
+					</button>
+				</div>
+			</div>
+			<div className="prefs-row">
+				<div className="prefs-label">
+					Sign out
+					<div className="s-dim prefs-hint">Remove a provider's stored credentials.</div>
+				</div>
+				<div className="prefs-control">
+					<button type="button" className="btn" onClick={() => act("accounts", "logout")}>
+						Sign out…
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+const GUI_PAGES = [
+	{ id: "general", label: "General", icon: "settings" },
+	{ id: "instructions", label: "Instructions", icon: "file" },
+	{ id: "models", label: "Models", icon: "cpu" },
+	{ id: "accounts", label: "Providers & Auth", icon: "key" },
+];
+
+const GUI_PAGE_CONTENT: Record<string, (appearance: Appearance) => ReactNode> = {
+	general: appearance => <GeneralSettings appearance={appearance} />,
+	instructions: () => <InstructionsSettings />,
+	models: () => <ModelsSettings />,
+	accounts: () => <AccountsSettings />,
+};
+
+/**
+ * The Settings page: the GUI's own General, then omp's settings panel, drawn by an omp of its own
+ * (`--settings-panel`) that the server starts for the page and ends when the page goes.
+ */
+function SettingsPage({ appearance, onClose }: { appearance: Appearance; onClose: () => void }): ReactNode {
+	const [connection, setConnection] = useState<SessionConnection | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [page, setPage] = useState<string | null>("general");
+	useEffect(() => {
+		let cancelled = false;
+		let opened: SessionConnection | null = null;
+		api<{ id: string }>("/api/settings-panel", {}).then(
+			({ id }) => {
+				if (cancelled) return;
+				opened = new SessionConnection(id);
+				setConnection(opened);
+			},
+			err => setError(errorText(err)),
+		);
+		return () => {
+			cancelled = true;
+			opened?.close();
+			api("/api/settings-panel/close", {}).catch(() => {});
+		};
+	}, []);
+	return (
+		<div className="settings-page">
+			{error ? <div className="banner ended">{error}</div> : null}
+			{connection ? (
+				<PrefsExtraContext.Provider
+					value={{
+						title: "Settings",
+						pages: GUI_PAGES,
+						active: page,
+						onPick: setPage,
+						content: page ? GUI_PAGE_CONTENT[page]?.(appearance) : null,
+					}}
+				>
+					<SettingsPanel connection={connection} onClose={onClose} />
+				</PrefsExtraContext.Provider>
+			) : error ? null : (
+				<div className="banner">Opening settings…</div>
+			)}
+		</div>
+	);
+}
+
+/** How often, and how many times, Back to settings looks for omp's editor after cancelling a sign-in. */
+const BACK_RETRY_MS = 150;
+const BACK_RETRIES = 10;
+
+/**
+ * omp's editor area while it runs a sign-in for the Settings page (its composer stays hidden), under a bar
+ * leading back to the panel. Back cancels a sign-in still open (Esc), then asks omp for its settings.
+ */
+function SettingsInline({
+	connection,
+	surface,
+}: {
+	connection: SessionConnection;
+	surface: { meta: SurfaceMeta; store: SurfaceStore };
+}): ReactNode {
+	const drawn = useSyncExternalStore(
+		listener => surface.store.subscribe(surface.meta.id, listener),
+		() => (surface.store.get(surface.meta.id)?.c.length ?? 0) > 0,
+	);
+	if (!drawn) return <div className="banner">Starting omp…</div>;
+	const back = (tries = BACK_RETRIES) => {
+		const editor = [...surface.store.nodes.values()].find(node => node.k === "editor");
+		if (editor) {
+			connection.event({ ev: "action", sf: surface.meta.id, id: editor.id, act: "settings.open" });
+			return;
+		}
+		if (tries === BACK_RETRIES) connection.keys("\x1b");
+		if (tries > 0) setTimeout(() => back(tries - 1), BACK_RETRY_MS);
+	};
+	return (
+		<div className="settings-inline">
+			<div className="settings-inline-bar">
+				<span className="s-dim">Sign-in runs below. Back to settings cancels one you have not finished.</span>
+				<button type="button" className="btn" onClick={() => back()}>
+					Back to settings
+				</button>
+			</div>
+			<Surface connection={connection} meta={surface.meta} />
+		</div>
+	);
+}
+
+/** omp's settings screen; keys outside its fields go to omp (Esc closes it, and the page with it). */
+function SettingsPanel({ connection, onClose }: { connection: SessionConnection; onClose: () => void }): ReactNode {
+	useSession(connection);
+	const ended = connection.exited || connection.gone;
+	useEffect(() => {
+		if (ended) onClose();
+	}, [ended, onClose]);
+	const surfaces = [...connection.surfaces.values()];
+	const screens = surfaces.map(surface => surface.meta).filter(meta => meta.mode === "screen" && !meta.closed);
+	// Without its panel, omp runs a sign-in in its editor area: show that, with the way back.
+	const inline = screens.length === 0 ? surfaces.findLast(surface => surface.meta.mode === "inline") : undefined;
+	const onKeyDown = (event: React.KeyboardEvent) => {
+		if ((event.target as HTMLElement).closest("textarea, input, select")) return;
+		const bytes = keyBytes(event.nativeEvent);
+		if (bytes === null) return;
+		event.preventDefault();
+		connection.keys(bytes);
+	};
+	return (
+		<div className="settings-panel" tabIndex={-1} onKeyDown={onKeyDown}>
+			{inline ? (
+				<SettingsInline connection={connection} surface={inline} />
+			) : screens.length === 0 ? (
+				<div className="banner">{viewStatus(connection, false) ?? "Starting omp…"}</div>
+			) : null}
+			{screens.map(meta => (
+				<Surface key={meta.id} connection={connection} meta={meta} />
+			))}
+		</div>
+	);
+}
+
 /** The bar above a session: its name, where it runs, whether it works, and End session while it runs. */
 function SessionHead({
 	connection,
@@ -536,18 +974,6 @@ function SessionHead({
 			) : null}
 		</header>
 	);
-}
-
-/** Closes a popover when the pointer goes down outside `ref`. */
-function useDismiss(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void): void {
-	useEffect(() => {
-		if (!open) return;
-		const onDown = (event: MouseEvent) => {
-			if (!ref.current?.contains(event.target as Node)) close();
-		};
-		addEventListener("mousedown", onDown);
-		return () => removeEventListener("mousedown", onDown);
-	}, [ref, open, close]);
 }
 
 function ProjectPicker({
@@ -625,203 +1051,6 @@ function ProjectPicker({
 	);
 }
 
-interface ModelChoice {
-	selector: string;
-	name: string;
-	provider: string;
-	/** What `--thinking` can set on the model, in the order omp's `/effort` picker offers it; empty when it does not think. */
-	thinkingSelectors: string[];
-	/** The level a session on it starts at when nothing names one; null when it does not think. */
-	thinkingStart: string | null;
-}
-
-interface ModelList {
-	models: ModelChoice[];
-	/** omp's `default` model role, e.g. "anthropic/claude-opus-5-5:high". */
-	default: string | null;
-}
-
-/** Every `--thinking` value omp accepts: the choices for a model the page cannot look up. */
-const ALL_THINKING = ["off", "auto", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-/** The model a selector names: the exact selector, else one ending in `:<level>` (a level is never part of an id). */
-function findModel(selector: string, list: ModelList): { choice: ModelChoice; level?: string } | undefined {
-	const exact = list.models.find(entry => entry.selector === selector);
-	if (exact) return { choice: exact };
-	const at = selector.lastIndexOf(":");
-	const level = selector.slice(at + 1);
-	if (at < 0 || !ALL_THINKING.includes(level)) return undefined;
-	const choice = list.models.find(entry => entry.selector === selector.slice(0, at));
-	return choice && { choice, level };
-}
-
-/**
- * The thinking choices for a new session with the model picker at `model` ("" for omp's default), and
- * the level it starts at when none is picked. A model the page cannot look up (the list has not loaded,
- * the default role is an alias) gets every level: omp checks and clamps what it is given.
- */
-function thinkingFor(
-	model: string,
-	list: ModelList | null,
-): { choices: string[]; start: string | null; known: boolean } {
-	const found = list ? findModel(model || list.default || "", list) : undefined;
-	if (!found) return { choices: ALL_THINKING, start: null, known: false };
-	// The default role's own `:level` is where a session on it starts.
-	return {
-		choices: found.choice.thinkingSelectors,
-		start: (!model && found.level) || found.choice.thinkingStart,
-		known: true,
-	};
-}
-
-function effortLabel(level: string): string {
-	return level === "auto" ? "Auto · adaptive" : level;
-}
-
-interface Choice {
-	value: string;
-	text: string;
-	meta?: string;
-	title?: string;
-}
-
-/**
- * A start-page chip that opens a menu of choices. Opening puts focus on the current choice, so the
- * arrows, Enter and Escape work at once; `lead` choices sit above a separator.
- */
-function ChoicePicker({
-	icon,
-	label,
-	title,
-	menuLabel,
-	value,
-	lead = [],
-	choices,
-	onPick,
-}: {
-	icon: string;
-	label: string;
-	title: string;
-	menuLabel: string;
-	value: string;
-	lead?: Choice[];
-	choices: Choice[];
-	onPick: (value: string) => void;
-}): ReactNode {
-	const [open, setOpen] = useState(false);
-	const ref = useRef<HTMLDivElement>(null);
-	const trigger = useRef<HTMLButtonElement>(null);
-	const menu = useRef<HTMLDivElement>(null);
-	useDismiss(
-		ref,
-		open,
-		useCallback(() => setOpen(false), []),
-	);
-	useEffect(() => {
-		if (open) menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
-	}, [open]);
-	const close = () => {
-		setOpen(false);
-		trigger.current?.focus();
-	};
-	const onKeyDown = (event: React.KeyboardEvent) => {
-		if (event.key === "Escape") {
-			event.preventDefault();
-			close();
-			return;
-		}
-		if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-		event.preventDefault();
-		const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
-		const at = items.indexOf(document.activeElement as HTMLButtonElement);
-		const next = event.key === "ArrowDown" ? at + 1 : at - 1;
-		items[(next + items.length) % items.length]?.focus();
-	};
-	const item = (choice: Choice) => (
-		<button
-			key={choice.value || "default"}
-			type="button"
-			role="menuitemradio"
-			aria-checked={choice.value === value}
-			className={`picker-item ${choice.value === value ? "on" : ""}`}
-			title={choice.title}
-			onClick={() => {
-				close();
-				onPick(choice.value);
-			}}
-		>
-			<span className="side-label">{choice.text}</span>
-			{choice.meta ? <span className="side-meta">{choice.meta}</span> : null}
-		</button>
-	);
-	return (
-		<div className="picker effort-picker" ref={ref}>
-			<button
-				ref={trigger}
-				type="button"
-				className="field-chip project"
-				aria-haspopup="menu"
-				aria-expanded={open}
-				title={title}
-				onClick={() => setOpen(current => !current)}
-			>
-				<Icon name={icon} size={14} />
-				<span className="chip-label">{label}</span>
-				<Icon name="chev-down" size={12} />
-			</button>
-			{open ? (
-				<div className="picker-menu" role="menu" aria-label={menuLabel} ref={menu} onKeyDown={onKeyDown}>
-					{lead.map(item)}
-					{lead.length ? <div className="picker-sep" /> : null}
-					{choices.map(item)}
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-function EffortPicker({
-	value,
-	model,
-	list,
-	onPick,
-}: {
-	/** A `--thinking` level, or "" for the default. */
-	value: string;
-	model: string;
-	list: ModelList | null;
-	onPick: (value: string) => void;
-}): ReactNode {
-	const { choices, start, known } = thinkingFor(model, list);
-	if (known && choices.length === 0) {
-		return (
-			<div className="picker effort-picker">
-				<button type="button" className="field-chip project" disabled title="This model does not think">
-					<Icon name="brain" size={14} />
-					<span className="chip-label">No thinking</span>
-				</button>
-			</div>
-		);
-	}
-	const fallback = start ? `Default · ${effortLabel(start)}` : "Default";
-	return (
-		<ChoicePicker
-			icon="brain"
-			label={value ? effortLabel(value) : fallback}
-			title="Thinking effort for the new session. Auto picks a level for each message by how hard it looks."
-			menuLabel="Thinking effort"
-			value={value}
-			lead={[{ value: "", text: fallback, meta: "default" }]}
-			choices={choices.map(level => ({
-				value: level,
-				text: effortLabel(level),
-				title: level === "auto" ? "Picks a level for each message by how hard it looks" : undefined,
-			}))}
-			onPick={onPick}
-		/>
-	);
-}
-
 /** omp's `--work-detail` modes, as the Work details picker offers them; the GUI starts sessions Compact. */
 const WORK_DETAILS: Choice[] = [
 	{
@@ -854,104 +1083,6 @@ function WorkDetailPicker({ value, onPick }: { value: string; onPick: (value: st
 			choices={WORK_DETAILS}
 			onPick={onPick}
 		/>
-	);
-}
-
-/** A selector's model name; a `:level` suffix shows in the effort picker instead. */
-function modelName(selector: string, list: ModelList | null): string {
-	const found = list ? findModel(selector, list) : undefined;
-	return found?.choice.name ?? selector.split("/").pop()!;
-}
-
-function ModelPicker({
-	value,
-	list,
-	onPick,
-}: {
-	/** A model selector, or "" for omp's default. */
-	value: string;
-	list: ModelList | null;
-	onPick: (value: string) => void;
-}): ReactNode {
-	const [open, setOpen] = useState(false);
-	const [query, setQuery] = useState("");
-	const ref = useRef<HTMLDivElement>(null);
-	useDismiss(
-		ref,
-		open,
-		useCallback(() => setOpen(false), []),
-	);
-	const pick = (selector: string) => {
-		setOpen(false);
-		setQuery("");
-		onPick(selector);
-	};
-	const needle = query.trim().toLowerCase();
-	const matches = (list?.models ?? []).filter(
-		model => !needle || model.name.toLowerCase().includes(needle) || model.selector.toLowerCase().includes(needle),
-	);
-	const providers = [...new Set(matches.map(model => model.provider))];
-	const fallback = list?.default ? modelName(list.default, list) : "omp's default";
-	return (
-		<div className="picker model-picker" ref={ref}>
-			<button
-				type="button"
-				className="field-chip project"
-				title={value || `Default model: ${list?.default ?? "omp's default"}`}
-				onClick={() => setOpen(current => !current)}
-			>
-				<Icon name="cpu" size={14} />
-				<span className="chip-label">{value ? modelName(value, list) : fallback}</span>
-				<Icon name="chev-down" size={12} />
-			</button>
-			{open ? (
-				<div className="picker-menu">
-					<input
-						className="picker-search"
-						autoFocus
-						value={query}
-						placeholder="Search models"
-						spellCheck={false}
-						onChange={event => setQuery(event.target.value)}
-						onKeyDown={event => {
-							if (event.key === "Escape") setOpen(false);
-							if (event.key === "Enter" && matches[0]) pick(matches[0].selector);
-						}}
-					/>
-					{needle ? null : (
-						<>
-							<div className={`picker-item ${value ? "" : "on"}`} onClick={() => pick("")}>
-								<Icon name="sparkles" size={14} />
-								<span className="side-label">{fallback}</span>
-								<span className="side-meta">default</span>
-							</div>
-							<div className="picker-sep" />
-						</>
-					)}
-					<div className="picker-scroll">
-						{list === null ? <div className="side-empty">Loading models…</div> : null}
-						{list && matches.length === 0 ? <div className="side-empty">No model matches</div> : null}
-						{providers.map(provider => (
-							<div key={provider}>
-								<div className="picker-group">{provider}</div>
-								{matches
-									.filter(model => model.provider === provider)
-									.map(model => (
-										<div
-											key={model.selector}
-											className={`picker-item ${model.selector === value ? "on" : ""}`}
-											title={model.selector}
-											onClick={() => pick(model.selector)}
-										>
-											<span className="side-label">{model.name}</span>
-										</div>
-									))}
-							</div>
-						))}
-					</div>
-				</div>
-			) : null}
-		</div>
 	);
 }
 
@@ -1331,6 +1462,8 @@ export function App(): ReactNode {
 	const [copied, setCopied] = useState<string | null>(null);
 	const [open, setOpen] = useState<string[]>([]);
 	const [active, setActive] = useState<string | null>(null);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const closeSettings = useCallback(() => setSettingsOpen(false), []);
 	/** Whether the session list is pulled out over the page, where the window is too narrow to keep it beside it. */
 	const [drawer, setDrawer] = useState(false);
 	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
@@ -1404,6 +1537,7 @@ export function App(): ReactNode {
 		connect(id);
 		setOpen(list => (list.includes(id) ? list : [...list, id]));
 		setActive(id);
+		setSettingsOpen(false);
 	};
 
 	/** Close a session's view (its omp keeps running unless it was ended). */
@@ -1414,11 +1548,13 @@ export function App(): ReactNode {
 		setActive(current => (current === id ? null : current));
 	};
 
+	// Read again on leaving Settings, where the default model may have changed.
 	useEffect(() => {
+		if (settingsOpen) return;
 		api<ModelList>("/api/models").then(setModelList, err => {
 			if (!serverWide(err)) setError(errorText(err));
 		});
-	}, []);
+	}, [settingsOpen]);
 
 	const setThinking = (value: string) => {
 		store("omp-gui.thinking", value);
@@ -1620,6 +1756,7 @@ export function App(): ReactNode {
 	const newIn = (value: Target) => {
 		setTarget(value);
 		setActive(null);
+		setSettingsOpen(false);
 	};
 	return (
 		<div className={`app ${drawer ? "drawer-open" : ""}`}>
@@ -1642,8 +1779,11 @@ export function App(): ReactNode {
 					</div>
 					<button
 						type="button"
-						className={`new-session ${active === null ? "active" : ""}`}
-						onClick={() => setActive(null)}
+						className={`new-session ${active === null && !settingsOpen ? "active" : ""}`}
+						onClick={() => {
+							setActive(null);
+							setSettingsOpen(false);
+						}}
 					>
 						<Icon name="plus" size={15} /> New session
 					</button>
@@ -1771,120 +1911,92 @@ export function App(): ReactNode {
 					{listed(chats, 8).map(savedItem)}
 				</div>
 				<div className="side-foot">
-					<div className="seg-toggle" role="radiogroup" aria-label="Theme">
-						{(
-							[
-								["system", "monitor", "Match the system"],
-								["light", "sun", "Light"],
-								["dark", "moon", "Dark"],
-							] as const
-						).map(([value, icon, label]) => (
-							<button
-								key={value}
-								type="button"
-								className={appearance.theme === value ? "on" : ""}
-								title={label}
-								aria-label={label}
-								onClick={() => appearance.setTheme(value)}
-							>
-								<Icon name={icon} size={13} />
-							</button>
-						))}
-					</div>
-					<span className="foot-spacer" />
-					<div className="seg-toggle" role="radiogroup" aria-label="Reading font">
-						<button
-							type="button"
-							className={appearance.prose === "sans" ? "on" : ""}
-							title="Answers in sans"
-							onClick={() => appearance.setProse("sans")}
-						>
-							Aa
-						</button>
-						<button
-							type="button"
-							className={`serif-aa ${appearance.prose === "serif" ? "on" : ""}`}
-							title="Answers in serif"
-							onClick={() => appearance.setProse("serif")}
-						>
-							Aa
-						</button>
-					</div>
+					<button
+						type="button"
+						className={`side-settings ${settingsOpen ? "active" : ""}`}
+						onClick={() => setSettingsOpen(true)}
+					>
+						<Icon name="settings" size={14} /> Settings
+					</button>
 				</div>
 			</aside>
 			<main className="content">
-				<Notices waiting={waiting} />
-				{activeConnection ? (
-					<SessionHead
-						key={activeConnection.id}
-						connection={activeConnection}
-						listed={live.find(item => item.id === activeConnection.id)}
-						home={home}
-						isChat={isChat}
-						ending={ending.has(activeConnection.id)}
-						onEnd={() => void stopSession(activeConnection.id)}
-					/>
-				) : (
-					<StartPage
-						picker={
-							<ProjectPicker
-								target={target}
-								projects={pickable}
-								home={home}
-								onPick={setTarget}
-								onChoose={() => void chooseFolder()}
-							/>
-						}
-						modelPicker={
-							<>
-								<ModelPicker value={model} list={modelList} onPick={setModel} />
-								<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
-								<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
-							</>
-						}
-						interrupted={
-							interrupted.length ? (
-								<InterruptedList
-									entries={interrupted}
-									home={home}
-									spawning={spawning}
-									acting={acting}
-									onRestore={entries => void spawn(entries.flatMap(entry => restoreRequest(entry) ?? []))}
-									onDismiss={(entries, force) => void settleInterrupted(entries, "dismiss", force)}
-									onEnd={entry => void settleInterrupted([entry], "end")}
-								/>
-							) : null
-						}
-						recent={recentForTarget}
-						spawning={spawning}
-						isCutOff={isCutOff}
-						onStart={prompt =>
-							void spawn([
-								{
-									project: target || undefined,
-									model: model || undefined,
-									thinking: thinking || undefined,
-									prompt: prompt.trim() || undefined,
-								},
-							])
-						}
-						onResume={session => void spawn([resumeRequest(session)])}
-						onRestore={restoreSaved}
-					/>
-				)}
-				{open.map(id => {
-					const connection = connections.current.get(id);
-					return connection ? (
-						<SessionView
-							key={id}
-							connection={connection}
-							active={id === active}
-							spawning={spawning}
-							// The server restores it as recorded: its session file, or its first message when omp wrote none.
-							onRestore={() => void spawn([{ from: id }], id)}
+				<ModelListContext.Provider value={modelList}>
+					<Notices waiting={waiting} />
+					{settingsOpen ? (
+						<SettingsPage appearance={appearance} onClose={closeSettings} />
+					) : activeConnection ? (
+						<SessionHead
+							key={activeConnection.id}
+							connection={activeConnection}
+							listed={live.find(item => item.id === activeConnection.id)}
+							home={home}
+							isChat={isChat}
+							ending={ending.has(activeConnection.id)}
+							onEnd={() => void stopSession(activeConnection.id)}
 						/>
-					) : null;
-				})}
+					) : (
+						<StartPage
+							picker={
+								<ProjectPicker
+									target={target}
+									projects={pickable}
+									home={home}
+									onPick={setTarget}
+									onChoose={() => void chooseFolder()}
+								/>
+							}
+							modelPicker={
+								<>
+									<ModelPicker value={model} list={modelList} onPick={setModel} />
+									<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
+									<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
+								</>
+							}
+							interrupted={
+								interrupted.length ? (
+									<InterruptedList
+										entries={interrupted}
+										home={home}
+										spawning={spawning}
+										acting={acting}
+										onRestore={entries => void spawn(entries.flatMap(entry => restoreRequest(entry) ?? []))}
+										onDismiss={(entries, force) => void settleInterrupted(entries, "dismiss", force)}
+										onEnd={entry => void settleInterrupted([entry], "end")}
+									/>
+								) : null
+							}
+							recent={recentForTarget}
+							spawning={spawning}
+							isCutOff={isCutOff}
+							onStart={prompt =>
+								void spawn([
+									{
+										project: target || undefined,
+										model: model || undefined,
+										thinking: thinking || undefined,
+										prompt: prompt.trim() || undefined,
+									},
+								])
+							}
+							onResume={session => void spawn([resumeRequest(session)])}
+							onRestore={restoreSaved}
+						/>
+					)}
+					{open.map(id => {
+						const connection = connections.current.get(id);
+						return connection ? (
+							<SessionView
+								key={id}
+								connection={connection}
+								active={id === active && !settingsOpen}
+								spawning={spawning}
+								// The server restores it as recorded: its session file, or its first message when omp wrote none.
+								onRestore={() => void spawn([{ from: id }], id)}
+							/>
+						) : null;
+					})}
+				</ModelListContext.Provider>
 			</main>
 		</div>
 	);

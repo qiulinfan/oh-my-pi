@@ -9127,6 +9127,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showSettingsSelector();
 	}
 
+	/**
+	 * `--settings-panel`: the settings panel is all this omp shows, and closing it ends omp. A sign-in
+	 * started from it runs in the editor area; the page brings the panel back with `settings.open`.
+	 */
+	showSettingsPanelOnly(): void {
+		this.editor.onOpenSettings = () => this.showSettingsPanelOnly();
+		this.#selectorController.showSettingsSelector({ onClose: () => void this.shutdown() });
+	}
+
 	showUsageDashboard(reports: UsageReport[]): void {
 		this.#selectorController.showUsageDashboard(reports);
 	}

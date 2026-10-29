@@ -56,6 +56,8 @@ export interface Args {
 	hideThinking?: boolean;
 	/** `--work-detail`: this session's `display.workDetail` (runtime override, not persisted). */
 	workDetail?: WorkDetail;
+	/** `--settings-panel` (hidden): show only the settings panel and exit when it closes (`omp gui`'s Settings page). */
+	settingsPanel?: boolean;
 	advisor?: boolean;
 	/** Print mode: wake the session with background-job results before exiting (`async.printWake`). */
 	waitAsync?: boolean;
@@ -360,6 +362,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromCodex = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
+		} else if (arg === "--settings-panel") {
+			result.settingsPanel = true;
 		} else if (arg === "--no-tools") {
 			result.noTools = true;
 		} else if (arg === "--no-lsp") {

@@ -180,6 +180,11 @@ export interface TspRowProps {
 	align?: "start" | "center" | "baseline" | "end" | "stretch";
 	justify?: "start" | "between" | "end";
 	wrap?: boolean;
+	/**
+	 * What the row stands for, for a terminal that draws its own control in its place and sends the
+	 * choice back as an action's `value` (the composer's model chip: the session's `provider/id`).
+	 */
+	value?: string;
 }
 export interface TspCardProps {
 	/** Header content, inline. */

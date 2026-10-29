@@ -667,6 +667,7 @@ async function runInteractiveMode(
 	startupGoal?: string,
 	startupRestore?: () => Promise<RestoreOutcome>,
 	refreshScopedModelsAfterLogin?: () => Promise<void>,
+	settingsPanel?: boolean,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -699,8 +700,9 @@ async function runInteractiveMode(
 		// barrel only when setup is stale, forced, or the explicit startup splash
 		// setting needs the shared setup splash renderer.
 		const storedSetupVersion = cfgSetupVersion.get(settings);
+		// The settings-only omp behind `omp gui`'s Settings page opens straight onto the panel.
 		setupWizard =
-			forceSetupWizard || storedSetupVersion < CURRENT_SETUP_VERSION || showStartupSplash
+			!settingsPanel && (forceSetupWizard || storedSetupVersion < CURRENT_SETUP_VERSION || showStartupSplash)
 				? await import("./modes/setup")
 				: undefined;
 		setupScenes = setupWizard
@@ -798,6 +800,8 @@ async function runInteractiveMode(
 		}
 		throw error;
 	}
+
+	if (settingsPanel) mode.showSettingsPanelOnly();
 
 	if (startupGoal !== undefined) {
 		try {
@@ -2901,6 +2905,7 @@ export async function runRootCommand(
 						initialArgs.goal,
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
 						refreshScopedModelsAfterLogin,
+						parsedArgs.settingsPanel,
 					);
 				} finally {
 					startupLease?.dispose();

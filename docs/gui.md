@@ -147,6 +147,27 @@ yourself (End session, or quitting with Ctrl+C) is not one. Restore continues
 the turn: a command cut off mid-run runs again, and the turn may spend tokens.
 A plain click only reopens the session.
 
+## Settings
+
+Settings, at the bottom of the sidebar, opens a page with the GUI's own pages
+above omp's settings, the same pages as `/settings`:
+
+- **General**: the GUI's theme and answer font.
+- **Instructions**: the global `AGENTS.md` in omp's agent directory, which
+  every session loads. When that file is a symlink, a save writes the file it
+  points to, and a save over a file changed elsewhere since the page read it
+  is refused.
+- **Models**: the model and thinking level of each chat role, the same
+  assignments as `/model`. New sessions use them; running ones keep theirs.
+- **Providers & Auth**: omp's `/login` and `/logout` pickers. The sign-in runs
+  on the page, and Back to settings returns to the panel (cancelling a sign-in
+  not finished).
+
+omp's pages are drawn by an omp the server starts for the page
+(`--settings-panel`, in your home directory so no project settings apply),
+with no session behind it; it ends when you leave the page. Changes there
+write omp's global config, which running sessions pick up.
+
 ## When a session or the server goes away
 
 When omp ends, the session's view says why: you ended it, it stopped with the

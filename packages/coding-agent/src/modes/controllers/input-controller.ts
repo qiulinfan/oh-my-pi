@@ -697,6 +697,15 @@ export class InputController {
 			hintUsage.record("effort");
 			if (this.ctx.viewSession.model?.reasoning) this.ctx.showThinkingSelector();
 		};
+		// `omp gui` draws its own model and effort menus and sends the pick; `/switch` and `/effort`
+		// apply it, leaving the draft in place.
+		this.ctx.editor.onSwitchModel = selector => {
+			void executeBuiltinSlashCommand(`/switch ${selector}`, { ctx: this.ctx, draftDetached: true });
+		};
+		this.ctx.editor.onSetThinkingLevel = level => {
+			hintUsage.record("effort");
+			void executeBuiltinSlashCommand(`/effort ${level}`, { ctx: this.ctx, draftDetached: true });
+		};
 		this.ctx.editor.setActionKeys("app.model.cycleForward", this.ctx.keybindings.getKeys("app.model.cycleForward"));
 		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel("forward");
 		this.ctx.editor.setActionKeys("app.model.cycleBackward", this.ctx.keybindings.getKeys("app.model.cycleBackward"));

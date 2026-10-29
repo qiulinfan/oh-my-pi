@@ -318,7 +318,7 @@ export class SelectorController {
 		this.ctx.ui.requestRender();
 	}
 
-	showSettingsSelector(): void {
+	showSettingsSelector(options?: { onClose?: () => void }): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings");
 		getAvailableThemes()
@@ -381,6 +381,11 @@ export class SelectorController {
 							return this.ctx.statusLine.getPreviewLines(availableWidth).join("\n");
 						},
 						describeStatusLinePreview: () => this.ctx.statusLine.describePreview(),
+						// The sign-in pickers and dialogs live in the editor area: settings make way for them.
+						onAccounts: mode => {
+							done();
+							void this.showOAuthSelector(mode);
+						},
 						onPluginsChanged: async () => {
 							const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
 							clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
@@ -405,6 +410,7 @@ export class SelectorController {
 								segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 							});
 							this.ctx.ui.requestRender();
+							options?.onClose?.();
 						},
 					},
 				);

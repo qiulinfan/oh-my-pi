@@ -119,6 +119,29 @@ describe("native composer", () => {
 		expect(editor.onCycleThinkingLevel).toHaveBeenCalledTimes(1);
 	});
 
+	it("applies a model or effort picked in the terminal's own menu, and ignores a pick without a value", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.onSwitchModel = vi.fn();
+		editor.onSetThinkingLevel = vi.fn();
+		const pick = (act: string, value?: string) =>
+			editor.handleNativeEvent({ type: "action", key: "bar/model", act, value, mods: [] });
+		pick("model.switch", "anthropic/claude-sonnet-5-5");
+		pick("thinking.set", "low");
+		pick("model.switch");
+		pick("thinking.set");
+		expect(editor.onSwitchModel).toHaveBeenCalledTimes(1);
+		expect(editor.onSwitchModel).toHaveBeenCalledWith("anthropic/claude-sonnet-5-5");
+		expect(editor.onSetThinkingLevel).toHaveBeenCalledTimes(1);
+		expect(editor.onSetThinkingLevel).toHaveBeenCalledWith("low");
+	});
+
+	it("brings settings back on the Settings page's action", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.onOpenSettings = vi.fn();
+		editor.handleNativeEvent({ type: "action", key: "", act: "settings.open", mods: [] });
+		expect(editor.onOpenSettings).toHaveBeenCalledTimes(1);
+	});
+
 	it("quotes the session title in italics as the placeholder; a viewed subagent's name wins", () => {
 		const placeholder = (state: ComposerNativeState) =>
 			nodes(composer(state).describe(cx)).find(n => n.k === "editor")?.p;

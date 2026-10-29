@@ -478,8 +478,30 @@ kbd {
 	font-family: var(--serif);
 	font-size: 13px;
 }
-.foot-spacer {
-	flex: 1;
+.side-settings {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 8px;
+	border: none;
+	border-radius: 8px;
+	background: none;
+	color: var(--fg-2);
+	cursor: pointer;
+	text-align: left;
+}
+.side-settings:hover {
+	background: var(--hover);
+	color: var(--fg);
+}
+.side-settings.active {
+	background: var(--active);
+	color: var(--fg);
+}
+.seg-toggle button .k-icon,
+.seg-toggle button svg {
+	vertical-align: -2px;
 }
 .error-text {
 	color: var(--red);
@@ -1015,6 +1037,112 @@ button.picker-item:focus-visible {
 .screen-body .k-prefs {
 	height: min(860px, calc(100vh - 120px));
 	margin: 0 auto;
+}
+
+/* The Settings page: omp's settings panel fills the main area instead of floating over a session. */
+.settings-page,
+.settings-panel {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	outline: none;
+}
+.settings-panel .surface.screen {
+	background: var(--bg);
+	backdrop-filter: none;
+	padding: 20px;
+	place-items: stretch center;
+}
+.settings-panel .screen-body,
+.settings-panel .screen-body > .k-col,
+.settings-panel .screen-body .k-prefs {
+	width: min(1040px, 100%);
+	height: 100%;
+	margin: 0 auto;
+}
+.instructions {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	height: 100%;
+}
+.instructions-path {
+	font-family: var(--mono);
+	font-size: 11.5px;
+	overflow-wrap: anywhere;
+}
+.instructions-text {
+	flex: 1;
+	min-height: 320px;
+	resize: none;
+	padding: 10px 12px;
+	border: 1px solid var(--line-2);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--fg);
+	font: 12.5px/1.55 var(--mono);
+	tab-size: 4;
+}
+.instructions-text:focus {
+	outline: none;
+	border-color: var(--line-3);
+}
+.instructions-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.instructions-bar > span {
+	flex: 1;
+	font-size: 12px;
+}
+.role-pickers {
+	display: flex;
+	gap: 6px;
+}
+.role-pickers .picker {
+	flex: none;
+}
+.role-pickers .picker-menu {
+	left: auto;
+	right: 0;
+}
+.settings-inline {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.settings-inline-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 20px;
+	border-bottom: 1px solid var(--line);
+}
+.settings-inline-bar > span {
+	flex: 1;
+	font-size: 12.5px;
+}
+/* The settings omp takes no prompts: its composer stays hidden. */
+.settings-inline .dock:has(.k-editor) {
+	display: none;
+}
+.prefs-pages-sep {
+	margin: 10px 9px 4px;
+	font-size: 11px;
+	color: var(--muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.prefs-control.seg-toggle button {
+	display: inline-flex;
+	gap: 5px;
+	align-items: center;
+	padding: 5px 9px;
 }
 
 /* ── Layout kinds ──────────────────────────────────────── */
@@ -2410,6 +2538,19 @@ button.picker-item:focus-visible {
 [data-role="omp.composer.model"] .s-accent {
 	color: var(--fg-2);
 }
+/* The composer's model and effort menus are the start page's; in the dock they open upward. */
+.composer-pickers {
+	display: flex;
+	gap: 6px;
+	min-width: 0;
+}
+.composer-pickers .picker {
+	flex: none;
+}
+.composer-pickers .picker-menu {
+	top: auto;
+	bottom: calc(100% + 6px);
+}
 [data-role="omp.composer.extras"] {
 	flex: 1;
 }
@@ -2742,18 +2883,41 @@ button.picker-item:focus-visible {
 	flex: 1;
 	min-width: 96px;
 	overflow: hidden;
-	text-overflow: ellipsis;
 	white-space: nowrap;
 	display: flex;
 	gap: 6px;
 	align-items: center;
+}
+/* The name keeps its room; role chips and badges after it give way first. */
+.picker-name {
+	flex: none;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.picker-chips {
+	display: flex;
+	gap: 4px;
+	min-width: 0;
+	overflow: hidden;
+}
+.picker-columns,
+.picker-columns:hover {
+	cursor: default;
+	background: none;
+	padding-top: 2px;
+	padding-bottom: 2px;
+	font-size: 11px;
+	color: var(--muted);
 }
 /* With a side preview the list is narrow: the preview already shows the detail, and low-priority facts go first. */
 .preview-side .layout-rows .picker-detail,
 .preview-side .picker-detail {
 	display: none;
 }
-.preview-side .picker-fact.low {
+/* A side preview shows every fact of the selected item, so the narrow list keeps only the names. */
+.preview-side .picker-fact,
+.preview-side .picker-columns {
 	display: none;
 }
 .picker-label.mono {
@@ -2777,13 +2941,19 @@ button.picker-item:focus-visible {
 	padding-left: 23px;
 }
 .picker-fact {
-	min-width: 64px;
+	flex: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	text-align: right;
 	font-size: 12px;
 	font-variant-numeric: tabular-nums;
 	color: var(--muted);
 }
 .picker-preview {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 	width: 42%;
 	border-left: 1px solid var(--line);
 	padding: 12px 14px;

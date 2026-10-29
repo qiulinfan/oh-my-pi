@@ -30,6 +30,7 @@ import {
 import { AnsiBlock } from "./ansi";
 import { Editor } from "./editor";
 import { Icon } from "./icons";
+import { EffortPicker, ModelListContext, ModelPicker } from "./pickers";
 import type { SessionConnection } from "./session";
 import type { StoreNode, SurfaceStore } from "./store";
 
@@ -356,7 +357,46 @@ const Col: R = ({ node }) => {
 
 const JUSTIFY: Record<string, string> = { start: "flex-start", between: "space-between", end: "flex-end" };
 
+/**
+ * The composer's model chip, drawn as the start page's model and effort menus. omp folds the
+ * effort into the chip, or puts it in a row of its own beside it; either way it shows here.
+ */
+const ComposerModel = ({ node }: { node: StoreNode }): ReactNode => {
+	const { session, store, sf } = useSurface();
+	const list = useContext(ModelListContext);
+	const selector: string = node.p.value;
+	const folded = node.c.find(id => store.get(id)?.k === "effort");
+	const own = store
+		.get(node.parent ?? "")
+		?.c.map(id => store.get(id))
+		.find(sibling => sibling?.p.role === "omp.composer.effort");
+	const levelText = own?.c.map(id => store.get(id)).find(child => child?.k === "text");
+	const level: string = useNode(folded ?? levelText?.id ?? "")?.p[folded ? "level" : "text"] ?? "";
+	const send = (act: string, value: string) => session.event({ ev: "action", sf, id: node.id, act, value });
+	return (
+		<div className="composer-pickers">
+			<ModelPicker value={selector} list={list} running onPick={value => send("model.switch", value)} />
+			{level ? (
+				<EffortPicker
+					value={level}
+					model={selector}
+					list={list}
+					running
+					onPick={value => send("thinking.set", value)}
+				/>
+			) : null}
+		</div>
+	);
+};
+
 const Row: R = ({ node }) => {
+	if (node.p.role === "omp.composer.model" && node.p.value) return <ComposerModel node={node} />;
+	// Its level shows in the composer model's own effort menu.
+	if (node.p.role === "omp.composer.effort") return null;
+	return <PlainRow node={node} />;
+};
+
+const PlainRow: R = ({ node }) => {
 	const common = useCommon(node);
 	const p = node.p;
 	return (
@@ -1846,6 +1886,12 @@ const Picker: R = ({ node }) => {
 	const order: (string | any)[] = p.order ?? [...items.keys()];
 	const columns: any[] = p.columns ?? [];
 	const ev = (type: "select" | "activate", item: string) => () => session.event({ ev: type, sf, id: node.id, item });
+	// Every column takes the same width in the head and each row, so the facts line up under their heads.
+	const colClass = (col: any) =>
+		`picker-fact${typeof col.priority === "number" && col.priority <= 3 ? " low" : ""}${col.format === "dim" ? " s-dim" : ""}`;
+	const colStyle = (col: any): CSSProperties => ({
+		width: `${Math.max(col.min ?? 0, col.head?.length ?? 0, 6) + 1}ch`,
+	});
 	const query: string | null | undefined = p.query;
 	const caret = typeof p.cursor === "number" ? p.cursor : (query ?? "").length;
 	return (
@@ -1915,6 +1961,16 @@ const Picker: R = ({ node }) => {
 					</div>
 				) : null}
 				<div className="picker-list">
+					{columns.some(col => col.head) && order.length > 0 ? (
+						<div className="picker-item picker-columns">
+							<span className="picker-label" />
+							{columns.map(col => (
+								<span key={col.id} className={colClass(col)} style={colStyle(col)}>
+									{col.head ?? ""}
+								</span>
+							))}
+						</div>
+					) : null}
 					{p.state === "loading" ? <div className="s-dim picker-msg">Loading…</div> : null}
 					{p.message ? (
 						<div className="picker-msg">
@@ -1958,21 +2014,36 @@ const Picker: R = ({ node }) => {
 									<Icon name={item.role} size={13} />
 								) : null}
 								<span className={`picker-label ${item.mono ? "mono" : ""}`}>
-									<Spans text={item.label} />
-									{(item.chips ?? []).map((chip: any, j: number) => (
-										<span key={j} className={`chip ${chip.on ? "on" : ""}`}>
-											{chip.text}
+									<span className="picker-name">
+										{item.mono && typeof item.label === "string" && item.label.includes("/") ? (
+											<>
+												<span className="s-dim">
+													{item.label.slice(0, item.label.lastIndexOf("/") + 1)}
+												</span>
+												{item.label.slice(item.label.lastIndexOf("/") + 1)}
+											</>
+										) : (
+											<Spans text={item.label} />
+										)}
+									</span>
+									{item.chips?.length || item.badges?.length ? (
+										<span className="picker-chips">
+											{(item.chips ?? []).map((chip: any, j: number) => (
+												<span key={j} className={`chip ${chip.on ? "on" : ""}`}>
+													{chip.text}
+												</span>
+											))}
+											{(item.badges ?? []).map((badge: any, j: number) => (
+												<span
+													key={`b${j}`}
+													className={`k-badge tone-${badge.tone ?? "neutral"}`}
+													title={badge.title}
+												>
+													{badge.text}
+												</span>
+											))}
 										</span>
-									))}
-									{(item.badges ?? []).map((badge: any, j: number) => (
-										<span
-											key={`b${j}`}
-											className={`k-badge tone-${badge.tone ?? "neutral"}`}
-											title={badge.title}
-										>
-											{badge.text}
-										</span>
-									))}
+									) : null}
 								</span>
 								{item.detail ? (
 									<span className="picker-detail">
@@ -1981,11 +2052,11 @@ const Picker: R = ({ node }) => {
 								) : null}
 								{columns.map(col => {
 									const fact = item.facts?.[col.id];
-									const low = typeof col.priority === "number" && col.priority <= 3 ? " low" : "";
-									if (fact === undefined) return <span key={col.id} className={`picker-fact${low}`} />;
+									const cell = { className: colClass(col), style: colStyle(col) };
+									if (fact === undefined) return <span key={col.id} {...cell} />;
 									if (col.format === "bar" && typeof fact === "number")
 										return (
-											<span key={col.id} className={`picker-fact${low}`}>
+											<span key={col.id} {...cell}>
 												<span className="bar">
 													<span className="fill" style={{ width: `${fact * 100}%` }} />
 												</span>
@@ -1993,12 +2064,12 @@ const Picker: R = ({ node }) => {
 										);
 									if (col.format === "elapsed" && typeof fact === "number")
 										return (
-											<span key={col.id} className={`picker-fact s-dim${low}`}>
+											<span key={col.id} {...cell} className={`${cell.className} s-dim`}>
 												{formatMs(fact)} ago
 											</span>
 										);
 									return (
-										<span key={col.id} className={`picker-fact ${col.format === "dim" ? "s-dim" : ""}${low}`}>
+										<span key={col.id} {...cell}>
 											<Spans text={fact} />
 										</span>
 									);
@@ -2050,20 +2121,51 @@ const Picker: R = ({ node }) => {
 	);
 };
 
+/** Pages the GUI adds to omp's settings, above omp's own: the Settings page's General. */
+export interface PrefsExtra {
+	title: string;
+	pages: { id: string; label: string; icon: string }[];
+	/** The GUI page shown instead of omp's, or null for omp's current page. */
+	active: string | null;
+	onPick: (page: string | null) => void;
+	content: ReactNode;
+}
+
+export const PrefsExtraContext = createContext<PrefsExtra | null>(null);
+
+/** Sends an action to omp's settings panel, from a GUI page shown in it. */
+export const PrefsActionContext = createContext<(act: string, value?: string) => void>(() => {});
+
 const Prefs: R = ({ node }) => {
 	const { session, sf } = useSurface();
+	const extra = useContext(PrefsExtraContext);
 	const p = node.p;
 	const change = (item: string, value: unknown) => session.event({ ev: "change", sf, id: node.id, item, value });
+	const own = !extra?.active;
 	return (
 		<div {...useCommon(node)}>
-			<div className="prefs-head">{p.title}</div>
+			<div className="prefs-head">{extra?.title ?? p.title}</div>
 			<div className="prefs-main">
 				<div className="prefs-pages">
+					{extra?.pages.map(page => (
+						<div
+							key={page.id}
+							className={`prefs-page ${page.id === extra.active ? "active" : ""}`}
+							onClick={() => extra.onPick(page.id)}
+						>
+							<Icon name={page.icon} size={13} />
+							{page.label}
+						</div>
+					))}
+					{extra ? <div className="prefs-pages-sep">omp</div> : null}
 					{(p.pages ?? []).map((page: any) => (
 						<div
 							key={page.id}
-							className={`prefs-page ${page.id === p.page ? "active" : ""}`}
-							onClick={() => session.event({ ev: "action", sf, id: node.id, act: "page", value: page.id })}
+							className={`prefs-page ${own && page.id === p.page ? "active" : ""}`}
+							onClick={() => {
+								extra?.onPick(null);
+								session.event({ ev: "action", sf, id: node.id, act: "page", value: page.id });
+							}}
 						>
 							{page.icon ? <Icon name={page.icon} size={13} /> : null}
 							{page.label}
@@ -2071,7 +2173,14 @@ const Prefs: R = ({ node }) => {
 						</div>
 					))}
 				</div>
-				<div className="prefs-sections">
+				{extra?.active ? (
+					<PrefsActionContext.Provider
+						value={(act, value) => session.event({ ev: "action", sf, id: node.id, act, value })}
+					>
+						<div className="prefs-sections">{extra.content}</div>
+					</PrefsActionContext.Provider>
+				) : null}
+				<div className="prefs-sections" hidden={!own}>
 					{p.lead ? <div className="s-dim prefs-lead">{p.lead}</div> : null}
 					{(p.sections ?? []).map((section: any) => (
 						<div key={section.id} className="prefs-section">
