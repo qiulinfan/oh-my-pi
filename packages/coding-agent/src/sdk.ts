@@ -53,6 +53,7 @@ import {
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
+import { createClaudeHooksExtension } from "./extensibility/claude-hooks";
 import { loadCapability, reset as resetCapabilities } from "./capability";
 import {
 	MAIN_AGENT_RULE_NAME,
@@ -2774,6 +2775,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (customTools.length > 0) {
 				inlineExtensions.push(createCustomToolsExtension(customTools, customToolSourcePaths));
 			}
+			inlineExtensions.push(createClaudeHooksExtension({ settings, cwd }));
 		}
 		// Forward the path list (NOT the loaded tools) to subagents so they
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.

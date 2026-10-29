@@ -52,6 +52,8 @@ After native auto-discovery, `discoverAndLoadExtensions()` also appends JS/TS ho
 
 Hook-capability loading already applies its own hook-specific disabled ids, so these paths are not additionally filtered by `disabledExtensions` extension-module names.
 
+Shell scripts in these directories are not loaded. Claude Code's declarative command hooks (`hooks` in `.claude/settings.json`, plugin `hooks/hooks.json`) run through a built-in session extension instead; see [Claude Code hooks](./claude-code-hooks.md).
+
 ### 3) Installed plugin extension entries
 
 After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
