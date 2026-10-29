@@ -309,18 +309,20 @@ export const cfgToolsApproval = register({
 //   "always-ask-cached" — like always-ask, but file reads and writes can be approved
 //                         for a file or folder, this session or across sessions.
 //   "write"             — auto-approves read and write-tier tools; prompts for exec.
+//   "auto"              — like write, but asks the approval judge about each exec call first.
 //   "yolo"              — auto-approves every tier.
+// Every mode, yolo included, prompts for a critical command (`rm -rf /`, `curl … | sh`).
 export const cfgToolsApprovalMode = register({
 	id: "tools.approvalMode",
 	type: "enum",
-	values: ["always-ask", "always-ask-cached", "write", "yolo"] as const,
+	values: ["always-ask", "always-ask-cached", "write", "auto", "yolo"] as const,
 	default: "yolo",
 	ui: {
 		tab: "interaction",
 		group: "Approvals",
 		label: "Tool Approval",
 		description:
-			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' also asks before file reads, and can remember a file or folder. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers; user policy may still prompt or block.",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' also asks before file reads, and can remember a file or folder. 'Write' auto-approves read and workspace-write tools. 'Auto' is Write plus a judge model that runs routine exec calls, asks about risky ones, and refuses destructive ones. 'Yolo' auto-approves all tiers; user policy may still prompt or block. Every mode asks before a critical command such as rm -rf / or curl | sh.",
 		options: [
 			{
 				value: "always-ask",
@@ -340,10 +342,16 @@ export const cfgToolsApprovalMode = register({
 					"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, and task.",
 			},
 			{
+				value: "auto",
+				label: "Auto",
+				description:
+					"Like Write, but a judge model (the judge role) decides each exec call: routine ones run, risky ones ask, clearly destructive or exfiltrating ones are refused. Asks when no judge answers.",
+			},
+			{
 				value: "yolo",
 				label: "Yolo",
 				description:
-					"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
+					"Auto-approve read, write, and exec tools, except critical commands, which still ask. User policy can still require confirmation or block calls.",
 			},
 		],
 	},

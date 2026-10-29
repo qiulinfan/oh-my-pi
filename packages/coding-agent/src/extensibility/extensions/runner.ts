@@ -37,6 +37,7 @@ import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AsyncJobSnapshot, SendUserMessageOptions } from "../../session/agent-session";
 import { MAIN_AGENT_ID } from "../../registry/agent-registry";
 import type { SessionManager } from "../../session/session-manager";
+import { type ApprovalJudgeVerdict, judgeApproval } from "../../tools/approval-judge";
 import { addFileDeleteFallback, addFileWriteFallback } from "../../tools/file-write-fallback";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { accumulateToolCallResult, buildAggregatedToolCallResult } from "../shared-events";
@@ -514,6 +515,8 @@ export class ExtensionRunner {
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
 	/** Grant keys (see `sessionApprovalScope`) approved "for this session", each prefixed by the session it covers. */
 	#sessionApprovals = new Set<string>();
+	/** `auto` approval-judge verdicts, keyed by session, tool, and arguments. */
+	#approvalVerdicts = new Map<string, ApprovalJudgeVerdict>();
 	#trackUserWait?: UserWaitTracker;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
 	#getModel: () => Model | undefined = () => undefined;
@@ -1015,6 +1018,28 @@ export class ExtensionRunner {
 
 	grantSessionApproval(key: string): void {
 		this.#sessionApprovals.add(`${this.sessionId}\0${key}`);
+	}
+
+	/**
+	 * `tools.approvalMode: auto`'s verdict on an exec-tier call it would prompt for: the approval
+	 * judge's answer, remembered for the current session. `undefined` when no judge could answer.
+	 */
+	judgeApproval(
+		tool: Pick<AgentTool, "name" | "formatApprovalDetails">,
+		args: unknown,
+		settings: Settings,
+		signal?: AbortSignal,
+	): Promise<ApprovalJudgeVerdict | undefined> {
+		return judgeApproval({
+			tool,
+			args,
+			settings,
+			registry: this.modelRegistry,
+			model: this.#getModel(),
+			sessionManager: this.sessionManager,
+			verdicts: this.#approvalVerdicts,
+			signal,
+		});
 	}
 
 	getUIContext(): ExtensionUIContext {

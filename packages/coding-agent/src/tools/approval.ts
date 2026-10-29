@@ -41,7 +41,7 @@ export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 
 /** Every approval mode: the type below and `isApprovalMode` read from one list. */
-const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "yolo"] as const;
+const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "auto", "yolo"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 /** The slice of `AgentToolContext` that approval resolution actually reads. */
@@ -86,7 +86,7 @@ function asPolicyMap(value: unknown): Record<string, unknown> {
  * fail-closed: `always-ask` with an empty policy map — no user grant. When
  * settings are present, the configured `tools.approvalMode` is used (schema
  * default remains `yolo`). `--auto-approve` still forces `yolo`. A peer turn
- * (`context.peerTurn`) is held to `write`, whatever the mode or flag.
+ * (`context.peerTurn`) is held to `write` when the mode would run exec-tier calls unasked.
  *
  * Shared by `ExtensionToolWrapper.execute`, `refuseByWritePolicy`,
  * `mcpApprovalPreflight`, and eval prelude host calls so those sites cannot
@@ -97,8 +97,10 @@ function asPolicyMap(value: unknown): Record<string, unknown> {
 export function resolveApprovalFromContext(context?: ApprovalContextSource | null): ResolvedExecuteTimeApproval {
 	const resolved = resolveConfiguredApproval(context);
 	// Another session's request may get work written, never commands run without the user:
-	// a peer turn asks for every exec-tier call, `--auto-approve` included.
-	if (context?.peerTurn === true && resolved.approvalMode === "yolo") return { ...resolved, approvalMode: "write" };
+	// a peer turn asks for every exec-tier call, `--auto-approve` and the `auto` judge included.
+	if (context?.peerTurn === true && (resolved.approvalMode === "yolo" || resolved.approvalMode === "auto")) {
+		return { ...resolved, approvalMode: "write" };
+	}
 	return resolved;
 }
 
@@ -162,6 +164,7 @@ const APPROVAL_MODE_MAX_TIER: Record<ApprovalMode, ToolTier> = {
 	"always-ask": "read",
 	"always-ask-cached": "read",
 	write: "write",
+	auto: "write",
 	yolo: "exec",
 };
 
@@ -336,8 +339,12 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  *     `approvalCacheTargets` are all granted in `grants` is allowed instead
  *     (see {@link resolveCachedModeApproval}).
  *
- * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
- * settings remain authoritative.
+ * In yolo mode, an explicit tool policy and then a user `tools.approval` setting
+ * decide first; a bare `override` (a critical command) then still prompts — it is
+ * confirmed by the user in every mode. Everything else runs.
+ *
+ * `auto` resolves like `write`; for an exec-tier call it would prompt for, the
+ * caller may ask the approval judge first (see {@link isJudgeableApproval}).
  */
 export function resolveApproval(
 	tool: ApprovalSubject,
@@ -403,13 +410,27 @@ export function resolveApproval(
 				...(decision.reason ? { reason: decision.reason } : {}),
 			};
 		}
-		return {
-			policy: combinedUserPolicy ?? "allow",
-			tier: decision.tier,
-			override: false,
-			source: combinedUserPolicy ? "user" : "mode",
-			...(combinedUserPolicyKey ? { policyKey: combinedUserPolicyKey } : {}),
-		};
+		if (combinedUserPolicy) {
+			return {
+				policy: combinedUserPolicy,
+				tier: decision.tier,
+				override: false,
+				source: "user",
+				...(combinedUserPolicyKey ? { policyKey: combinedUserPolicyKey } : {}),
+			};
+		}
+		// A critical command is confirmed by the user in every mode, yolo included.
+		if (decision.override) {
+			return {
+				policy: "prompt",
+				tier: decision.tier,
+				override: true,
+				source: "tool",
+				...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
+				...(decision.reason ? { reason: decision.reason } : {}),
+			};
+		}
+		return { policy: "allow", tier: decision.tier, override: false, source: "mode" };
 	}
 
 	if (decision.override) {
@@ -460,6 +481,15 @@ export function resolveApproval(
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 		...(decision.reason ? { reason: decision.reason } : {}),
 	};
+}
+
+/**
+ * Whether `auto` mode may ask the approval judge about a resolved call instead of prompting: only
+ * an exec-tier prompt the mode itself raised. A tool or user policy, a critical override, and a
+ * deny are final, and read/write tiers resolve as in `write`.
+ */
+export function isJudgeableApproval(resolved: ResolvedApproval, mode: ApprovalMode): boolean {
+	return mode === "auto" && resolved.policy === "prompt" && resolved.source === "mode" && resolved.tier === "exec";
 }
 
 /**

@@ -15,6 +15,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
 	denyError,
+	isJudgeableApproval,
 	recordApprovalGrant,
 	requestApproval,
 	resolveApproval,
@@ -382,6 +383,35 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			reason: resolved.reason,
 		};
 
+		// `auto`: an exec-tier call the mode would ask about goes to the approval judge first. Its
+		// `allow` runs the call and its `deny` refuses it; `prompt`, or no verdict at all, asks the
+		// user as `write` would — and refuses below when no user can answer.
+		const judgeSettings = context?.settings ?? this.runner.sessionSettings;
+		let judgeNote: string | undefined;
+		if (
+			approvalCheck.required &&
+			pendingSafetyChecks.length === 0 &&
+			judgeSettings &&
+			isJudgeableApproval(resolved, approvalMode)
+		) {
+			const verdict = await this.runner.judgeApproval(this.tool, resolvedArgs, judgeSettings, signal);
+			signal?.throwIfAborted();
+			if (verdict === "deny") {
+				cancelPreflight();
+				throw new Error(
+					`Tool "${this.tool.name}" was refused by the approval judge (tools.approvalMode: auto): ` +
+						"it judged the call clearly destructive or exfiltrating.",
+				);
+			}
+			if (verdict === "allow") {
+				approvalCheck.required = false;
+			} else {
+				judgeNote =
+					verdict === "prompt" ? "the approval judge asked for confirmation" : "no approval judge answered";
+				approvalCheck.reason ??= judgeNote;
+			}
+		}
+
 		if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
 			if (
@@ -428,8 +458,19 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						`Tool "${this.tool.name}" has pending provider safety checks but no interactive UI is available.`,
 					);
 				}
+				// A forced prompt (a critical command, a `bash.patterns` prompt rule) holds in every mode,
+				// so switching modes cannot unblock it: say why the call was refused instead.
+				if (resolved.override) {
+					throw new Error(
+						`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
+							(resolved.reason ? `Reason: ${resolved.reason}\n` : "") +
+							"This call must be confirmed by the user in every approval mode, yolo included, " +
+							"so it was not run.",
+					);
+				}
 				throw new Error(
 					`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
+						(judgeNote ? `Reason: ${judgeNote}\n` : "") +
 						`Options:\n` +
 						`  1. Set tools.approvalMode: yolo in /settings\n` +
 						`  2. Add tools.approval.${this.tool.name}: allow to config\n` +

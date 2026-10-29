@@ -9,6 +9,7 @@ import {
 	requiresApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
+	sessionApprovalScope,
 	truncateForPrompt,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
@@ -85,10 +86,18 @@ describe("resolveApproval tier matrix", () => {
 describe("resolveApproval override and user policy", () => {
 	const dangerous = tool("bash", { tier: "exec", override: true, reason: "Critical pattern detected" });
 
-	it("ignores override-based prompts in yolo mode", () => {
+	it("prompts for a bare critical override in yolo mode, never for the session", () => {
 		const result = resolveApproval(dangerous, {}, "yolo");
-		expect(result).toMatchObject({ policy: "allow", tier: "exec", override: false });
-		expect(result.reason).toBeUndefined();
+		expect(result).toMatchObject({
+			policy: "prompt",
+			tier: "exec",
+			override: true,
+			source: "tool",
+			reason: "Critical pattern detected",
+		});
+		expect(sessionApprovalScope(result, "bash")).toBeUndefined();
+		// Without the override the same exec call runs unasked.
+		expect(resolveApproval(tool("bash", "exec"), {}, "yolo").policy).toBe("allow");
 	});
 
 	it("user policy still controls execution in yolo mode", () => {
@@ -1080,6 +1089,12 @@ describe("resolveApprovalFromContext fail-closed default", () => {
 		expect(resolveApprovalFromContext(undefined)).toEqual({ approvalMode: "always-ask", userPolicies: {} });
 		expect(resolveApprovalFromContext(null)).toEqual({ approvalMode: "always-ask", userPolicies: {} });
 		expect(resolveApprovalFromContext({})).toEqual({ approvalMode: "always-ask", userPolicies: {} });
+	});
+
+	it("holds a peer turn to write mode instead of letting the auto judge run commands", () => {
+		const settings = Settings.isolated({ "tools.approvalMode": "auto" });
+		expect(resolveApprovalFromContext({ settings }).approvalMode).toBe("auto");
+		expect(resolveApprovalFromContext({ settings, peerTurn: true }).approvalMode).toBe("write");
 	});
 
 	it("does not allow an exec-tier tool when context is missing", () => {

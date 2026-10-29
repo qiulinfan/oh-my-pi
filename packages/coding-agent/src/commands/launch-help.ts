@@ -125,8 +125,8 @@ export const launchHelp = {
 			description: "Auto-approve all tool calls (skip approval prompts)",
 		}),
 		"approval-mode": Flags.string({
-			options: ["always-ask", "always-ask-cached", "write", "yolo"],
-			description: "Override tools.approvalMode for this session (always-ask|always-ask-cached|write|yolo)",
+			options: ["always-ask", "always-ask-cached", "write", "auto", "yolo"],
+			description: "Override tools.approvalMode for this session (always-ask|always-ask-cached|write|auto|yolo)",
 		}),
 	},
 	examples: [

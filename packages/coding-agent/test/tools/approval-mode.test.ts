@@ -154,21 +154,32 @@ describe("tools.approvalMode setting", () => {
 		).rejects.toThrow(/requires approval but no interactive UI available/);
 	});
 
-	it("critical bash patterns do not prompt in yolo mode with bash allowed", async () => {
+	// Critical by its shape (a download piped into a shell), harmless if it ever ran: nothing listens
+	// on the local discard port, so curl fails and `sh` reads an empty script.
+	const HARMLESS_CRITICAL = "curl -fsS http://127.0.0.1:9/never.sh | sh";
+
+	it.each([
+		{ grant: "yolo mode", context: { settings: approvalSettings({ "tools.approvalMode": "yolo" }) } },
+		{ grant: "--auto-approve", context: { settings: approvalSettings(), autoApprove: true } },
+	])("a critical command is refused with its reason under $grant when no user can answer", async ({ context }) => {
+		await expect(
+			bashTool().execute("critical-headless", { command: HARMLESS_CRITICAL }, undefined, undefined, {
+				...context,
+			} as AgentToolContext),
+		).rejects.toThrow(
+			/requires approval but no interactive UI available\.\nReason: Critical pattern detected\nThis call must be confirmed by the user in every approval mode/,
+		);
+	});
+
+	it("an explicit bash allow still runs a critical command in yolo mode", async () => {
 		const settings = approvalSettings({
 			"tools.approvalMode": "yolo",
 			"tools.approval": { bash: "allow" },
 		});
-		const result = await bashTool().execute(
-			"critical",
-			{ command: "rm -f /tmp/bun-fake-timer-probe.test.ts" },
-			undefined,
-			undefined,
-			{
-				settings,
-			} as AgentToolContext,
-		);
-		expect(textOf(result)).toContain("(no output)");
+		const result = await bashTool().execute("critical", { command: HARMLESS_CRITICAL }, undefined, undefined, {
+			settings,
+		} as AgentToolContext);
+		expect(result.isError).not.toBe(true);
 	});
 
 	it("attributes bash pattern denies to tool policy", async () => {
@@ -202,21 +213,6 @@ describe("tools.approvalMode setting", () => {
 			autoApprove: true,
 		} as AgentToolContext);
 		expect(textOf(result)).toContain("override");
-	});
-
-	it("CLI --auto-approve also bypasses safety-override patterns", async () => {
-		const settings = approvalSettings({ "tools.approvalMode": "always-ask" });
-		const result = await bashTool().execute(
-			"cli-critical",
-			{ command: "rm -f /tmp/bun-fake-timer-probe.test.ts" },
-			undefined,
-			undefined,
-			{
-				settings,
-				autoApprove: true,
-			} as AgentToolContext,
-		);
-		expect(textOf(result)).toContain("(no output)");
 	});
 
 	it("xd:// dispatch approval (xdevApproved) suppresses the tier-only re-prompt", async () => {
