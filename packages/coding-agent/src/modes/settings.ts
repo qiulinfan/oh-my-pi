@@ -1161,10 +1161,12 @@ export const cfgStartupSetupWizard = register({
 	},
 });
 
+// Off in this fork: it is rebuilt from its own checkout, and the `omp update` the notice
+// suggests would replace it with upstream's build.
 export const cfgStartupCheckUpdate = register({
 	id: "startup.checkUpdate",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
