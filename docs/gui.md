@@ -138,6 +138,17 @@ session at once, without redrawing it from the start; a restored session comes
 back in the mode it last ran in. The terminal is not affected: omp started from
 a terminal keeps its own display settings.
 
+The Approvals picker beside it sets which tool calls a new session asks about
+before running them (`--approval-mode`; see
+[approval-mode.md](approval-mode.md)): Always ask, Ask and remember, Write,
+Auto or Yolo. From settings (the default) passes no flag, so the session takes
+`tools.approvalMode`. Every mode still asks before a critical command such as
+`rm -rf /`. The pick is remembered and applies to resumed sessions too; a
+restored session comes back in the mode it was started with. A session started
+From settings follows `/settings` (Interaction, Tool Approval) from its next
+tool call; one started with a picked mode keeps that mode until it ends, since
+the flag outranks the saved setting.
+
 In a session, each turn's work (thinking and tool calls) runs down a timeline
 on the left, and the assistant's answer sits at full width between those runs.
 Answers draw Markdown as the terminal reads it, plus what a browser can show:

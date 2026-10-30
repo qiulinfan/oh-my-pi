@@ -19,6 +19,7 @@ export const GUI_PREF_KEYS = [
 	"model",
 	"thinking",
 	"workDetail",
+	"approvalMode",
 	"pinnedProjects",
 ] as const;
 

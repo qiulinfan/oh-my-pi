@@ -159,6 +159,8 @@ interface SpawnRequest {
 	thinking?: string;
 	/** omp's `--work-detail` mode: compact, standard or verbose. */
 	workDetail?: string;
+	/** omp's `--approval-mode`; absent starts in the mode omp's settings name. */
+	approvalMode?: string;
 	prompt?: string;
 }
 
@@ -1126,6 +1128,48 @@ function WorkDetailPicker({ value, onPick }: { value: string; onPick: (value: st
 	);
 }
 
+/** omp's `--approval-mode` values, as its settings panel names them. */
+const APPROVAL_MODES: Choice[] = [
+	{ value: "always-ask", text: "Always ask", title: "Run read-only tools; ask before every write and command" },
+	{
+		value: "always-ask-cached",
+		text: "Ask and remember",
+		title: "Ask before reading or writing a file, with answers that can remember the file or its folder",
+	},
+	{ value: "write", text: "Write", title: "Run read-only tools and workspace edits; ask before every command" },
+	{
+		value: "auto",
+		text: "Auto",
+		title: "Like Write, and a judge model runs routine commands, asks about risky ones and refuses destructive ones",
+	},
+	{ value: "yolo", text: "Yolo", title: "Run every tool without asking" },
+];
+const SETTINGS_APPROVAL: Choice = {
+	value: "",
+	text: "From settings",
+	title: "The mode omp's settings name (tools.approvalMode)",
+};
+
+/** The stored approval choice, or "" (omp's settings) when none, or an unknown one, is stored. */
+function approvalModeOf(value: string): string {
+	return APPROVAL_MODES.some(choice => choice.value === value) ? value : "";
+}
+
+function ApprovalPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
+	return (
+		<ChoicePicker
+			icon="key"
+			label={APPROVAL_MODES.find(choice => choice.value === value)?.text ?? "Approvals"}
+			title="Which tool calls a new session asks you about first. Every mode asks before a critical command such as rm -rf /. A picked mode holds for the session's life; From settings follows /settings."
+			menuLabel="Approvals"
+			value={value}
+			lead={[SETTINGS_APPROVAL]}
+			choices={APPROVAL_MODES}
+			onPick={onPick}
+		/>
+	);
+}
+
 function StartPage({
 	picker,
 	modelPicker,
@@ -1687,6 +1731,8 @@ export function App(): ReactNode {
 	const [thinkingPref, setThinking] = usePref("thinking", "");
 	const thinkingChoice = thinkingPref.trim();
 	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
+	const [approvalPref, setApproval] = usePref("approvalMode", "");
+	const approvalMode = approvalModeOf(approvalPref);
 	const pinnedRoots = usePinnedProjects();
 	const toggleProjectPin = (root: string) => pinProject(root, !pinnedRoots.includes(root));
 	const workDetail = workDetailOf(workDetailPref);
@@ -1833,9 +1879,9 @@ export function App(): ReactNode {
 			const ids: string[] = [];
 			const errors: string[] = [];
 			for (const request of requests) {
-				// A display choice, not part of the turn: the page sends its pick on every spawn. A bare restore
-				// keeps the mode the session was recorded with when there is one; any other spawn takes the pick.
-				const body: SpawnRequest = { ...request, workDetail };
+				// The page sends its work-detail and approval picks on every spawn. A bare restore keeps the
+				// modes the session was recorded with when there are any; any other spawn takes the picks.
+				const body: SpawnRequest = { ...request, workDetail, approvalMode: approvalMode || undefined };
 				// The server waits up to 10 s for another omp to let go of the session file (one still tearing down).
 				const timer = opensFile(request) ? setTimeout(() => setWaiting(true), WAITING_MS) : undefined;
 				try {
@@ -2285,6 +2331,7 @@ export function App(): ReactNode {
 									<ModelPicker value={model} list={modelList} onPick={setModel} />
 									<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
 									<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
+									<ApprovalPicker value={approvalMode} onPick={setApproval} />
 								</>
 							}
 							interrupted={

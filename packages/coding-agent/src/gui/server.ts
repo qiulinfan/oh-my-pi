@@ -44,6 +44,7 @@ import {
 import { loadPinnedSessionIds, setSessionPinned } from "../session/session-pins";
 import { FileSessionStorage, tryAcquireSessionFileLease } from "../session/session-storage";
 import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-client";
+import { APPROVAL_MODES, isApprovalMode } from "../tools/approval";
 import { processStartToken } from "../utils/process-identity";
 import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } from "./hosted";
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
@@ -952,6 +953,8 @@ interface SpawnBody {
 	thinking?: string;
 	/** omp's `--work-detail` mode (one of {@link WORK_DETAILS}); absent keeps omp's default. */
 	workDetail?: string;
+	/** omp's `--approval-mode` (one of {@link APPROVAL_MODES}); absent keeps `tools.approvalMode`. */
+	approvalMode?: string;
 	prompt?: string;
 }
 
@@ -1394,13 +1397,15 @@ class GuiHost implements SessionHost {
 		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
 		const body = await readBody<SpawnBody>(req);
 		if (body instanceof Response) return body;
-		for (const key of ["project", "from", "model", "thinking", "workDetail", "prompt"] as const)
+		for (const key of ["project", "from", "model", "thinking", "workDetail", "approvalMode", "prompt"] as const)
 			if (body[key] !== undefined && typeof body[key] !== "string")
 				return fail(400, "bad-request", `${key} must be a string`);
 		if (body.thinking !== undefined && !CLI_THINKING_LEVELS.includes(body.thinking as ConfiguredThinkingLevel))
 			return fail(400, "bad-request", `thinking must be one of ${CLI_THINKING_LEVELS.join(", ")}`);
 		if (body.workDetail !== undefined && !isWorkDetail(body.workDetail))
 			return fail(400, "bad-request", `workDetail must be one of ${WORK_DETAILS.join(", ")}`);
+		if (body.approvalMode !== undefined && !isApprovalMode(body.approvalMode))
+			return fail(400, "bad-request", `approvalMode must be one of ${APPROVAL_MODES.join(", ")}`);
 		if (body.resume !== undefined && (typeof body.resume?.path !== "string" || typeof body.resume?.cwd !== "string"))
 			return fail(400, "bad-request", "resume needs a path and a cwd");
 		// A spawn changes the roster, and a restore reads what the previous run left.
@@ -1437,6 +1442,11 @@ class GuiHost implements SessionHost {
 		const bareRestore = body.from !== undefined && !resume && !project && !prompt;
 		const recordedDetail = isWorkDetail(from?.workDetail) ? from.workDetail : undefined;
 		const workDetail = bareRestore ? (recordedDetail ?? body.workDetail) : (body.workDetail ?? recordedDetail);
+		// The approval mode follows the same rule, so a restore never runs a session with fewer prompts than it had.
+		const recordedApproval = isApprovalMode(from?.approvalMode) ? from.approvalMode : undefined;
+		const approvalMode = bareRestore
+			? (recordedApproval ?? body.approvalMode)
+			: (body.approvalMode ?? recordedApproval);
 		let restore = body.restore === true;
 		let chat = false;
 		if (bareRestore) {
@@ -1482,6 +1492,7 @@ class GuiHost implements SessionHost {
 		if (model) args.push("--model", model);
 		if (thinking) args.push("--thinking", thinking);
 		if (workDetail) args.push("--work-detail", workDetail);
+		if (approvalMode) args.push("--approval-mode", approvalMode);
 		// The first message goes in as omp's positional prompt, so the session starts working on it.
 		const firstMessage = resume ? undefined : prompt?.trim() || undefined;
 		if (firstMessage) args.push("--", firstMessage);
@@ -1517,6 +1528,7 @@ class GuiHost implements SessionHost {
 			model: firstMessage ? model : undefined,
 			thinking: firstMessage ? thinking : undefined,
 			workDetail,
+			approvalMode,
 			chat,
 			restoredFrom: from?.guiId,
 		};

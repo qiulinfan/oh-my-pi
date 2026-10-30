@@ -41,7 +41,7 @@ export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 
 /** Every approval mode: the type below and `isApprovalMode` read from one list. */
-const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "auto", "yolo"] as const;
+export const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "auto", "yolo"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 /** The slice of `AgentToolContext` that approval resolution actually reads. */
@@ -71,7 +71,7 @@ type ApprovalSubject = Pick<
 };
 
 /** Whether a runtime value names a supported approval mode. */
-function isApprovalMode(value: unknown): value is ApprovalMode {
+export function isApprovalMode(value: unknown): value is ApprovalMode {
 	return typeof value === "string" && APPROVAL_MODES.some(mode => mode === value);
 }
 

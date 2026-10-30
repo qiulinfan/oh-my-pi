@@ -793,6 +793,39 @@ describe("omp gui: hosted-session roster", () => {
 			"say hi",
 		]);
 	}, 60_000);
+
+	test("a session runs in the approval mode picked, a restore keeps its recorded mode, and an unknown mode is refused", async () => {
+		const gui = await setup();
+		const hosted = path.join(gui.runtimeDir, "hosted");
+		const { file } = await writeSessionFixture(gui.project, gui.project);
+		// A session of a previous server, started in Always ask.
+		await Bun.write(
+			path.join(hosted, "0000000f.json"),
+			JSON.stringify({
+				guiId: "0000000f",
+				sessionFile: file,
+				startedAt: 1,
+				cwd: gui.project,
+				chat: false,
+				approvalMode: "always-ask",
+			}),
+		);
+		const served = await gui.start();
+		const unknown = await gui.api<{ code: string }>(served, "/api/spawn", {
+			project: gui.project,
+			approvalMode: "never",
+		});
+		expect({ status: unknown.status, code: unknown.body.code }).toEqual({ status: 400, code: "bad-request" });
+
+		const fresh = await gui.spawn(served, { project: gui.project, approvalMode: "auto" });
+		expect(await gui.args(served, fresh.id)).toEqual(["--approval-mode", "auto"]);
+		// omp takes the mode and gets past its startup, rather than refusing the flag and exiting.
+		await gui.waitForSessionFile(served, fresh.id);
+		expect((await Bun.file(path.join(hosted, `${fresh.id}.json`)).json()).approvalMode).toBe("auto");
+		// The page's yolo pick never loosens a restored session that ran asking.
+		const restored = await gui.spawn(served, { from: "0000000f", approvalMode: "yolo" });
+		expect(await gui.args(served, restored.id)).toEqual(["--restore", file, "--approval-mode", "always-ask"]);
+	}, 60_000);
 	test("a mode switched with the session's chip is recorded, and a restore comes back in it", async () => {
 		const gui = await setup();
 		await gui.skipSetupWizard();

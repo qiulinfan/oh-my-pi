@@ -53,6 +53,11 @@ export interface HostedEntry {
 	 * entry starts in it whatever mode the page sends; it outlives /new and /resume.
 	 */
 	workDetail?: string;
+	/**
+	 * The `--approval-mode` the session was started with, absent when it took `tools.approvalMode`. A restore
+	 * of this entry starts in it whatever mode the page sends, as with `workDetail`.
+	 */
+	approvalMode?: string;
 	/** A no-project chat, which runs in its own directory under the chats dir. */
 	chat: boolean;
 	/** How omp exited when it ended by itself and not cleanly (a crash, a signal from elsewhere). */
@@ -99,7 +104,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 	if (!optional(entry.pid, "number") || !optional(entry.startToken, "string")) return undefined;
 	if (!optional(entry.sessionFile, "string") || !optional(entry.prompt, "string")) return undefined;
 	if (!optional(entry.model, "string") || !optional(entry.thinking, "string")) return undefined;
-	if (!optional(entry.workDetail, "string")) return undefined;
+	if (!optional(entry.workDetail, "string") || !optional(entry.approvalMode, "string")) return undefined;
 	if (entry.ending !== undefined && entry.ending !== true) return undefined;
 	if (entry.restoredFrom !== undefined && !isGuiId(entry.restoredFrom)) return undefined;
 	const exit = parseExit(entry.exit);
@@ -115,6 +120,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 		model: entry.model as string | undefined,
 		thinking: entry.thinking as string | undefined,
 		workDetail: entry.workDetail as string | undefined,
+		approvalMode: entry.approvalMode as string | undefined,
 		chat: entry.chat,
 		exit,
 		restoredFrom: entry.restoredFrom,
