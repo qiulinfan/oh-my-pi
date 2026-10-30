@@ -12,6 +12,14 @@ describe("WelcomeComponent", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("natively draws a tip's backticked command as code, without the backticks", () => {
+		const welcome = new WelcomeComponent("1.0.0");
+		Object.defineProperty(welcome, "tip", { get: () => "Type `/` at the start of your prompt" });
+		const tip = JSON.stringify(welcome.describe({} as never));
+		expect(tip).toContain(JSON.stringify({ t: "/", s: "code" }));
+		expect(tip).not.toContain("`");
+	});
+
 	it("natively sets the version under the wordmark beside the logo", () => {
 		const tree = new WelcomeComponent("18.4.12").describe({} as never);
 		expect(tree.c?.[0]).toMatchObject({

@@ -129,17 +129,33 @@ function linkTipText(tip: string): string {
 	);
 }
 
-/** The tip as native text: escapes dropped, links as `href` spans. */
+/** Inline code in tips.txt: `` `/force read` ``. */
+const TIP_CODE = /`([^`]+)`/g;
+
+/** Plain tip text as spans, its backticked commands and keys as `code` spans. */
+function textSpans(text: string): TspSpan[] {
+	const spans: TspSpan[] = [];
+	let cursor = 0;
+	for (const match of text.matchAll(TIP_CODE)) {
+		if (match.index > cursor) spans.push(span(plainText(text.slice(cursor, match.index))));
+		spans.push(span(match[1]!, "code"));
+		cursor = match.index + match[0].length;
+	}
+	if (cursor < text.length) spans.push(span(plainText(text.slice(cursor))));
+	return spans;
+}
+
+/** The tip as native text: escapes dropped, links as `href` spans, inline code as `code` spans. */
 function tipSpans(tip: string): TspSpan[] {
 	const spans: TspSpan[] = [];
 	let cursor = 0;
 	for (const match of tip.matchAll(TIP_LINK)) {
 		const [link, label, url] = match;
-		if (match.index > cursor) spans.push(span(plainText(tip.slice(cursor, match.index))));
+		if (match.index > cursor) spans.push(...textSpans(tip.slice(cursor, match.index)));
 		spans.push(urlLinkSpan(url, label));
 		cursor = match.index + link.length;
 	}
-	if (cursor < tip.length) spans.push(span(plainText(tip.slice(cursor))));
+	if (cursor < tip.length) spans.push(...textSpans(tip.slice(cursor)));
 	return spans;
 }
 
