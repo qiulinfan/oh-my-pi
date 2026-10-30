@@ -1082,6 +1082,9 @@ export class AcpAgent implements Agent {
 					await previousTurn.cleanup;
 				}
 				this.#throwIfRecordClosed(record);
+				// The client keeps this session id once the user has written to it, so the prompt's
+				// own entry writes the session, even when the turn fails before any reply.
+				record.session.sessionManager.persistFromNextEntry();
 
 				const converted = this.#convertPromptBlocks(params.prompt);
 				const pendingPrompt = Promise.withResolvers<PromptResponse>();
@@ -1637,12 +1640,9 @@ export class AcpAgent implements Agent {
 				interactivePrompts: this.#clientCapabilities?.elicitation?.form != null,
 			}),
 		);
-		try {
-			await session.sessionManager.ensureOnDisk();
-		} catch (error) {
-			await this.#disposeStandaloneSession(session);
-			throw error;
-		}
+		// Like the TUI, a new session stays off disk until it is used: clients such as Zed open a
+		// session for every empty thread they show, and writing each one fills the store with
+		// sessions that have no messages. The first prompt writes it (see prompt()).
 		return await this.#registerPreparedSession(session, mcpServers, setToolUIContext);
 	}
 
@@ -1821,6 +1821,8 @@ export class AcpAgent implements Agent {
 				throw new Error(`ACP session fork is unavailable while a prompt is in progress: ${sessionId}`);
 			}
 			await loaded.session.sessionManager.flush();
+			// A session nobody has prompted yet is not on disk; forking it is a use, so write it.
+			await loaded.session.sessionManager.ensureOnDisk();
 			const sessionPath = loaded.session.sessionManager.getSessionFile();
 			if (!sessionPath) {
 				throw new Error(`ACP session cannot be forked before it is persisted: ${sessionId}`);

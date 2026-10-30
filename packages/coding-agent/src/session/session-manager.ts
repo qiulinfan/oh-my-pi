@@ -2755,6 +2755,14 @@ export class SessionManager {
 		await this.#rewriteAtomically();
 	}
 
+	/**
+	 * Open the lazy gate without writing anything now: the next entry writes the
+	 * whole session, so a session that is in use persists before its first reply.
+	 */
+	persistFromNextEntry(): void {
+		this.#forceFileCreation = true;
+	}
+
 	/** Persist this session's transcript as a newly identified OMP session. */
 	async persistCopy(
 		options?: { sessionDir?: string; suppressBreadcrumb?: boolean },

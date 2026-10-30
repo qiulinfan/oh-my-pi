@@ -1960,6 +1960,36 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("writes a session only once it is prompted, even when the turn fails before a reply", async () => {
+		// Zed opens an ACP session for every empty thread it shows; writing each one at session/new
+		// filled the store with sessions that have no messages.
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("session not registered");
+		const listed = async () =>
+			(await harness.agent.listSessions({ cwd: harness.cwdA })).sessions.map(
+				listedSession => listedSession.sessionId,
+			);
+		expect(await listed()).not.toContain(created.sessionId);
+
+		session.prompt = async (text: string): Promise<boolean> => {
+			session.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+			throw new Error("provider unavailable");
+		};
+		await harness.agent
+			.prompt({
+				sessionId: created.sessionId,
+				messageId: "00000000-0000-4000-8000-0000000000f1",
+				prompt: [{ type: "text", text: "hello" }],
+			} as PromptRequest)
+			.catch(() => undefined);
+		expect(await listed()).toContain(created.sessionId);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("delivers the final visible answer when agent_end overtakes the assistant message_end (#4902)", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

@@ -6,6 +6,10 @@
 
 - Saved sessions record the front end that started them in their header (`origin`): the TUI, omp gui, print/RPC runs, or the ACP client by name (`zed`, `iina`).
 
+### Fixed
+
+- ACP clients such as Zed no longer leave an empty session in the session list for every thread they open; a session is saved once it is first prompted
+
 ## [18.14.0] - 2026-10-29
 
 ### Breaking Changes
