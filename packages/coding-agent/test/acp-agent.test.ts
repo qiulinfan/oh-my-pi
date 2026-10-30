@@ -29,9 +29,10 @@ import type {
 import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { sessionDirForCwd } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getArchivedSessionsDir, getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import type {
 	AgentSideConnection,
 	ClientCapabilities,
@@ -1985,6 +1986,34 @@ describe("ACP agent", () => {
 			} as PromptRequest)
 			.catch(() => undefined);
 		expect(await listed()).toContain(created.sessionId);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("names the sessions omp gc archived on the first page of session/list", async () => {
+		// Zed keeps its own threads for listed sessions; without this it can only take an archived
+		// session for a deleted one.
+		const harness = await createHarness();
+		const archive = (cwd: string, id: string) =>
+			Bun.write(
+				path.join(
+					getArchivedSessionsDir(),
+					path.basename(sessionDirForCwd(cwd)),
+					`2026-10-01T00-00-00-000Z_${id}.jsonl.gz`,
+				),
+				"",
+			);
+		await archive(harness.cwdA, "archived-a");
+		await archive(harness.cwdB, "archived-b");
+
+		const forCwdA = await harness.agent.listSessions({ cwd: harness.cwdA });
+		expect(forCwdA._meta?.archivedSessionIds).toEqual(["archived-a"]);
+		const all = await harness.agent.listSessions({});
+		expect([...((all._meta?.archivedSessionIds as string[] | undefined) ?? [])].sort()).toEqual([
+			"archived-a",
+			"archived-b",
+		]);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

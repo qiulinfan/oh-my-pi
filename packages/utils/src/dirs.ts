@@ -999,6 +999,11 @@ export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
 }
 
+/** Get the cold archive `omp gc` moves old sessions into (~/.omp/agent/archive/sessions). */
+export function getArchivedSessionsDir(agentDir?: string): string {
+	return path.join(path.dirname(getSessionsDir(agentDir)), "archive", "sessions");
+}
+
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */
 export function getBlobsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "blobs", "data");

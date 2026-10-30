@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getArchivedSessionsDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils/fs-error";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils/stream";
@@ -12,7 +13,7 @@ import { hasRestorableTurn } from "./exit-diagnostics";
 import type { SessionEntry } from "./session-entries";
 import { EVAL_STATE_CONTEXT_TYPE } from "../eval/state";
 import { visitEntriesFromFile } from "./session-loader";
-import { computeDefaultSessionDir } from "./session-paths";
+import { computeDefaultSessionDir, sessionDirForCwd } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 
@@ -687,6 +688,40 @@ export function listSessions(
  */
 export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
 	return scanSessionDirReadOnly(sessionDir, storage, true);
+}
+
+const ARCHIVED_SESSION_SUFFIX = ".jsonl.gz";
+
+/**
+ * IDs of the sessions `omp gc` moved into the cold archive, only those of `cwd`'s project when
+ * given. The archive keeps each session under its project's directory name and its own file name
+ * (`<timestamp>_<id>.jsonl.gz`), so the IDs come from the names without reading the files.
+ */
+export async function listArchivedSessionIds(cwd?: string): Promise<string[]> {
+	const root = getArchivedSessionsDir();
+	let projects: string[];
+	try {
+		projects = cwd ? [path.basename(sessionDirForCwd(cwd))] : await fs.promises.readdir(root);
+	} catch (error) {
+		if (isEnoent(error)) return [];
+		throw error;
+	}
+	const ids: string[] = [];
+	for (const project of projects) {
+		let names: string[];
+		try {
+			names = await fs.promises.readdir(path.join(root, project));
+		} catch (error) {
+			if (isEnoent(error) || isEnotdir(error)) continue;
+			throw error;
+		}
+		for (const name of names) {
+			const separator = name.indexOf("_");
+			if (separator < 0 || !name.endsWith(ARCHIVED_SESSION_SUFFIX)) continue;
+			ids.push(name.slice(separator + 1, -ARCHIVED_SESSION_SUFFIX.length));
+		}
+	}
+	return ids;
 }
 
 /** List all sessions across all project directories (newest first). */

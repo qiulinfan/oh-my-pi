@@ -70,7 +70,7 @@ import type { AgentSession, AgentSessionEvent } from "../../session/agent-sessio
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import type { UsageStatistics } from "../../session/session-entries";
-import type { SessionInfo as StoredSessionInfo } from "../../session/session-listing";
+import { listArchivedSessionIds, type SessionInfo as StoredSessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
@@ -934,9 +934,13 @@ export class AcpAgent implements Agent {
 		const offset = this.#parseCursor(params.cursor ?? undefined);
 		const paged = sessions.slice(offset, offset + SESSION_PAGE_SIZE);
 		const nextOffset = offset + paged.length;
+		// Sessions `omp gc` archived are gone from the list; the first page names them so a client
+		// that keeps its own threads (Zed) can archive those threads instead of taking them as deleted.
+		const archivedSessionIds = offset === 0 ? await this.#archivedSessionIds(params.cwd ?? undefined) : [];
 		return {
 			sessions: paged.map(session => this.#toSessionInfo(session)),
 			nextCursor: nextOffset < sessions.length ? String(nextOffset) : undefined,
+			...(archivedSessionIds.length > 0 ? { _meta: { archivedSessionIds } } : {}),
 		};
 	}
 
@@ -2754,6 +2758,11 @@ export class AcpAgent implements Agent {
 			usage.cachedWriteTokens = cachedWriteTokens;
 		}
 		return usage;
+	}
+
+	/** Archived sessions live only in the default store; a `--session-dir` client has none. */
+	async #archivedSessionIds(cwd?: string): Promise<string[]> {
+		return this.#sessionDir ? [] : await listArchivedSessionIds(cwd);
 	}
 
 	async #listStoredSessions(cwd?: string): Promise<StoredSessionInfo[]> {
