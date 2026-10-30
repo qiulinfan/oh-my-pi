@@ -1962,14 +1962,14 @@ export async function runRootCommand(
 		// tree; declare it so headless subagent optimizations (e.g. skipping replan
 		// title refresh) can tell a focusable process from a print/RPC/eval one.
 		setInteractiveHost(isInteractive);
-		if (!isInteractive) {
-			stopPendingStartupComposer();
-		}
-		// Account routing must use the effective settings, including `--config` and
 		setSessionOrigin({
 			mode: isInteractive ? "tui" : mode === "acp" ? "acp" : mode === "rpc" || mode === "rpc-ui" ? "rpc" : "print",
 			client: isInteractive && process.env.OMP_GUI_SERVER_PID ? "omp-gui" : undefined,
 		});
+		if (!isInteractive) {
+			stopPendingStartupComposer();
+		}
+		// Account routing must use the effective settings, including `--config` and
 		// `PI_CONFIG_FILES` overlays, rather than independently re-reading only the
 		// main config file during auth discovery.
 		const settingsPromise = deps.settings
