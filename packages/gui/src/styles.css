@@ -245,7 +245,8 @@ kbd {
 }
 /* Shown only where the window is too narrow for the sidebar (see the end of the file). */
 .drawer-toggle,
-.drawer-backdrop {
+.drawer-backdrop,
+.top-actions {
 	display: none;
 }
 .sidebar {
@@ -380,6 +381,10 @@ kbd {
 	color: var(--dim);
 	font-variant-numeric: tabular-nums;
 	flex: none;
+	max-width: 45%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .side-mode {
 	font-size: 11px;
@@ -896,6 +901,47 @@ button.picker-item:focus-visible {
 }
 .start-recent .side-item {
 	color: var(--fg-2);
+}
+.start-recent-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-right: 0;
+}
+.start-recent-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.start-recent-head .ghost-btn {
+	padding: 2px 8px;
+	font-size: 12px;
+}
+/* A saved session's pin: shown on hover, and always once pinned. */
+.side-pin {
+	opacity: 0;
+	flex: none;
+	display: inline-flex;
+	padding: 3px;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.side-item:hover .side-pin,
+.side-pin:focus-visible,
+.side-pin.on {
+	opacity: 1;
+}
+.side-pin.on {
+	color: var(--accent);
+}
+.side-pin:hover {
+	color: var(--fg);
+	background: var(--sel);
 }
 .interrupted-head {
 	display: flex;
@@ -3240,6 +3286,73 @@ button.picker-item:focus-visible {
 	}
 	.session-head {
 		padding-left: 46px;
+		padding-right: 78px;
+	}
+	/* Too narrow for the path and the button's words: the title keeps the room, the button its icon. */
+	.session-head .head-path,
+	.session-head .head-btn-label {
+		display: none;
+	}
+	/* The context meter takes a line of its own above the prompt instead of a column beside it. */
+	[data-role="omp.composer.context"] {
+		position: static;
+		align-self: flex-end;
+	}
+	[data-role="omp.composer.line"] {
+		padding-right: 0;
+	}
+	/* The model and effort menus wrap inside the bar, and a chip too long for it ends in an ellipsis. */
+	.composer-pickers {
+		flex-wrap: wrap;
+		row-gap: 6px;
+		max-width: 100%;
+	}
+	.composer-pickers .picker {
+		flex: 0 1 auto;
+		max-width: 100%;
+	}
+	.picker-menu {
+		max-width: calc(100vw - 24px);
+	}
+	.top-actions {
+		display: flex;
+		gap: 2px;
+		position: absolute;
+		top: 10px;
+		right: 10px;
+		z-index: 28;
+	}
+	.top-action {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border: none;
+		border-radius: 7px;
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.top-action:hover,
+	.top-action.on {
+		color: var(--fg);
+		background: var(--surface);
+	}
+	.top-badge {
+		position: absolute;
+		top: 1px;
+		right: 0;
+		min-width: 13px;
+		height: 13px;
+		padding: 0 3px;
+		border-radius: 7px;
+		background: var(--accent);
+		color: #fff;
+		font-size: 9.5px;
+		line-height: 13px;
+		font-variant-numeric: tabular-nums;
 	}
 	.start {
 		padding: 12vh 14px 32px;
@@ -3296,4 +3409,63 @@ button.picker-item:focus-visible {
 }
 [data-shell="desktop"] :is(button, input, textarea, select, a, .side-item, .picker-menu) {
 	-webkit-app-region: no-drag;
+}
+
+/* The history menu: drops from the top right of the narrow layout, over the page. */
+.history-backdrop {
+	position: absolute;
+	inset: 0;
+	z-index: 32;
+}
+.history-menu {
+	position: absolute;
+	top: 44px;
+	right: 10px;
+	left: 10px;
+	max-width: 420px;
+	margin-left: auto;
+	max-height: min(70vh, 560px);
+	z-index: 33;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--sidebar);
+	box-shadow: var(--shadow-sm);
+}
+.history-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	color: var(--dim);
+}
+.history-search input {
+	flex: 1;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+}
+.history-scope {
+	align-self: flex-start;
+	max-width: 100%;
+}
+.history-scope button {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.history-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
 }

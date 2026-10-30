@@ -82,6 +82,16 @@ so directories you used from the terminal appear too. A session's project is
 its git checkout root, or its own directory outside one; sessions with no
 messages and directories that no longer exist are left out.
 
+The sidebar lists a project's 50 newest sessions and its chats' 40, newest
+first by their last message (a record omp appends without one, such as the
+note it writes on exit, does not move a session up). A pinned session comes
+first in its list and is never left out; pin or unpin one with the pin on its
+row. Pins are omp's own, in `session-pins.json` in its agent directory, so
+`omp --resume` and every window onto the server show the same ones.
+
+The start page lists the chosen project's sessions (or the chats, with no
+project): five, every pinned one, and the rest behind Show all.
+
 A new session runs in the project picked on the start page. "Choose folder…"
 opens the macOS folder chooser. "No project" starts a chat in its own empty
 directory under `~/.omp/chats/`; chats share the session directory
@@ -167,6 +177,13 @@ omp's pages are drawn by an omp the server starts for the page
 (`--settings-panel`, in your home directory so no project settings apply),
 with no session behind it; it ends when you leave the page. Changes there
 write omp's global config, which running sessions pick up.
+
+The GUI's own choices, the theme and answer font on General and the start
+page's last project, model, effort and Work details, are kept by the server in
+`gui.json` in omp's agent directory, not in the browser. The desktop app, a
+browser tab and the Obsidian and VS Code side bars, which each have storage of
+their own, all show the same choices, and a window that comes back into view
+picks up a change made in another.
 
 ## When a session or the server goes away
 
@@ -268,15 +285,26 @@ Like the desktop app, it attaches to the running server or starts one, and a
 server it started stops with Obsidian. Building, installing and its behavior
 are described in [obsidian/README.md](../obsidian/README.md).
 
+The plugin opens the page in the vault's folder: new sessions start there,
+and the start page lists that project's sessions. A pick on the page changes
+this window only, not the project other windows remember. The view leaves
+room at its bottom for Obsidian's status bar, which floats over the right
+sidebar.
+
 Below 640 px the page takes the whole width: the session list slides over it
 from the left (the button at the top left shows it), and the composer's
-controls wrap onto further lines.
+controls wrap onto further lines. At the top right, the clock opens the
+session history, the way an editor's agent panel offers it: the sessions
+running now, then the saved ones (pinned first), for the page's project or for
+all of them, narrowed by a search; its badge counts the running sessions. The
+pen beside it goes back to the start page for a new session.
 
 ## VS Code side bar
 
 The VS Code extension in `vscode/` shows the same page in VS Code's secondary
 side bar, in a frame inside a webview. It reaches the server as the Obsidian
-plugin does. The webview's sandbox opens no windows, so a page that finds
+plugin does, and opens the page in the workspace's folder (the first of a
+multi-root workspace) the same way. The webview's sandbox opens no windows, so a page that finds
 itself framed posts its web and mail links to the embedder (a
 `{type: "omp-gui.open-external", url}` message to its parent), which opens
 them in the browser. Building, installing and its behavior are described in

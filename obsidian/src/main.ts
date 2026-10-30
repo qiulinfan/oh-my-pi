@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { GuiAttachment } from "../../desktop/src/attach";
 import { remote, shell } from "electron";
-import { ItemView, Plugin, PluginSettingTab, Setting, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, ItemView, Plugin, PluginSettingTab, Setting, type WorkspaceLeaf } from "obsidian";
 
 const VIEW_TYPE = "omp-sidebar";
 const EXTERNAL_LINK = /^(https?|mailto):/i;
@@ -108,7 +108,26 @@ class OmpView extends ItemView {
 
 	override async onOpen(): Promise<void> {
 		this.addAction("refresh-cw", "Reconnect", () => void this.#load());
+		const fit = () => this.#clearStatusBar();
+		this.registerEvent(this.app.workspace.on("resize", fit));
+		this.registerEvent(this.app.workspace.on("layout-change", fit));
 		await this.#load();
+		fit();
+	}
+
+	/**
+	 * Obsidian's status bar floats over the bottom right of the window, where it would cover the page's
+	 * composer in the right sidebar: leave the strip it covers, which themes and settings move or hide.
+	 */
+	#clearStatusBar(): void {
+		const root = this.contentEl;
+		root.style.paddingBottom = "";
+		const bar = document.querySelector(".status-bar");
+		if (!(bar instanceof HTMLElement) || !root.isShown()) return;
+		const covers = bar.getBoundingClientRect();
+		const view = root.getBoundingClientRect();
+		const overlaps = covers.height > 0 && covers.left < view.right && covers.right > view.left;
+		if (overlaps && covers.top < view.bottom) root.style.paddingBottom = `${Math.ceil(view.bottom - covers.top)}px`;
 	}
 
 	async #load(): Promise<void> {
@@ -119,7 +138,10 @@ class OmpView extends ItemView {
 		const status = root.createDiv({ cls: "omp-sidebar-status", text: "Starting omp gui…" });
 		let url: string;
 		try {
-			url = await this.#plugin.server.pageUrl(this.#plugin.settings.ompPath || undefined);
+			// New sessions start in the vault's folder.
+			const { adapter } = this.app.vault;
+			const vault = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : undefined;
+			url = await this.#plugin.server.pageUrl(this.#plugin.settings.ompPath || undefined, vault);
 		} catch (err) {
 			if (generation !== this.#generation) return;
 			status.setText(err instanceof Error ? err.message : String(err));

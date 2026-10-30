@@ -3,6 +3,7 @@ import hljs from "highlight.js/lib/common";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";
 import { routeLinksToEmbedder } from "./embed";
+import { loadPrefs, reloadPrefsOnReturn } from "./prefs";
 import "katex/dist/katex.min.css";
 import "./styles.css";
 
@@ -12,5 +13,9 @@ drawMathWithKatexHtml();
 (globalThis as { hljs?: unknown }).hljs = hljs;
 
 routeLinksToEmbedder();
+
+// The page's preferences come before the first render, so a chosen theme never flashes the default.
+await loadPrefs();
+reloadPrefsOnReturn();
 
 createRoot(document.getElementById("root")!).render(<App />);

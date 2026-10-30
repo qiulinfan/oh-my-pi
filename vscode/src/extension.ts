@@ -63,7 +63,9 @@ class OmpViewProvider implements vscode.WebviewViewProvider {
 		view.webview.html = statusPage("Starting omp gui…", false);
 		const omp = vscode.workspace.getConfiguration("omp").get<string>("executable") || undefined;
 		try {
-			const url = await server.pageUrl(omp);
+			// New sessions start in the open folder (the first of a multi-root workspace).
+			const folder = vscode.workspace.workspaceFolders?.find(item => item.uri.scheme === "file")?.uri.fsPath;
+			const url = await server.pageUrl(omp, folder);
 			if (generation === this.#generation) view.webview.html = framePage(url);
 		} catch (err) {
 			if (generation === this.#generation) {

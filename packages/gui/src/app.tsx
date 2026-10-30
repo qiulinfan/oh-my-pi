@@ -34,6 +34,7 @@ import {
 	thinkingFor,
 	useDismiss,
 } from "./pickers";
+import { usePref } from "./prefs";
 import {
 	N,
 	OmpMark,
@@ -55,20 +56,13 @@ const DISMISS_PATH = "/api/interrupted/dismiss";
 const WAITING_MS = 1000;
 /** The desktop app adds `env=degraded` when it could not read the login shell's environment. */
 const DEGRADED_ENV = new URLSearchParams(location.search).get("env") === "degraded";
-
-function stored(key: string, fallback: string): string {
-	try {
-		return localStorage.getItem(key) ?? fallback;
-	} catch {
-		return fallback;
-	}
-}
-
-function store(key: string, value: string): void {
-	try {
-		localStorage.setItem(key, value);
-	} catch {}
-}
+/**
+ * The folder an editor that frames this page has open (its `project`), which new sessions start in. It is
+ * this window's own: a pick here does not change the project other windows remember.
+ */
+const HOST_PROJECT = new URLSearchParams(location.search).get("project");
+/** How many of a project's sessions the start page shows before Show all; pinned ones always show. */
+const START_SESSIONS = 5;
 
 type LiveSession = SessionInfo;
 
@@ -107,6 +101,8 @@ interface SavedSession {
 	status?: string;
 	/** `omp --restore` has a turn to continue; narrower than an interrupted or pending status. */
 	restorable?: boolean;
+	/** Pinned in omp's session pins (shared with `omp --resume`): listed first. */
+	pinned?: boolean;
 }
 
 /** A session this server's predecessor hosted when it stopped (its hosted roster). */
@@ -302,8 +298,8 @@ interface Appearance {
 }
 
 function useAppearance(): Appearance {
-	const [theme, setThemeState] = useState<ThemeChoice>(() => stored("omp-gui.theme", "system") as ThemeChoice);
-	const [prose, setProseState] = useState(() => stored("omp-gui.prose", "sans"));
+	const [theme, setTheme] = usePref("theme", "system");
+	const [prose, setProse] = usePref("prose", "sans");
 	useEffect(() => {
 		const media = matchMedia("(prefers-color-scheme: dark)");
 		const apply = () => {
@@ -316,18 +312,7 @@ function useAppearance(): Appearance {
 	useEffect(() => {
 		document.documentElement.dataset.prose = prose;
 	}, [prose]);
-	return {
-		theme,
-		setTheme: value => {
-			store("omp-gui.theme", value);
-			setThemeState(value);
-		},
-		prose,
-		setProse: value => {
-			store("omp-gui.prose", value);
-			setProseState(value);
-		},
-	};
+	return { theme: theme as ThemeChoice, setTheme, prose, setProse };
 }
 
 /** Enter or Space on a focused button or link: the page's own click, never keys for omp. */
@@ -1015,9 +1000,16 @@ function SessionHead({
 			) : null}
 			<span className="head-spacer" />
 			{listed && running ? (
-				<button type="button" className="ghost-btn danger" disabled={stopping} onClick={onEnd}>
+				<button
+					type="button"
+					className="ghost-btn danger"
+					disabled={stopping}
+					title={stopping ? "Ending…" : "End session"}
+					aria-label={stopping ? "Ending…" : "End session"}
+					onClick={onEnd}
+				>
 					<Icon name="square" size={11} />
-					{stopping ? "Ending…" : "End session"}
+					<span className="head-btn-label">{stopping ? "Ending…" : "End session"}</span>
 				</button>
 			) : null}
 		</header>
@@ -1139,24 +1131,34 @@ function StartPage({
 	modelPicker,
 	interrupted,
 	recent,
+	recentTitle,
 	spawning,
 	isCutOff,
 	onStart,
 	onResume,
 	onRestore,
+	onPin,
 }: {
 	picker: ReactNode;
 	modelPicker: ReactNode;
 	/** The "Running when the GUI server stopped" section, when there is one. */
 	interrupted: ReactNode;
+	/** The chosen project's saved sessions (or the chats), pinned first. */
 	recent: SavedSession[];
+	recentTitle: string;
 	spawning: boolean;
 	isCutOff: (session: SavedSession) => boolean;
 	onStart: (prompt: string) => void;
 	onResume: (session: SavedSession) => void;
 	onRestore: (session: SavedSession) => void;
+	onPin: (session: SavedSession) => void;
 }): ReactNode {
 	const [prompt, setPrompt] = useState("");
+	const [showAll, setShowAll] = useState(false);
+	useEffect(() => setShowAll(false), [recentTitle]);
+	const shown = showAll
+		? recent
+		: recent.filter((session, index) => index < START_SESSIONS || session.pinned || isCutOff(session));
 	const ref = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => ref.current?.focus(), []);
 	const start = () => onStart(prompt);
@@ -1200,8 +1202,15 @@ function StartPage({
 				{interrupted}
 				{recent.length ? (
 					<div className="start-recent">
-						<div className="side-title">Pick up where you left off</div>
-						{recent.slice(0, 5).map(session => (
+						<div className="side-title start-recent-head">
+							<span className="start-recent-title">{recentTitle}</span>
+							{recent.length > shown.length || showAll ? (
+								<button type="button" className="ghost-btn" onClick={() => setShowAll(all => !all)}>
+									{showAll ? "Show fewer" : `Show all ${recent.length}`}
+								</button>
+							) : null}
+						</div>
+						{shown.map(session => (
 							<SavedItem
 								key={session.id}
 								className=""
@@ -1211,6 +1220,7 @@ function StartPage({
 								spawning={spawning}
 								onResume={() => onResume(session)}
 								onRestore={() => onRestore(session)}
+								onPin={() => onPin(session)}
 							/>
 						))}
 					</div>
@@ -1232,14 +1242,19 @@ function SavedItem({
 	spawning,
 	onResume,
 	onRestore,
+	onPin,
+	where,
 }: {
 	session: SavedSession;
 	className?: string;
 	lead?: ReactNode;
+	/** Which project (or "Chat") it belongs to, where a list mixes them. */
+	where?: string;
 	cutOff: boolean;
 	spawning: boolean;
 	onResume: () => void;
 	onRestore: () => void;
+	onPin: () => void;
 }): ReactNode {
 	return (
 		<div
@@ -1249,6 +1264,19 @@ function SavedItem({
 		>
 			<span className="side-lead">{lead}</span>
 			<span className="side-label">{savedLabel(session)}</span>
+			<button
+				type="button"
+				className={`side-pin ${session.pinned ? "on" : ""}`}
+				title={session.pinned ? "Unpin" : "Pin: keep it at the top of its list"}
+				aria-label={session.pinned ? "Unpin" : "Pin"}
+				aria-pressed={session.pinned === true}
+				onClick={event => {
+					event.stopPropagation();
+					onPin();
+				}}
+			>
+				<Icon name="pin" size={12} />
+			</button>
 			{cutOff ? (
 				<>
 					<span className="side-mark" title="Its last turn was cut off">
@@ -1269,9 +1297,141 @@ function SavedItem({
 					</button>
 				</>
 			) : (
-				<span className="side-meta">{ago(session.modified)}</span>
+				<span className="side-meta">
+					{where ? `${where} · ` : ""}
+					{ago(session.modified)}
+				</span>
 			)}
 		</div>
+	);
+}
+
+/** Whether `cwd` is `root` or a folder inside it. */
+function within(cwd: string, root: string): boolean {
+	return cwd === root || cwd.startsWith(`${root}/`);
+}
+
+/**
+ * The history menu, opened from the top right of the narrow layout (an editor's side bar): every session to
+ * go back to, the running ones first, then the saved ones pinned first and newest next, for the chosen
+ * project or for all of them, narrowed by a search.
+ */
+function HistoryMenu({
+	live,
+	saved,
+	projectName,
+	projectRoot,
+	liveLabel,
+	whereOf,
+	isCutOff,
+	spawning,
+	onOpenLive,
+	onResume,
+	onRestore,
+	onPin,
+	onClose,
+}: {
+	live: LiveSession[];
+	/** Every saved session the page lists (projects and chats), pinned first. */
+	saved: SavedSession[];
+	/** The chosen project, whose sessions the menu shows first; null for a chat. */
+	projectName: string | null;
+	projectRoot: string | null;
+	liveLabel: (session: LiveSession) => string;
+	/** The project a saved session belongs to, shown while the menu lists every project. */
+	whereOf: (session: SavedSession) => string;
+	isCutOff: (session: SavedSession) => boolean;
+	spawning: boolean;
+	onOpenLive: (id: string) => void;
+	onResume: (session: SavedSession) => void;
+	onRestore: (session: SavedSession) => void;
+	onPin: (session: SavedSession) => void;
+	onClose: () => void;
+}): ReactNode {
+	const [query, setQuery] = useState("");
+	const [all, setAll] = useState(projectRoot === null);
+	const ref = useRef<HTMLInputElement>(null);
+	useEffect(() => ref.current?.focus(), []);
+	const needle = query.trim().toLowerCase();
+	const matches = (...texts: string[]) => !needle || texts.some(text => text.toLowerCase().includes(needle));
+	const inScope = (cwd: string) => all || projectRoot === null || within(cwd, projectRoot);
+	const running = live.filter(
+		session => !session.exited && inScope(session.cwd) && matches(liveLabel(session), session.cwd),
+	);
+	const runningFiles = new Set(running.flatMap(session => (session.sessionFile ? [session.sessionFile] : [])));
+	const listed = saved.filter(
+		session =>
+			!runningFiles.has(session.path) &&
+			inScope(session.cwd) &&
+			matches(savedLabel(session), session.prompt, session.cwd),
+	);
+	return (
+		<>
+			<div className="history-backdrop" onClick={onClose} />
+			<div
+				className="history-menu"
+				role="dialog"
+				aria-label="Session history"
+				onKeyDown={event => {
+					if (event.key === "Escape") onClose();
+				}}
+			>
+				<div className="history-search">
+					<Icon name="search" size={13} />
+					<input
+						ref={ref}
+						value={query}
+						onChange={event => setQuery(event.target.value)}
+						placeholder="Search sessions"
+						spellCheck={false}
+					/>
+				</div>
+				{projectRoot !== null ? (
+					<div className="seg-toggle history-scope" role="radiogroup" aria-label="Which sessions">
+						<button type="button" className={all ? "" : "on"} onClick={() => setAll(false)}>
+							{projectName}
+						</button>
+						<button type="button" className={all ? "on" : ""} onClick={() => setAll(true)}>
+							All
+						</button>
+					</div>
+				) : null}
+				<div className="history-list">
+					{running.length ? <div className="side-title">Running</div> : null}
+					{running.map(session => (
+						<div
+							key={session.id}
+							className="side-item recent"
+							title={session.cwd}
+							onClick={() => onOpenLive(session.id)}
+						>
+							<span className="side-lead">
+								<span className={`dot ${session.busy ? "tone-pending" : "tone-success"}`} />
+							</span>
+							<span className="side-label">{liveLabel(session)}</span>
+							{session.busy ? <span className="side-meta">Working</span> : null}
+						</div>
+					))}
+					{running.length && listed.length ? <div className="side-title">Saved</div> : null}
+					{listed.map(session => (
+						<SavedItem
+							key={session.id}
+							session={session}
+							lead={<Icon name="history" size={13} />}
+							where={all ? whereOf(session) : undefined}
+							cutOff={isCutOff(session)}
+							spawning={spawning}
+							onResume={() => onResume(session)}
+							onRestore={() => onRestore(session)}
+							onPin={() => onPin(session)}
+						/>
+					))}
+					{running.length + listed.length === 0 ? (
+						<div className="side-empty">{needle ? "No sessions match" : "No sessions yet"}</div>
+					) : null}
+				</div>
+			</div>
+		</>
 	);
 }
 
@@ -1517,11 +1677,17 @@ export function App(): ReactNode {
 	const closeSettings = useCallback(() => setSettingsOpen(false), []);
 	/** Whether the session list is pulled out over the page, where the window is too narrow to keep it beside it. */
 	const [drawer, setDrawer] = useState(false);
-	const [target, setTargetState] = useState<Target>(() => stored("omp-gui.project", ""));
+	const [rememberedTarget, setRememberedTarget] = usePref("project", "");
+	const [hostTarget, setHostTarget] = useState<Target>(HOST_PROJECT ?? "");
+	const target = HOST_PROJECT === null ? rememberedTarget : hostTarget;
+	const setTarget = HOST_PROJECT === null ? setRememberedTarget : setHostTarget;
 	const [chosen, setChosen] = useState<string | null>(null);
-	const [model, setModelState] = useState(() => stored("omp-gui.model", "").trim());
-	const [thinkingChoice, setThinkingState] = useState(() => stored("omp-gui.thinking", "").trim());
-	const [workDetail, setWorkDetailState] = useState(() => workDetailOf(stored("omp-gui.workDetail", "")));
+	const [modelPref, setModel] = usePref("model", "");
+	const model = modelPref.trim();
+	const [thinkingPref, setThinking] = usePref("thinking", "");
+	const thinkingChoice = thinkingPref.trim();
+	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
+	const workDetail = workDetailOf(workDetailPref);
 	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);
 	/** What the last action (spawn, end, choose folder) failed with; cleared by the next. */
@@ -1562,7 +1728,26 @@ export function App(): ReactNode {
 	}, []);
 
 	// Picking a session, a new one or a project in the drawer is done with it.
-	useEffect(() => setDrawer(false), [active, target]);
+	/** The project the target folder belongs to (its checkout, else itself), as the server groups sessions. */
+	const [targetRoot, setTargetRoot] = useState<string | null>(null);
+	useEffect(() => {
+		setTargetRoot(null);
+		if (!target) return;
+		let current = true;
+		api<{ root: string }>(`/api/project-root?dir=${encodeURIComponent(target)}`).then(
+			({ root }) => current && setTargetRoot(root),
+			() => {},
+		);
+		return () => {
+			current = false;
+		};
+	}, [target]);
+	/** Whether the narrow layout's history menu is open. */
+	const [history, setHistory] = useState(false);
+	useEffect(() => {
+		setDrawer(false);
+		setHistory(false);
+	}, [active, target]);
 
 	useEffect(() => {
 		void refresh();
@@ -1607,26 +1792,6 @@ export function App(): ReactNode {
 			if (!serverWide(err)) setError(errorText(err));
 		});
 	}, [settingsOpen]);
-
-	const setThinking = (value: string) => {
-		store("omp-gui.thinking", value);
-		setThinkingState(value);
-	};
-
-	const setWorkDetail = (value: string) => {
-		store("omp-gui.workDetail", value);
-		setWorkDetailState(value);
-	};
-
-	const setModel = (value: string) => {
-		store("omp-gui.model", value);
-		setModelState(value);
-	};
-
-	const setTarget = (value: Target) => {
-		store("omp-gui.project", value);
-		setTargetState(value);
-	};
 
 	const chooseFolder = async () => {
 		setError(null);
@@ -1801,7 +1966,25 @@ export function App(): ReactNode {
 	);
 	const savedOf = (file: string | undefined): string | undefined => (file ? savedNames.get(file) : undefined);
 	const savedName = (session: LiveSession): string | undefined => savedOf(session.sessionFile);
-	const recentForTarget = target ? (projects.find(project => project.root === target)?.sessions ?? []) : chats;
+	const targetProject = target ? projects.find(project => project.root === (targetRoot ?? target)) : undefined;
+	const recentForTarget = target ? (targetProject?.sessions ?? []) : chats;
+	const allSaved = [...projects.flatMap(project => project.sessions), ...chats].sort(
+		(a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.modified.localeCompare(a.modified),
+	);
+	const runningCount = live.filter(session => !session.exited).length;
+	const projectNames = new Map(
+		projects.flatMap(project => project.sessions.map(session => [session.path, project.name] as const)),
+	);
+	const recentTitle = target ? `Sessions in ${targetProject?.name ?? basename(target)}` : "Chats";
+	const pin = async (session: SavedSession) => {
+		setError(null);
+		try {
+			await api("/api/pin", { id: session.id, pinned: !session.pinned });
+		} catch (err) {
+			if (!serverWide(err)) setError(errorText(err));
+		}
+		await refresh();
+	};
 	/** The first `count` sessions, plus every later one whose turn was cut off, so none hides below the fold. */
 	const listed = (sessions: SavedSession[], count: number) =>
 		sessions.filter((session, index) => index < count || isCutOff(session));
@@ -1813,6 +1996,7 @@ export function App(): ReactNode {
 			spawning={spawning}
 			onResume={() => void spawn([resumeRequest(session)])}
 			onRestore={() => restoreSaved(session)}
+			onPin={() => void pin(session)}
 		/>
 	);
 	const newIn = (value: Target) => {
@@ -1833,6 +2017,54 @@ export function App(): ReactNode {
 				<Icon name="panel-left" size={16} />
 			</button>
 			<div className="drawer-backdrop" onClick={() => setDrawer(false)} />
+			<div className="top-actions">
+				<button
+					type="button"
+					className={`top-action ${history ? "on" : ""}`}
+					title="Session history"
+					aria-label={`Session history, ${runningCount} running`}
+					aria-expanded={history}
+					onClick={() => setHistory(open => !open)}
+				>
+					<Icon name="clock" size={15} />
+					{runningCount ? <span className="top-badge">{runningCount}</span> : null}
+				</button>
+				<button
+					type="button"
+					className="top-action"
+					title="New session"
+					aria-label="New session"
+					onClick={() => newIn(target)}
+				>
+					<Icon name="square-pen" size={15} />
+				</button>
+			</div>
+			{history ? (
+				<HistoryMenu
+					live={live}
+					saved={allSaved}
+					projectName={targetProject?.name ?? (target ? basename(target) : null)}
+					projectRoot={target ? (targetProject?.root ?? target) : null}
+					liveLabel={session => sessionTitle(session, isChat(session.cwd), savedName(session))}
+					whereOf={session => projectNames.get(session.path) ?? "Chat"}
+					isCutOff={isCutOff}
+					spawning={spawning}
+					onOpenLive={id => {
+						setHistory(false);
+						show(id);
+					}}
+					onResume={session => {
+						setHistory(false);
+						void spawn([resumeRequest(session)]);
+					}}
+					onRestore={session => {
+						setHistory(false);
+						restoreSaved(session);
+					}}
+					onPin={session => void pin(session)}
+					onClose={() => setHistory(false)}
+				/>
+			) : null}
 			<aside className="sidebar">
 				<div className="side-top">
 					<div className="brand">
@@ -2033,6 +2265,8 @@ export function App(): ReactNode {
 								) : null
 							}
 							recent={recentForTarget}
+							recentTitle={recentTitle}
+							onPin={session => void pin(session)}
 							spawning={spawning}
 							isCutOff={isCutOff}
 							onStart={prompt =>

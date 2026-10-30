@@ -5,6 +5,9 @@
 ### Added
 
 - Saved sessions record the front end that started them in their header (`origin`): the TUI, omp gui, print/RPC runs, or the ACP client by name (`zed`, `iina`).
+- omp gui keeps its theme, answer font and the start page's last picks for every window, so the desktop app and the Obsidian and VS Code side bars show the same choices.
+- omp gui's Obsidian and VS Code side bars start in the open folder, list its sessions on the start page, and open every session from a history menu with search at the top right
+- omp gui pins sessions (the same pins as `omp --resume`), listing them first, and orders sessions by their last message
 
 ### Fixed
 

@@ -1146,6 +1146,91 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 	);
 });
 
+describe("omp gui: session pins", () => {
+	test("sessions order by their last message, not by an exit record written after it", async () => {
+		const gui = await setup();
+		const store = path.join(gui.home, ".omp", "agent", "sessions", "-project");
+		const write = async (name: string, sent: string, extra: Record<string, unknown>[] = []) => {
+			const id = crypto.randomUUID();
+			const message = { role: "user", content: [{ type: "text", text: name }], timestamp: Date.parse(sent) };
+			const lines = [
+				{ type: "session", version: 3, id, timestamp: sent, cwd: gui.project },
+				{ type: "message", id: "m1", parentId: null, timestamp: sent, message },
+				...extra,
+			];
+			await Bun.write(path.join(store, `${id}.jsonl`), `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+			return id;
+		};
+		const talked = await write("newer talk", "2026-03-02T00:00:00.000Z");
+		const exited = await write("older talk", "2026-03-01T00:00:00.000Z", [
+			{
+				type: "custom",
+				customType: "session_exit",
+				data: {},
+				id: "x1",
+				parentId: "m1",
+				timestamp: "2026-03-03T00:00:00.000Z",
+			},
+		]);
+		const served = await gui.start();
+		const { projects } = (
+			await gui.api<{ projects: { sessions: { id: string; modified: string }[] }[] }>(served, "/api/sessions")
+		).body;
+
+		expect(projects[0]!.sessions.map(session => session.id)).toEqual([talked, exited]);
+		expect(projects[0]!.sessions[1]!.modified).toBe("2026-03-01T00:00:00.000Z");
+	}, 30_000);
+
+	test("a pinned session lists first and stays listed past the project's cap, until it is unpinned", async () => {
+		const gui = await setup();
+		const store = path.join(gui.home, ".omp", "agent", "sessions", "-project");
+		const sessions: string[] = [];
+		for (let index = 0; index < 52; index++) {
+			const { file, id } = await writeSessionFixture(store, gui.project, [`task ${index}`]);
+			// Oldest first: session 0 is the one the project's newest fifty leave out.
+			const time = new Date(Date.UTC(2026, 0, 1, 0, index));
+			await fs.utimes(file, time, time);
+			sessions.push(id);
+		}
+		const served = await gui.start();
+		const listed = async () => {
+			const { projects } = (
+				await gui.api<{ projects: { sessions: { id: string; pinned?: boolean }[] }[] }>(served, "/api/sessions")
+			).body;
+			return projects[0]!.sessions;
+		};
+		expect((await listed()).map(session => session.id)).not.toContain(sessions[0]);
+
+		expect((await gui.api(served, "/api/pin", { id: sessions[0], pinned: true })).status).toBe(200);
+		const pinned = await listed();
+		expect(pinned[0]).toMatchObject({ id: sessions[0], pinned: true });
+		expect(pinned).toHaveLength(51);
+
+		expect((await gui.api(served, "/api/pin", { id: sessions[0], pinned: false })).status).toBe(200);
+		expect((await listed()).map(session => session.id)).not.toContain(sessions[0]);
+		expect((await gui.api(served, "/api/pin", { id: sessions[0] })).status).toBe(400);
+	}, 30_000);
+});
+
+describe("omp gui: a folder's project", () => {
+	test("a folder inside a checkout belongs to the checkout, and one outside any to itself", async () => {
+		const gui = await setup();
+		const repo = path.join(gui.home, "repo");
+		const inside = path.join(repo, "notes", "drafts");
+		const loose = path.join(gui.home, "loose");
+		await fs.mkdir(inside, { recursive: true });
+		await fs.mkdir(loose);
+		expect((await Bun.$`git init -q ${repo}`.quiet().nothrow()).exitCode).toBe(0);
+		const served = await gui.start();
+		const root = async (dir: string) =>
+			gui.api<{ root?: string }>(served, `/api/project-root?dir=${encodeURIComponent(dir)}`);
+
+		expect((await root(inside)).body.root).toBe(repo);
+		expect((await root(loose)).body.root).toBe(loose);
+		expect((await root("relative/dir")).status).toBe(400);
+	}, 30_000);
+});
+
 describe("omp gui: resume dedupe", () => {
 	test("resuming a file the GUI already hosts returns that session", async () => {
 		const gui = await setup();

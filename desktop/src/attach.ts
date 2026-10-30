@@ -26,8 +26,9 @@ export class GuiAttachment {
 	 * The page to load: the running server's when it still answers, else one
 	 * `omp gui` attaches to a server or starts one. `omp` names the executable
 	 * to run; without it, the login shell's PATH, then ~/.local/bin/omp.
+	 * `project` is the folder the editor has open, where the page starts new sessions.
 	 */
-	async pageUrl(omp?: string): Promise<string> {
+	async pageUrl(omp?: string, project?: string): Promise<string> {
 		let connection = this.#connection && (await this.#connection.catch(() => null));
 		if (connection) {
 			const ping = await pingGui(connection.address, connection.address);
@@ -37,7 +38,10 @@ export class GuiAttachment {
 			this.#connection = this.#connect(omp);
 			connection = await this.#connection;
 		}
-		return `${connection.address.url}${connection.degraded ? "&env=degraded" : ""}`;
+		const url = new URL(connection.address.url);
+		if (connection.degraded) url.searchParams.set("env", "degraded");
+		if (project) url.searchParams.set("project", project);
+		return url.href;
 	}
 
 	/** Stop a server this editor started; one it attached to keeps running. */

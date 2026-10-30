@@ -38,8 +38,11 @@ command. The refresh button in the view's header reconnects.
   keeps running.
 - Web and mail links open in your default browser; the page opens nothing
   inside Obsidian.
-- The page keeps its remembered picks (model, effort, project) in its own
-  storage, apart from Obsidian's.
+- The page opens in the vault's folder: new sessions start there, and the
+  start page lists that project's sessions. Its other remembered choices
+  (theme, model, effort) are the GUI server's, the same in every window.
+- The view leaves room at its bottom for Obsidian's status bar, which floats
+  over the right sidebar.
 
 ## Development runs
 

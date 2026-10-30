@@ -33,6 +33,9 @@ button in the view's title reconnects.
   sessions it hosts; one started elsewhere keeps running. Each VS Code window
   runs its own copy of the extension, so a server one window started also
   stops when that window closes.
+- The page opens in the workspace's folder (the first folder of a multi-root
+  workspace): new sessions start there, and the start page lists that
+  project's sessions.
 - The page lives in a frame inside the view's webview and stays loaded while
   the side bar is hidden. Web and mail links open in your default browser.
 

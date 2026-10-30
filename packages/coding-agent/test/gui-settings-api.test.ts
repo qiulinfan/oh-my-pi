@@ -4,7 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest } from "../src/config/settings";
-import { readInstructions, readModelRoles, writeInstructions, writeModelRole } from "../src/gui/settings-api";
+import {
+	readGuiPrefs,
+	readInstructions,
+	readModelRoles,
+	writeGuiPref,
+	writeInstructions,
+	writeModelRole,
+} from "../src/gui/settings-api";
 
 describe("omp gui: global instructions", () => {
 	let previous: string;
@@ -91,5 +98,44 @@ describe("omp gui: model roles", () => {
 		expect(ids).not.toContain("web");
 		expect(await writeModelRole("web", "x/y")).toBe(false);
 		expect(await writeModelRole("no-such-role", "x/y")).toBe(false);
+	});
+});
+
+describe("omp gui: page preferences", () => {
+	let previous: string;
+	let root: string;
+	let agentDir: string;
+
+	beforeEach(async () => {
+		previous = getAgentDir();
+		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-prefs-"));
+		agentDir = path.join(root, "agent");
+		await fs.mkdir(agentDir);
+		setAgentDir(agentDir);
+	});
+
+	afterEach(async () => {
+		setAgentDir(previous);
+		await removeWithRetries(root);
+	});
+
+	test("two windows saving at once both keep their preference, and an empty value clears one", async () => {
+		expect(
+			await Promise.all([writeGuiPref("theme", "dark"), writeGuiPref("model", "anthropic/claude-opus-5-5")]),
+		).toEqual([true, true]);
+		expect(await readGuiPrefs()).toEqual({ theme: "dark", model: "anthropic/claude-opus-5-5" });
+
+		expect(await writeGuiPref("theme", "")).toBe(true);
+		expect(await readGuiPrefs()).toEqual({ model: "anthropic/claude-opus-5-5" });
+	});
+
+	test("a key the page does not keep is refused, and a broken file reads as nothing set", async () => {
+		expect(await writeGuiPref("token", "secret")).toBe(false);
+		expect(await readGuiPrefs()).toEqual({});
+
+		await Bun.write(path.join(agentDir, "gui.json"), '{"theme": "dark", "prose": 3, "extra": "x"');
+		expect(await readGuiPrefs()).toEqual({});
+		await Bun.write(path.join(agentDir, "gui.json"), '{"theme": "dark", "prose": 3, "extra": "x"}');
+		expect(await readGuiPrefs()).toEqual({ theme: "dark" });
 	});
 });

@@ -7,3 +7,13 @@ import { TSP_KINDS, type TspKind } from "@oh-my-pi/pi-wire";
  * view cannot do without a file route.
  */
 export const SUPPORTED_KINDS: readonly TspKind[] = TSP_KINDS.filter(kind => kind !== "media");
+
+/**
+ * The page's own preferences, which the GUI server keeps for every window onto it: the
+ * desktop app and the Obsidian and VS Code side bars each have browser storage of their own.
+ */
+export const GUI_PREF_KEYS = ["theme", "prose", "project", "model", "thinking", "workDetail"] as const;
+
+export type GuiPrefKey = (typeof GUI_PREF_KEYS)[number];
+
+export type GuiPrefs = Partial<Record<GuiPrefKey, string>>;

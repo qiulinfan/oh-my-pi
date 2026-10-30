@@ -41,6 +41,7 @@ import {
 	type SessionStatus,
 	type SessionInfo as StoredSession,
 } from "../session/session-listing";
+import { loadPinnedSessionIds, setSessionPinned } from "../session/session-pins";
 import { FileSessionStorage, tryAcquireSessionFileLease } from "../session/session-storage";
 import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-client";
 import { processStartToken } from "../utils/process-identity";
@@ -48,7 +49,15 @@ import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } fro
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { openCommand, resolveLinkedPath } from "./open-link";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
-import { defaultModelRole, readInstructions, readModelRoles, writeInstructions, writeModelRole } from "./settings-api";
+import {
+	defaultModelRole,
+	readGuiPrefs,
+	readInstructions,
+	readModelRoles,
+	writeGuiPref,
+	writeInstructions,
+	writeModelRole,
+} from "./settings-api";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { isWorkDetail, WORK_DETAIL_INFO, WORK_DETAILS, type WorkDetail } from "@oh-my-pi/pi-tui/chat/work-detail";
 
@@ -746,6 +755,8 @@ interface SavedSession {
 	status?: SessionStatus;
 	/** `omp --restore` has a turn to continue: narrower than an interrupted or pending status. */
 	restorable?: boolean;
+	/** Pinned in omp's session pins, which `omp --resume` shares: listed first, and never dropped from a list. */
+	pinned?: boolean;
 }
 
 interface Project {
@@ -755,7 +766,7 @@ interface Project {
 	sessions: SavedSession[];
 }
 
-function saved(session: StoredSession): SavedSession {
+function saved(session: StoredSession, pins: ReadonlySet<string>): SavedSession {
 	const prompt = session.firstMessage === "(no messages)" ? "" : session.firstMessage;
 	return {
 		id: session.id,
@@ -763,10 +774,18 @@ function saved(session: StoredSession): SavedSession {
 		cwd: session.cwd,
 		title: session.title ?? "",
 		prompt: prompt.replace(/\s+/g, " ").slice(0, 160),
-		modified: session.modified.toISOString(),
+		// Its last message, so a session rises only on new conversation, not on an exit record omp appends.
+		modified: (session.lastMessageAt ?? session.modified).toISOString(),
 		status: session.status,
 		restorable: session.restorable,
+		pinned: pins.has(session.id) || undefined,
 	};
+}
+
+/** Pinned sessions first, then the newest: every pinned one stays, with the `count` newest of the rest. */
+function ordered(sessions: SavedSession[], count: number): SavedSession[] {
+	const newest = sessions.toSorted((a, b) => b.modified.localeCompare(a.modified));
+	return [...newest.filter(session => session.pinned), ...newest.filter(session => !session.pinned).slice(0, count)];
 }
 
 function insideChats(dir: string): boolean {
@@ -800,7 +819,7 @@ async function projectRoot(cwd: string): Promise<string | null> {
 }
 
 /** Projects from omp's own session store (every directory omp has run in, CLI included), newest first. */
-async function listProjects(): Promise<Project[]> {
+async function listProjects(pins: ReadonlySet<string>): Promise<Project[]> {
 	const projects = new Map<string, Project>();
 	for (const session of await listAllSessions()) {
 		if (!session.cwd || insideChats(session.cwd) || isEmptySession(session)) continue;
@@ -811,23 +830,24 @@ async function listProjects(): Promise<Project[]> {
 			project = { root, name: path.basename(root) || root, modified: "", sessions: [] };
 			projects.set(root, project);
 		}
-		project.sessions.push(saved(session));
+		project.sessions.push(saved(session, pins));
 	}
 	for (const project of projects.values()) {
-		project.sessions.sort((a, b) => b.modified.localeCompare(a.modified));
-		project.sessions = project.sessions.slice(0, 20);
-		project.modified = project.sessions[0]?.modified ?? "";
+		project.modified = project.sessions.reduce(
+			(latest, item) => (item.modified > latest ? item.modified : latest),
+			"",
+		);
+		project.sessions = ordered(project.sessions, 50);
 	}
 	return [...projects.values()].sort((a, b) => b.modified.localeCompare(a.modified));
 }
 
-async function listChats(): Promise<SavedSession[]> {
+async function listChats(pins: ReadonlySet<string>): Promise<SavedSession[]> {
 	const sessions = await listSessionsReadOnly(CHAT_SESSION_DIR, new FileSessionStorage()).catch(() => []);
-	return sessions
-		.filter(session => !isEmptySession(session))
-		.map(saved)
-		.sort((a, b) => b.modified.localeCompare(a.modified))
-		.slice(0, 40);
+	return ordered(
+		sessions.filter(session => !isEmptySession(session)).map(session => saved(session, pins)),
+		40,
+	);
 }
 
 function expandHome(dir: string): string {
@@ -1243,9 +1263,10 @@ class GuiHost implements SessionHost {
 			case "/api/sessions": {
 				await this.#loaded;
 				const live = [...this.sessions.values()].map(session => session.info);
+				const pins = await loadPinnedSessionIds();
 				const [projects, chats, interrupted] = await Promise.all([
-					listProjects(),
-					listChats(),
+					listProjects(pins),
+					listChats(pins),
 					this.#listInterrupted(),
 				]);
 				return Response.json({
@@ -1276,6 +1297,15 @@ class GuiHost implements SessionHost {
 			case "/api/model-roles":
 				if (!post) return Response.json(await readModelRoles());
 				break;
+			case "/api/prefs":
+				if (!post) return Response.json(await readGuiPrefs());
+				break;
+			case "/api/project-root": {
+				// The project a folder belongs to, as the session lists group them: its checkout, else itself.
+				const dir = expandHome(url.searchParams.get("dir") ?? "");
+				if (!path.isAbsolute(dir)) return fail(400, "bad-request", "expected an absolute folder");
+				return Response.json({ root: (await projectRoot(dir)) ?? dir });
+			}
 			case "/api/doc": {
 				const session = this.session(url.searchParams.get("id") ?? "");
 				return Response.json(
@@ -1311,6 +1341,25 @@ class GuiHost implements SessionHost {
 					const value = typeof body.value === "string" && body.value ? body.value : null;
 					if (typeof body.role !== "string" || !(await writeModelRole(body.role, value)))
 						return fail(400, "bad-request", "expected a chat model role");
+					return Response.json({ ok: true });
+				}
+				case "/api/pin": {
+					const body = await readBody<{ id?: unknown; pinned?: unknown }>(req);
+					if (body instanceof Response) return body;
+					if (typeof body.id !== "string" || !body.id || typeof body.pinned !== "boolean")
+						return fail(400, "bad-request", "expected a session id and whether to pin it");
+					await setSessionPinned(body.id, body.pinned);
+					return Response.json({ ok: true });
+				}
+				case "/api/prefs": {
+					const body = await readBody<{ key?: unknown; value?: unknown }>(req);
+					if (body instanceof Response) return body;
+					if (
+						typeof body.key !== "string" ||
+						typeof body.value !== "string" ||
+						!(await writeGuiPref(body.key, body.value))
+					)
+						return fail(400, "bad-request", "expected a page preference and its value");
 					return Response.json({ ok: true });
 				}
 				case "/api/instructions": {

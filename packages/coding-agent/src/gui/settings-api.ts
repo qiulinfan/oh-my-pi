@@ -1,15 +1,18 @@
 /**
  * What the GUI's Settings page reads and writes beyond omp's settings panel: the global
- * instructions file every session loads, and the models assigned to the chat roles.
+ * instructions file every session loads, the models assigned to the chat roles, and the
+ * page's own preferences.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { GUI_PREF_KEYS, type GuiPrefKey, type GuiPrefs } from "@oh-my-pi/gui/kinds";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { MODEL_ROLES } from "../config/model-roles";
 import { cfgModelRoles } from "../config/model-settings";
 import { Settings } from "../config/settings";
+import { writeFileAtomically } from "../utils/atomic-file";
 
 export interface Instructions {
 	/** Where omp reads it: `AGENTS.md` in the agent directory. */
@@ -88,4 +91,49 @@ export async function writeModelRole(role: string, value: string | null): Promis
 /** The default role's model, which a new session without a pick starts on. */
 export async function defaultModelRole(): Promise<string | null> {
 	return cfgModelRoles.get(await globalSettings()).default ?? null;
+}
+
+/** The longest preference value a page may store: a model selector or a project path, never a document. */
+const PREF_MAX = 4096;
+
+function prefsPath(): string {
+	return path.join(getAgentDir(), "gui.json");
+}
+
+function isPrefKey(key: string): key is GuiPrefKey {
+	return (GUI_PREF_KEYS as readonly string[]).includes(key);
+}
+
+/** The page's preferences; an unreadable file reads as none set, so a hand edit gone wrong never blocks the page. */
+export async function readGuiPrefs(): Promise<GuiPrefs> {
+	let saved: unknown;
+	try {
+		saved = await Bun.file(prefsPath()).json();
+	} catch (err) {
+		if (isEnoent(err) || err instanceof SyntaxError) return {};
+		throw err;
+	}
+	const prefs: GuiPrefs = {};
+	if (typeof saved !== "object" || saved === null) return prefs;
+	for (const [key, value] of Object.entries(saved)) {
+		if (isPrefKey(key) && typeof value === "string") prefs[key] = value;
+	}
+	return prefs;
+}
+
+/** Writes one at a time, so two windows saving at once each keep their key. */
+let prefsWrite: Promise<unknown> = Promise.resolve();
+
+/** Set one preference (an empty value clears it); false for a key or value the page does not keep. */
+export function writeGuiPref(key: string, value: string): Promise<boolean> {
+	if (!isPrefKey(key) || value.length > PREF_MAX) return Promise.resolve(false);
+	const write = prefsWrite.then(async () => {
+		const prefs = await readGuiPrefs();
+		if (value) prefs[key] = value;
+		else delete prefs[key];
+		await writeFileAtomically(prefsPath(), `${JSON.stringify(prefs, null, "\t")}\n`);
+		return true;
+	});
+	prefsWrite = write.catch(() => {});
+	return write;
 }
