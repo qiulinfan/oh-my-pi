@@ -65,6 +65,11 @@ export interface SessionInfo {
 	 * open in a running omp reads as restorable too: nothing recorded its exit.
 	 */
 	restorable?: boolean;
+	/**
+	 * When its last message was written, from the tail window; set with a known {@link status}.
+	 * Unlike {@link modified}, bookkeeping appended without a message (an exit record) leaves it.
+	 */
+	lastMessageAt?: Date;
 }
 
 export interface ResolvedSessionMatch {
@@ -174,7 +179,7 @@ export function sessionDisplayName(info: SessionInfo): string {
  * by its role / stop reason; an aborted reply `omp --restore` would go on with (the
  * interrupted-turn record) counts as interrupted.
  */
-function deriveTailState(suffix: string): Pick<SessionInfo, "status" | "restorable"> {
+function deriveTailState(suffix: string): Pick<SessionInfo, "status" | "restorable" | "lastMessageAt"> {
 	// Entries are newline-terminated on write, so within the window only the first
 	// line can be a partial fragment (for a file the window holds whole, it is the
 	// header). Drop it: a fragment can start at a nested object the lenient parser
@@ -192,7 +197,12 @@ function deriveTailState(suffix: string): Pick<SessionInfo, "status" | "restorab
 			// A malformed entry leaves it unknown rather than dropping the session from the listing.
 		}
 		const status = statusFromTailMessage(entry.message);
-		return { status: status === "aborted" && restorable ? "interrupted" : status, restorable };
+		const written = new Date(entry.timestamp);
+		return {
+			status: status === "aborted" && restorable ? "interrupted" : status,
+			restorable,
+			lastMessageAt: Number.isNaN(written.getTime()) ? undefined : written,
+		};
 	}
 	return { status: "unknown" };
 }
@@ -516,6 +526,7 @@ async function scanSessionFile(
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: tail?.status,
 			restorable: tail?.restorable,
+			lastMessageAt: tail?.lastMessageAt,
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.
