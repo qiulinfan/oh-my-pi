@@ -6,7 +6,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GUI_PREF_KEYS, type GuiPrefKey, type GuiPrefs } from "@oh-my-pi/gui/kinds";
+import { GUI_PREF_KEYS, type GuiPrefKey, type GuiPrefs, pinnedProjectRoots } from "@oh-my-pi/gui/kinds";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { MODEL_ROLES } from "../config/model-roles";
@@ -124,16 +124,42 @@ export async function readGuiPrefs(): Promise<GuiPrefs> {
 /** Writes one at a time, so two windows saving at once each keep their key. */
 let prefsWrite: Promise<unknown> = Promise.resolve();
 
-/** Set one preference (an empty value clears it); false for a key or value the page does not keep. */
-export function writeGuiPref(key: string, value: string): Promise<boolean> {
-	if (!isPrefKey(key) || value.length > PREF_MAX) return Promise.resolve(false);
+/** Change the stored preferences in turn with every other write; false (writing nothing) when `change` refuses. */
+function updateGuiPrefs(change: (prefs: GuiPrefs) => boolean): Promise<boolean> {
 	const write = prefsWrite.then(async () => {
 		const prefs = await readGuiPrefs();
-		if (value) prefs[key] = value;
-		else delete prefs[key];
+		if (!change(prefs)) return false;
+		// A first save on a fresh machine may come before anything else made the agent directory.
+		await fs.mkdir(path.dirname(prefsPath()), { recursive: true });
 		await writeFileAtomically(prefsPath(), `${JSON.stringify(prefs, null, "\t")}\n`);
 		return true;
 	});
 	prefsWrite = write.catch(() => {});
 	return write;
+}
+
+/** Set one preference (an empty value clears it); false for a key or value the page does not keep. */
+export function writeGuiPref(key: string, value: string): Promise<boolean> {
+	if (!isPrefKey(key) || value.length > PREF_MAX) return Promise.resolve(false);
+	return updateGuiPrefs(prefs => {
+		if (value) prefs[key] = value;
+		else delete prefs[key];
+		return true;
+	});
+}
+
+/**
+ * Pin or unpin one project in `pinnedProjects`, against the list as stored rather than a window's copy of
+ * it, so two windows pinning different projects keep both; false when the list would outgrow a preference.
+ */
+export function pinGuiProject(root: string, pinned: boolean): Promise<boolean> {
+	return updateGuiPrefs(prefs => {
+		const roots = pinnedProjectRoots(prefs.pinnedProjects).filter(item => item !== root);
+		if (pinned) roots.push(root);
+		const value = JSON.stringify(roots);
+		if (value.length > PREF_MAX) return false;
+		if (roots.length) prefs.pinnedProjects = value;
+		else delete prefs.pinnedProjects;
+		return true;
+	});
 }

@@ -51,6 +51,7 @@ import { openCommand, resolveLinkedPath } from "./open-link";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
 import {
 	defaultModelRole,
+	pinGuiProject,
 	readGuiPrefs,
 	readInstructions,
 	readModelRoles,
@@ -1349,6 +1350,15 @@ class GuiHost implements SessionHost {
 					if (typeof body.id !== "string" || !body.id || typeof body.pinned !== "boolean")
 						return fail(400, "bad-request", "expected a session id and whether to pin it");
 					await setSessionPinned(body.id, body.pinned);
+					return Response.json({ ok: true });
+				}
+				case "/api/project-pin": {
+					const body = await readBody<{ root?: unknown; pinned?: unknown }>(req);
+					if (body instanceof Response) return body;
+					if (typeof body.root !== "string" || !path.isAbsolute(body.root) || typeof body.pinned !== "boolean")
+						return fail(400, "bad-request", "expected a project folder and whether to pin it");
+					if (!(await pinGuiProject(body.root, body.pinned)))
+						return fail(400, "bad-request", "too many pinned projects to keep");
 					return Response.json({ ok: true });
 				}
 				case "/api/prefs": {

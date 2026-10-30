@@ -82,9 +82,12 @@ so directories you used from the terminal appear too. A session's project is
 its git checkout root, or its own directory outside one; sessions with no
 messages and directories that no longer exist are left out.
 
-The sidebar lists a project's 50 newest sessions and its chats' 40, newest
-first by their last message (a record omp appends without one, such as the
-note it writes on exit, does not move a session up). A pinned session comes
+The server lists a project's 50 newest sessions and the 40 newest chats,
+newest first by their last message (a record omp appends without one, such as the
+note it writes on exit, does not move a session up). The sidebar shows the
+three newest of each project and eight chats, plus any whose turn was cut
+off; the start page's Show all and the history menu reach the rest. A pinned
+session comes
 first in its list and is never left out; pin or unpin one with the pin on its
 row. Pins are omp's own, in `session-pins.json` in its agent directory, so
 `omp --resume` and every window onto the server show the same ones. In the
@@ -184,7 +187,8 @@ write omp's global config, which running sessions pick up.
 
 The GUI's own choices, the theme and answer font on General and the start
 page's last project, model, effort and Work details, are kept by the server in
-`gui.json` in omp's agent directory, not in the browser. The desktop app, a
+`gui.json` in omp's agent directory, not in the browser (which keeps only a
+copy of the theme and font, to paint the first frame in them). The desktop app, a
 browser tab and the Obsidian and VS Code side bars, which each have storage of
 their own, all show the same choices, and a window that comes back into view
 picks up a change made in another.

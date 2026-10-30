@@ -1187,7 +1187,7 @@ describe("omp gui: session pins", () => {
 		const sessions: string[] = [];
 		for (let index = 0; index < 52; index++) {
 			const { file, id } = await writeSessionFixture(store, gui.project, [`task ${index}`]);
-			// Oldest first: session 0 is the one the project's newest fifty leave out.
+			// Written and dated oldest first: session 0 is the one the project's newest fifty leave out.
 			const time = new Date(Date.UTC(2026, 0, 1, 0, index));
 			await fs.utimes(file, time, time);
 			sessions.push(id);
@@ -1209,6 +1209,36 @@ describe("omp gui: session pins", () => {
 		expect((await gui.api(served, "/api/pin", { id: sessions[0], pinned: false })).status).toBe(200);
 		expect((await listed()).map(session => session.id)).not.toContain(sessions[0]);
 		expect((await gui.api(served, "/api/pin", { id: sessions[0] })).status).toBe(400);
+	}, 30_000);
+});
+
+describe("omp gui: page preferences over the wire", () => {
+	test("a saved preference reads back, and a key or value the page does not keep is refused", async () => {
+		const gui = await setup();
+		const served = await gui.start();
+		expect((await gui.api(served, "/api/prefs")).body).toEqual({});
+
+		expect((await gui.api(served, "/api/prefs", { key: "theme", value: "dark" })).status).toBe(200);
+		expect((await gui.api(served, "/api/prefs")).body).toEqual({ theme: "dark" });
+		expect((await gui.api(served, "/api/prefs", { key: "token", value: "x" })).status).toBe(400);
+		expect((await gui.api(served, "/api/prefs", { key: "theme", value: 3 })).status).toBe(400);
+		expect((await gui.api(served, "/api/prefs")).body).toEqual({ theme: "dark" });
+	}, 30_000);
+
+	test("two windows pinning different projects at once keep both, in the order pinned", async () => {
+		const gui = await setup();
+		const served = await gui.start();
+		const pin = (root: string, pinned: boolean) => gui.api(served, "/api/project-pin", { root, pinned });
+		const pinned = async () =>
+			JSON.parse((await gui.api<{ pinnedProjects?: string }>(served, "/api/prefs")).body.pinnedProjects ?? "[]");
+
+		const results = await Promise.all([pin("/work/a", true), pin("/work/b", true)]);
+		expect(results.map(result => result.status)).toEqual([200, 200]);
+		expect(await pinned()).toEqual(["/work/a", "/work/b"]);
+
+		expect((await pin("/work/a", false)).status).toBe(200);
+		expect(await pinned()).toEqual(["/work/b"]);
+		expect((await pin("relative", true)).status).toBe(400);
 	}, 30_000);
 });
 

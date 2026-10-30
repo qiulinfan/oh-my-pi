@@ -25,3 +25,13 @@ export const GUI_PREF_KEYS = [
 export type GuiPrefKey = (typeof GUI_PREF_KEYS)[number];
 
 export type GuiPrefs = Partial<Record<GuiPrefKey, string>>;
+
+/** The project roots `pinnedProjects` holds (a JSON list), in the order they were pinned; malformed reads as none. */
+export function pinnedProjectRoots(value: string | undefined): string[] {
+	try {
+		const roots: unknown = JSON.parse(value ?? "[]");
+		return Array.isArray(roots) ? roots.filter((root): root is string => typeof root === "string") : [];
+	} catch {
+		return [];
+	}
+}

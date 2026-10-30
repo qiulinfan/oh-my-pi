@@ -109,10 +109,15 @@ class OmpView extends ItemView {
 	override async onOpen(): Promise<void> {
 		this.addAction("refresh-cw", "Reconnect", () => void this.#load());
 		const fit = () => this.#clearStatusBar();
-		this.registerEvent(this.app.workspace.on("resize", fit));
 		this.registerEvent(this.app.workspace.on("layout-change", fit));
+		// A theme or snippet can move or hide the status bar.
+		this.registerEvent(this.app.workspace.on("css-change", fit));
 		await this.#load();
 		fit();
+	}
+
+	override onResize(): void {
+		this.#clearStatusBar();
 	}
 
 	/**
@@ -122,7 +127,7 @@ class OmpView extends ItemView {
 	#clearStatusBar(): void {
 		const root = this.contentEl;
 		root.style.paddingBottom = "";
-		const bar = document.querySelector(".status-bar");
+		const bar = root.doc.querySelector(".status-bar");
 		if (!(bar instanceof HTMLElement) || !root.isShown()) return;
 		const covers = bar.getBoundingClientRect();
 		const view = root.getBoundingClientRect();

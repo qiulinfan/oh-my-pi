@@ -34,7 +34,7 @@ import {
 	thinkingFor,
 	useDismiss,
 } from "./pickers";
-import { usePref } from "./prefs";
+import { pinProject, usePinnedProjects, usePref } from "./prefs";
 import {
 	N,
 	OmpMark,
@@ -1306,16 +1306,6 @@ function SavedItem({
 	);
 }
 
-/** The project roots pinned in the sidebar, in the order they were pinned; a malformed value reads as none. */
-function pinnedRootsOf(value: string): string[] {
-	try {
-		const roots: unknown = JSON.parse(value);
-		return Array.isArray(roots) ? roots.filter((root): root is string => typeof root === "string") : [];
-	} catch {
-		return [];
-	}
-}
-
 /** Whether `cwd` is `root` or a folder inside it. */
 function within(cwd: string, root: string): boolean {
 	return cwd === root || cwd.startsWith(`${root}/`);
@@ -1697,14 +1687,8 @@ export function App(): ReactNode {
 	const [thinkingPref, setThinking] = usePref("thinking", "");
 	const thinkingChoice = thinkingPref.trim();
 	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
-	const [pinnedProjectsPref, setPinnedProjects] = usePref("pinnedProjects", "[]");
-	const pinnedRoots = pinnedRootsOf(pinnedProjectsPref);
-	const toggleProjectPin = (root: string) =>
-		setPinnedProjects(
-			JSON.stringify(
-				pinnedRoots.includes(root) ? pinnedRoots.filter(item => item !== root) : [...pinnedRoots, root],
-			),
-		);
+	const pinnedRoots = usePinnedProjects();
+	const toggleProjectPin = (root: string) => pinProject(root, !pinnedRoots.includes(root));
 	const workDetail = workDetailOf(workDetailPref);
 	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);

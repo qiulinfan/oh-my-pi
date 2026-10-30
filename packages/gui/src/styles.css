@@ -246,7 +246,9 @@ kbd {
 /* Shown only where the window is too narrow for the sidebar (see the end of the file). */
 .drawer-toggle,
 .drawer-backdrop,
-.top-actions {
+.top-actions,
+.history-menu,
+.history-backdrop {
 	display: none;
 }
 .sidebar {
@@ -939,9 +941,17 @@ button.picker-item:focus-visible {
 .side-pin.on {
 	color: var(--accent);
 }
-/* In the Pinned section the leading pin already says so: the button (to unpin) waits for a hover. */
-.side-item.pinned-row:not(:hover) .side-pin {
-	display: none;
+/*
+ * In the Pinned section the leading pin already says so: the button (to unpin) gives the title its room
+ * until a hover, and stays in the tab order, showing when the keyboard reaches it.
+ */
+.side-item.pinned-row:not(:hover) .side-pin:not(:focus-visible) {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
 }
 .side-pin:hover {
 	color: var(--fg);
@@ -3319,6 +3329,13 @@ button.picker-item:focus-visible {
 	.picker-menu {
 		max-width: calc(100vw - 24px);
 	}
+	/* The history menu belongs to the narrow layout's top right: a window widened under it hides it. */
+	.history-backdrop {
+		display: block;
+	}
+	.history-menu {
+		display: flex;
+	}
 	.top-actions {
 		display: flex;
 		gap: 2px;
@@ -3431,7 +3448,6 @@ button.picker-item:focus-visible {
 	margin-left: auto;
 	max-height: min(70vh, 560px);
 	z-index: 33;
-	display: flex;
 	flex-direction: column;
 	gap: 8px;
 	padding: 10px;
