@@ -3284,7 +3284,8 @@ button.picker-item:focus-visible {
 	.app.drawer-open .drawer-toggle {
 		left: calc(min(280px, 86%) - 38px);
 	}
-	.session-head {
+	.session-head,
+	.notice {
 		padding-left: 46px;
 		padding-right: 78px;
 	}
