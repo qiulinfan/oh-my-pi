@@ -761,7 +761,8 @@ kbd {
 }
 .picker {
 	position: relative;
-	flex: 1.4;
+	/* The project chip takes the bar's spare room; it shrinks before the model chip does. */
+	flex: 1 1 0;
 	min-width: 0;
 	display: flex;
 }
@@ -796,6 +797,11 @@ kbd {
 	background: var(--overlay);
 	box-shadow: var(--shadow-md);
 }
+/* Opened above the picker when it would be cut off below (see useOpensUp). */
+.picker-menu.up {
+	top: auto;
+	bottom: calc(100% + 6px);
+}
 .picker-scroll {
 	max-height: 260px;
 	overflow-y: auto;
@@ -821,7 +827,7 @@ kbd {
 	flex: none;
 }
 .model-picker {
-	flex: 1;
+	flex: 0 1 auto;
 }
 .picker-search {
 	width: 100%;
@@ -2043,9 +2049,11 @@ button.picker-item:focus-visible {
 	margin-bottom: 8px;
 }
 .k-toast {
-	position: absolute;
-	right: 20px;
-	bottom: 130px;
+	/* Against the window, above the composer: the surface it sits in is only as tall as a short transcript. */
+	position: fixed;
+	right: 24px;
+	bottom: 140px;
+	z-index: 30;
 	background: var(--overlay);
 	border: 1px solid var(--line-2);
 	border-radius: 11px;
@@ -3026,6 +3034,13 @@ button.picker-item:focus-visible {
 .btn.danger {
 	color: var(--red);
 }
+/* The main action of a destructive dialog (Sign out): filled red, so its label keeps its contrast. */
+.btn.primary.danger,
+.btn.primary.danger:hover {
+	background: var(--red);
+	border-color: var(--red);
+	color: var(--on-accent);
+}
 .btn.end {
 	margin-left: auto;
 }
@@ -3080,6 +3095,11 @@ button.picker-item:focus-visible {
 	background: var(--bg);
 }
 .prefs-page {
+	width: 100%;
+	border: none;
+	background: none;
+	font: inherit;
+	text-align: left;
 	padding: 6px 9px;
 	border-radius: 7px;
 	cursor: pointer;

@@ -2146,22 +2146,26 @@ const Prefs: R = ({ node }) => {
 		<div {...useCommon(node)}>
 			<div className="prefs-head">{extra?.title ?? p.title}</div>
 			<div className="prefs-main">
-				<div className="prefs-pages">
+				<nav className="prefs-pages" aria-label="Settings pages">
 					{extra?.pages.map(page => (
-						<div
+						<button
+							type="button"
 							key={page.id}
 							className={`prefs-page ${page.id === extra.active ? "active" : ""}`}
+							aria-current={page.id === extra.active ? "page" : undefined}
 							onClick={() => extra.onPick(page.id)}
 						>
 							<Icon name={page.icon} size={13} />
 							{page.label}
-						</div>
+						</button>
 					))}
 					{extra ? <div className="prefs-pages-sep">omp</div> : null}
 					{(p.pages ?? []).map((page: any) => (
-						<div
+						<button
+							type="button"
 							key={page.id}
 							className={`prefs-page ${own && page.id === p.page ? "active" : ""}`}
+							aria-current={own && page.id === p.page ? "page" : undefined}
 							onClick={() => {
 								extra?.onPick(null);
 								session.event({ ev: "action", sf, id: node.id, act: "page", value: page.id });
@@ -2170,9 +2174,9 @@ const Prefs: R = ({ node }) => {
 							{page.icon ? <Icon name={page.icon} size={13} /> : null}
 							{page.label}
 							{page.changed ? <span className="s-accent"> •</span> : null}
-						</div>
+						</button>
 					))}
-				</div>
+				</nav>
 				{extra?.active ? (
 					<PrefsActionContext.Provider
 						value={(act, value) => session.event({ ev: "action", sf, id: node.id, act, value })}

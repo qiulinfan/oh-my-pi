@@ -72,11 +72,15 @@ function store(key: string, value: string): void {
 
 type LiveSession = SessionInfo;
 
-/** omp's terminal title is "<icon> <session title>" (or "π <dir>" before one exists): keep the words. */
-function sessionTitle(session: LiveSession, chat: boolean): string {
+/**
+ * omp's terminal title is "<icon> <session title>" (or "π <dir>" before one exists): keep the words. Before
+ * omp names it, a session reads as the saved list names its file (`saved`, its first message until a title),
+ * else as its directory; a chat's directory name means nothing.
+ */
+function sessionTitle(session: LiveSession, chat: boolean, saved?: string): string {
 	const title = session.title?.replace(/^[-\u{F0000}-\u{FFFFD}π\s]+/u, "").trim();
-	// Before omp names it, a session reads as its directory; a chat's directory name means nothing.
 	if (title && title !== "omp" && title !== basename(session.cwd)) return title;
+	if (saved) return saved;
 	return chat ? "New chat" : basename(session.cwd);
 }
 
@@ -271,8 +275,9 @@ function serverWide(err: unknown): boolean {
 	return err instanceof ApiError && (err.code === "unreachable" || err.status === 403 || err.status === 503);
 }
 
-function interruptedLabel(entry: InterruptedSession): string {
-	return plainTitle(entry.title ?? "") || entry.prompt || (entry.chat ? "New chat" : basename(entry.cwd));
+/** `saved` is what the saved lists call its file: a session resumed from one has no first message of its own. */
+function interruptedLabel(entry: InterruptedSession, saved?: string): string {
+	return plainTitle(entry.title ?? "") || entry.prompt || saved || (entry.chat ? "New chat" : basename(entry.cwd));
 }
 
 /** What Dismiss of a session whose omp still runs means; it asks first. */
@@ -323,6 +328,14 @@ function useAppearance(): Appearance {
 			setProseState(value);
 		},
 	};
+}
+
+/** Enter or Space on a focused button or link: the page's own click, never keys for omp. */
+function activatesControl(event: React.KeyboardEvent): boolean {
+	return (
+		(event.key === "Enter" || event.key === " ") &&
+		(event.target as HTMLElement).closest("button, a, [role=button], [role=menuitem]") !== null
+	);
 }
 
 function useSession(connection: SessionConnection): number {
@@ -449,7 +462,7 @@ function SessionView({
 			const target = event.target as HTMLElement;
 			// A disclosure head with keyboard focus keeps its keys (Enter/Space toggle it, Tab moves on); only
 			// the session view itself and omp's own editor send keys to omp.
-			if (target.closest("textarea, input, select, [data-disclosure]")) return;
+			if (target.closest("textarea, input, select, [data-disclosure]") || activatesControl(event)) return;
 			const bytes = keyBytes(event.nativeEvent);
 			if (bytes === null) return;
 			event.preventDefault();
@@ -582,13 +595,28 @@ interface Instructions {
 	text: string;
 }
 
-/** The global instructions every omp session loads (`AGENTS.md` in omp's agent directory). */
-function InstructionsSettings(): ReactNode {
+type InstructionsState = { kind: "idle" | "saving" | "saved" | "conflict" | "error"; text?: string };
+
+interface InstructionsDoc {
+	/** The file as last read or saved; null until read. */
+	loaded: Instructions | null;
+	draft: string;
+	setDraft: (text: string) => void;
+	state: InstructionsState;
+	setState: (state: InstructionsState) => void;
+	load: () => void;
+	save: () => void;
+	dirty: boolean;
+}
+
+/**
+ * The global instructions file and the draft of it, held by the app so an unsaved draft outlives the
+ * Instructions page (another Settings page, a session) until a save or a reload.
+ */
+function useInstructions(): InstructionsDoc {
 	const [loaded, setLoaded] = useState<Instructions | null>(null);
 	const [draft, setDraft] = useState("");
-	const [state, setState] = useState<{ kind: "idle" | "saving" | "saved" | "conflict" | "error"; text?: string }>({
-		kind: "idle",
-	});
+	const [state, setState] = useState<InstructionsState>({ kind: "idle" });
 	const load = useCallback(() => {
 		api<Instructions>("/api/instructions").then(
 			file => {
@@ -599,7 +627,6 @@ function InstructionsSettings(): ReactNode {
 			err => setState({ kind: "error", text: errorText(err) }),
 		);
 	}, []);
-	useEffect(load, [load]);
 	const save = () => {
 		if (!loaded) return;
 		setState({ kind: "saving" });
@@ -617,6 +644,16 @@ function InstructionsSettings(): ReactNode {
 		);
 	};
 	const dirty = loaded !== null && draft !== loaded.text;
+	return { loaded, draft, setDraft, state, setState, load, save, dirty };
+}
+
+/** The global instructions every omp session loads (`AGENTS.md` in omp's agent directory). */
+function InstructionsSettings({ doc }: { doc: InstructionsDoc }): ReactNode {
+	const { loaded, draft, setDraft, state, setState, load, save, dirty } = doc;
+	// Read once, when first shown; a draft from before stays.
+	useEffect(() => {
+		if (!loaded && state.kind === "idle") load();
+	}, [loaded, state.kind, load]);
 	return (
 		<div className="prefs-section instructions">
 			<div className="prefs-section-title">Global instructions</div>
@@ -807,9 +844,15 @@ const GUI_PAGES = [
 	{ id: "accounts", label: "Providers & Auth", icon: "key" },
 ];
 
-const GUI_PAGE_CONTENT: Record<string, (appearance: Appearance) => ReactNode> = {
-	general: appearance => <GeneralSettings appearance={appearance} />,
-	instructions: () => <InstructionsSettings />,
+/** What the GUI's own Settings pages show and change. */
+interface GuiSettings {
+	appearance: Appearance;
+	instructions: InstructionsDoc;
+}
+
+const GUI_PAGE_CONTENT: Record<string, (settings: GuiSettings) => ReactNode> = {
+	general: ({ appearance }) => <GeneralSettings appearance={appearance} />,
+	instructions: ({ instructions }) => <InstructionsSettings doc={instructions} />,
 	models: () => <ModelsSettings />,
 	accounts: () => <AccountsSettings />,
 };
@@ -818,7 +861,7 @@ const GUI_PAGE_CONTENT: Record<string, (appearance: Appearance) => ReactNode> = 
  * The Settings page: the GUI's own General, then omp's settings panel, drawn by an omp of its own
  * (`--settings-panel`) that the server starts for the page and ends when the page goes.
  */
-function SettingsPage({ appearance, onClose }: { appearance: Appearance; onClose: () => void }): ReactNode {
+function SettingsPage({ settings, onClose }: { settings: GuiSettings; onClose: () => void }): ReactNode {
 	const [connection, setConnection] = useState<SessionConnection | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [page, setPage] = useState<string | null>("general");
@@ -849,7 +892,7 @@ function SettingsPage({ appearance, onClose }: { appearance: Appearance; onClose
 						pages: GUI_PAGES,
 						active: page,
 						onPick: setPage,
-						content: page ? GUI_PAGE_CONTENT[page]?.(appearance) : null,
+						content: page ? GUI_PAGE_CONTENT[page]?.(settings) : null,
 					}}
 				>
 					<SettingsPanel connection={connection} onClose={onClose} />
@@ -915,7 +958,9 @@ function SettingsPanel({ connection, onClose }: { connection: SessionConnection;
 	// Without its panel, omp runs a sign-in in its editor area: show that, with the way back.
 	const inline = screens.length === 0 ? surfaces.findLast(surface => surface.meta.mode === "inline") : undefined;
 	const onKeyDown = (event: React.KeyboardEvent) => {
-		if ((event.target as HTMLElement).closest("textarea, input, select")) return;
+		// Tab moves between the page's controls; omp's panel draws no focus of its own here.
+		if (event.key === "Tab") return;
+		if ((event.target as HTMLElement).closest("textarea, input, select") || activatesControl(event)) return;
 		const bytes = keyBytes(event.nativeEvent);
 		if (bytes === null) return;
 		event.preventDefault();
@@ -942,6 +987,7 @@ function SessionHead({
 	home,
 	isChat,
 	ending,
+	saved,
 	onEnd,
 }: {
 	connection: SessionConnection;
@@ -950,6 +996,8 @@ function SessionHead({
 	home: string;
 	isChat: (cwd: string) => boolean;
 	ending: boolean;
+	/** What the saved lists call a session's file. */
+	saved: (session: LiveSession) => string | undefined;
 	onEnd: () => void;
 }): ReactNode {
 	useSession(connection);
@@ -958,7 +1006,7 @@ function SessionHead({
 	const stopping = running && (info?.stopping === true || ending);
 	return (
 		<header className="session-head">
-			<span className="head-title">{info ? sessionTitle(info, isChat(info.cwd)) : "Session"}</span>
+			<span className="head-title">{info ? sessionTitle(info, isChat(info.cwd), saved(info)) : "Session"}</span>
 			{info ? <span className="head-path">{isChat(info.cwd) ? "Chat" : tildePath(info.cwd, home)}</span> : null}
 			{running && !stopping && info?.busy ? (
 				<span className="head-state">
@@ -1236,9 +1284,12 @@ function InterruptedList({
 	onRestore,
 	onDismiss,
 	onEnd,
+	saved,
 }: {
 	entries: InterruptedSession[];
 	home: string;
+	/** What the saved lists call a session file. */
+	saved: (file: string | undefined) => string | undefined;
 	spawning: boolean;
 	/** Entries with a dismiss or end request in flight. */
 	acting: ReadonlySet<string>;
@@ -1312,7 +1363,7 @@ function InterruptedList({
 							<Icon name={entry.orphan ? "activity" : entry.chat ? "message-circle" : "folder"} size={13} />
 						</span>
 						<span className="side-text">
-							<span className="side-label">{interruptedLabel(entry)}</span>
+							<span className="side-label">{interruptedLabel(entry, saved(entry.sessionFile))}</span>
 							<span className={`side-cause ${entry.exit && !entry.orphan ? "failed" : ""}`}>
 								{interruptedCause(entry)} · {entry.chat ? "chat" : basename(entry.cwd)}
 							</span>
@@ -1488,6 +1539,7 @@ export function App(): ReactNode {
 	/** One spawn at a time, whichever button or key asked for it; state lags a fast double press, a ref does not. */
 	const spawnInFlight = useRef(false);
 	const appearance = useAppearance();
+	const instructions = useInstructions();
 
 	/** Fetch the listing into state; it resolves with the listing, or null when that failed. */
 	const refresh = useCallback(async (): Promise<Listing | null> => {
@@ -1699,7 +1751,11 @@ export function App(): ReactNode {
 		const failed = results.flatMap((result, index) => {
 			if (result.status === "rejected") return [errorText(result.reason)];
 			// An orphan that outlived SIGINT and the SIGKILL of its process group stays listed, still running.
-			return result.value.ok ? [] : [`${interruptedLabel(pending[index]!)}: omp did not exit; it is still running.`];
+			return result.value.ok
+				? []
+				: [
+						`${interruptedLabel(pending[index]!, savedOf(pending[index]!.sessionFile))}: omp did not exit; it is still running.`,
+					];
 		});
 		if (failed.length) setError(failed.join("\n"));
 		setActing(set => new Set([...set].filter(id => !ids.includes(id))));
@@ -1739,6 +1795,12 @@ export function App(): ReactNode {
 	const pickable = extra
 		? [{ root: extra, name: basename(extra), modified: "", sessions: [] }, ...projects]
 		: projects;
+	// What the saved lists call a live session's file, so the sidebar and its head agree before omp titles it.
+	const savedNames = new Map(
+		[...chats, ...projects.flatMap(project => project.sessions)].map(item => [item.path, savedLabel(item)]),
+	);
+	const savedOf = (file: string | undefined): string | undefined => (file ? savedNames.get(file) : undefined);
+	const savedName = (session: LiveSession): string | undefined => savedOf(session.sessionFile);
 	const recentForTarget = target ? (projects.find(project => project.root === target)?.sessions ?? []) : chats;
 	/** The first `count` sessions, plus every later one whose turn was cut off, so none hides below the fold. */
 	const listed = (sessions: SavedSession[], count: number) =>
@@ -1798,7 +1860,7 @@ export function App(): ReactNode {
 						return (
 							<div
 								key={session.id}
-								className={`side-item ${session.id === active ? "active" : ""}`}
+								className={`side-item ${session.id === active && !settingsOpen ? "active" : ""}`}
 								onClick={() => show(session.id)}
 								title={session.cwd}
 							>
@@ -1811,7 +1873,9 @@ export function App(): ReactNode {
 										/>
 									)}
 								</span>
-								<span className="side-label">{sessionTitle(session, isChat(session.cwd))}</span>
+								<span className="side-label">
+									{sessionTitle(session, isChat(session.cwd), savedName(session))}
+								</span>
 								{stopping ? (
 									<span className="side-meta">Ending…</span>
 								) : session.exited ? (
@@ -1884,7 +1948,7 @@ export function App(): ReactNode {
 					{projects.map(project => (
 						<div key={project.root} className="side-group">
 							<div
-								className={`side-item project ${active === null && target === project.root ? "active" : ""}`}
+								className={`side-item project ${active === null && !settingsOpen && target === project.root ? "active" : ""}`}
 								title={`${tildePath(project.root, home)}\nNew session in this project`}
 								onClick={() => newIn(project.root)}
 							>
@@ -1924,7 +1988,7 @@ export function App(): ReactNode {
 				<ModelListContext.Provider value={modelList}>
 					<Notices waiting={waiting} />
 					{settingsOpen ? (
-						<SettingsPage appearance={appearance} onClose={closeSettings} />
+						<SettingsPage settings={{ appearance, instructions }} onClose={closeSettings} />
 					) : activeConnection ? (
 						<SessionHead
 							key={activeConnection.id}
@@ -1933,6 +1997,7 @@ export function App(): ReactNode {
 							home={home}
 							isChat={isChat}
 							ending={ending.has(activeConnection.id)}
+							saved={savedName}
 							onEnd={() => void stopSession(activeConnection.id)}
 						/>
 					) : (
@@ -1963,6 +2028,7 @@ export function App(): ReactNode {
 										onRestore={entries => void spawn(entries.flatMap(entry => restoreRequest(entry) ?? []))}
 										onDismiss={(entries, force) => void settleInterrupted(entries, "dismiss", force)}
 										onEnd={entry => void settleInterrupted([entry], "end")}
+										saved={savedOf}
 									/>
 								) : null
 							}

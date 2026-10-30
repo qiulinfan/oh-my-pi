@@ -2,8 +2,60 @@
  * The model and thinking-effort menus. The start page sets them for the session it starts; a running
  * session's composer draws them in place of omp's own model chip and sends the pick back to omp.
  */
-import { createContext, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+	createContext,
+	type ReactNode,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { Icon } from "./icons";
+
+/**
+ * Keys pressed on a picker are the picker's: in a session's composer (or the Settings page's omp panel) they
+ * would otherwise reach omp, where Escape stops a turn or closes the panel and Enter sends the draft.
+ */
+function keepKeys(event: React.KeyboardEvent, close: () => void): void {
+	event.stopPropagation();
+	// Escape closes an open menu wherever focus is in the picker (its chip, a menu item, the search).
+	if (event.key === "Escape") {
+		event.preventDefault();
+		close();
+	}
+}
+
+/** The box that clips `el`: its nearest ancestor that does not let content overflow, else the window. */
+function clipBox(el: HTMLElement): { top: number; bottom: number } {
+	for (let at = el.parentElement; at; at = at.parentElement) {
+		if (getComputedStyle(at).overflowY !== "visible") return at.getBoundingClientRect();
+	}
+	return { top: 0, bottom: innerHeight };
+}
+
+/**
+ * Whether an open menu should open above its picker: it does not fit below inside the box that clips it,
+ * and there is more room above. Measured before paint, so a menu never shows cut off first.
+ */
+function useOpensUp(
+	open: boolean,
+	picker: RefObject<HTMLElement | null>,
+	menu: RefObject<HTMLElement | null>,
+): boolean {
+	const [up, setUp] = useState(false);
+	useLayoutEffect(() => {
+		const anchor = picker.current;
+		const list = menu.current;
+		if (!open || !anchor || !list) return;
+		const at = anchor.getBoundingClientRect();
+		const box = clipBox(anchor);
+		const below = box.bottom - at.bottom;
+		setUp(list.offsetHeight + 6 > below && at.top - box.top > below);
+	}, [open, picker, menu]);
+	return open && up;
+}
 
 /** Closes a popover when the pointer goes down outside `ref`. */
 export function useDismiss(ref: React.RefObject<HTMLElement | null>, open: boolean, close: () => void): void {
@@ -104,6 +156,7 @@ export function ChoicePicker({
 	const ref = useRef<HTMLDivElement>(null);
 	const trigger = useRef<HTMLButtonElement>(null);
 	const menu = useRef<HTMLDivElement>(null);
+	const up = useOpensUp(open, ref, menu);
 	useDismiss(
 		ref,
 		open,
@@ -116,12 +169,8 @@ export function ChoicePicker({
 		setOpen(false);
 		trigger.current?.focus();
 	};
+	// Escape is the whole picker's (see keepKeys); the arrows move through the menu.
 	const onKeyDown = (event: React.KeyboardEvent) => {
-		if (event.key === "Escape") {
-			event.preventDefault();
-			close();
-			return;
-		}
 		if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
 		event.preventDefault();
 		const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
@@ -147,7 +196,7 @@ export function ChoicePicker({
 		</button>
 	);
 	return (
-		<div className="picker effort-picker" ref={ref}>
+		<div className="picker effort-picker" ref={ref} onKeyDown={event => keepKeys(event, close)}>
 			<button
 				ref={trigger}
 				type="button"
@@ -162,7 +211,13 @@ export function ChoicePicker({
 				<Icon name="chev-down" size={12} />
 			</button>
 			{open ? (
-				<div className="picker-menu" role="menu" aria-label={menuLabel} ref={menu} onKeyDown={onKeyDown}>
+				<div
+					className={`picker-menu ${up ? "up" : ""}`}
+					role="menu"
+					aria-label={menuLabel}
+					ref={menu}
+					onKeyDown={onKeyDown}
+				>
 					{lead.map(item)}
 					{lead.length ? <div className="picker-sep" /> : null}
 					{choices.map(item)}
@@ -242,6 +297,8 @@ export function ModelPicker({
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const ref = useRef<HTMLDivElement>(null);
+	const menu = useRef<HTMLDivElement>(null);
+	const up = useOpensUp(open, ref, menu);
 	useDismiss(
 		ref,
 		open,
@@ -259,7 +316,7 @@ export function ModelPicker({
 	const providers = [...new Set(matches.map(model => model.provider))];
 	const fallback = unsetLabel ?? (list?.default ? modelName(list.default, list) : "omp's default");
 	return (
-		<div className="picker model-picker" ref={ref}>
+		<div className="picker model-picker" ref={ref} onKeyDown={event => keepKeys(event, () => setOpen(false))}>
 			<button
 				type="button"
 				className="field-chip project"
@@ -275,7 +332,7 @@ export function ModelPicker({
 				<Icon name="chev-down" size={12} />
 			</button>
 			{open ? (
-				<div className="picker-menu">
+				<div className={`picker-menu ${up ? "up" : ""}`} ref={menu}>
 					<input
 						className="picker-search"
 						autoFocus
@@ -284,7 +341,6 @@ export function ModelPicker({
 						spellCheck={false}
 						onChange={event => setQuery(event.target.value)}
 						onKeyDown={event => {
-							if (event.key === "Escape") setOpen(false);
 							if (event.key === "Enter" && matches[0]) pick(matches[0].selector);
 						}}
 					/>
