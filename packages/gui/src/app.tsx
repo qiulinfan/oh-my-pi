@@ -1306,6 +1306,16 @@ function SavedItem({
 	);
 }
 
+/** The project roots pinned in the sidebar, in the order they were pinned; a malformed value reads as none. */
+function pinnedRootsOf(value: string): string[] {
+	try {
+		const roots: unknown = JSON.parse(value);
+		return Array.isArray(roots) ? roots.filter((root): root is string => typeof root === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
 /** Whether `cwd` is `root` or a folder inside it. */
 function within(cwd: string, root: string): boolean {
 	return cwd === root || cwd.startsWith(`${root}/`);
@@ -1687,6 +1697,14 @@ export function App(): ReactNode {
 	const [thinkingPref, setThinking] = usePref("thinking", "");
 	const thinkingChoice = thinkingPref.trim();
 	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
+	const [pinnedProjectsPref, setPinnedProjects] = usePref("pinnedProjects", "[]");
+	const pinnedRoots = pinnedRootsOf(pinnedProjectsPref);
+	const toggleProjectPin = (root: string) =>
+		setPinnedProjects(
+			JSON.stringify(
+				pinnedRoots.includes(root) ? pinnedRoots.filter(item => item !== root) : [...pinnedRoots, root],
+			),
+		);
 	const workDetail = workDetailOf(workDetailPref);
 	const [modelList, setModelList] = useState<ModelList | null>(null);
 	const [interrupted, setInterrupted] = useState<InterruptedSession[]>([]);
@@ -1972,6 +1990,13 @@ export function App(): ReactNode {
 		(a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.modified.localeCompare(a.modified),
 	);
 	const runningCount = live.filter(session => !session.exited).length;
+	// Pinned projects lead the sidebar, in the order they were pinned; pinned sessions have a section of their own.
+	const sideProjects = [
+		...pinnedRoots.flatMap(root => projects.filter(project => project.root === root)),
+		...projects.filter(project => !pinnedRoots.includes(project.root)),
+	];
+	const pinnedSessions = allSaved.filter(session => session.pinned);
+	const unpinned = (sessions: SavedSession[]) => sessions.filter(session => !session.pinned);
 	const projectNames = new Map(
 		projects.flatMap(project => project.sessions.map(session => [session.path, project.name] as const)),
 	);
@@ -2143,6 +2168,21 @@ export function App(): ReactNode {
 							</div>
 						);
 					})}
+					{pinnedSessions.length ? <div className="side-title">Pinned</div> : null}
+					{pinnedSessions.map(session => (
+						<SavedItem
+							key={session.id}
+							className="recent pinned-row"
+							session={session}
+							lead={<Icon name="pin" size={13} />}
+							where={projectNames.get(session.path) ?? "Chat"}
+							cutOff={isCutOff(session)}
+							spawning={spawning}
+							onResume={() => void spawn([resumeRequest(session)])}
+							onRestore={() => restoreSaved(session)}
+							onPin={() => void pin(session)}
+						/>
+					))}
 					<div className="side-title">On this Mac</div>
 					{peers.filter(peer => !peer.guiId).length === 0 ? (
 						<div className="side-empty">No other omp sessions</div>
@@ -2177,7 +2217,7 @@ export function App(): ReactNode {
 						))}
 					<div className="side-title">Projects</div>
 					{projects.length === 0 ? <div className="side-empty">No projects yet</div> : null}
-					{projects.map(project => (
+					{sideProjects.map(project => (
 						<div key={project.root} className="side-group">
 							<div
 								className={`side-item project ${active === null && !settingsOpen && target === project.root ? "active" : ""}`}
@@ -2188,11 +2228,24 @@ export function App(): ReactNode {
 									<Icon name="folder" size={13} />
 								</span>
 								<span className="side-label">{project.name}</span>
+								<button
+									type="button"
+									className={`side-pin ${pinnedRoots.includes(project.root) ? "on" : ""}`}
+									title={pinnedRoots.includes(project.root) ? "Unpin" : "Pin: keep it at the top of Projects"}
+									aria-label={pinnedRoots.includes(project.root) ? "Unpin project" : "Pin project"}
+									aria-pressed={pinnedRoots.includes(project.root)}
+									onClick={event => {
+										event.stopPropagation();
+										toggleProjectPin(project.root);
+									}}
+								>
+									<Icon name="pin" size={12} />
+								</button>
 								<span className="side-add">
 									<Icon name="plus" size={13} />
 								</span>
 							</div>
-							{listed(project.sessions, 3).map(savedItem)}
+							{listed(unpinned(project.sessions), 3).map(savedItem)}
 						</div>
 					))}
 					<div
@@ -2204,7 +2257,7 @@ export function App(): ReactNode {
 						<Icon name="plus" size={12} />
 					</div>
 					{chats.length === 0 ? <div className="side-empty">No chats yet</div> : null}
-					{listed(chats, 8).map(savedItem)}
+					{listed(unpinned(chats), 8).map(savedItem)}
 				</div>
 				<div className="side-foot">
 					<button

@@ -87,7 +87,11 @@ first by their last message (a record omp appends without one, such as the
 note it writes on exit, does not move a session up). A pinned session comes
 first in its list and is never left out; pin or unpin one with the pin on its
 row. Pins are omp's own, in `session-pins.json` in its agent directory, so
-`omp --resume` and every window onto the server show the same ones.
+`omp --resume` and every window onto the server show the same ones. In the
+sidebar, pinned sessions from every project gather under Pinned, below the
+running ones, and leave their project's list. A project's own pin (on its row)
+keeps it at the top of Projects, in the order pinned; project pins are the
+GUI's alone, kept with its other choices.
 
 The start page lists the chosen project's sessions (or the chats, with no
 project): five, every pinned one, and the rest behind Show all.

@@ -93,8 +93,8 @@ export async function defaultModelRole(): Promise<string | null> {
 	return cfgModelRoles.get(await globalSettings()).default ?? null;
 }
 
-/** The longest preference value a page may store: a model selector or a project path, never a document. */
-const PREF_MAX = 4096;
+/** The longest preference value a page may store: a model selector, a project path or a list of them, never a document. */
+const PREF_MAX = 16_384;
 
 function prefsPath(): string {
 	return path.join(getAgentDir(), "gui.json");

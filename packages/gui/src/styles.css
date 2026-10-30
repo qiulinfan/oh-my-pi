@@ -939,6 +939,10 @@ button.picker-item:focus-visible {
 .side-pin.on {
 	color: var(--accent);
 }
+/* In the Pinned section the leading pin already says so: the button (to unpin) waits for a hover. */
+.side-item.pinned-row:not(:hover) .side-pin {
+	display: none;
+}
 .side-pin:hover {
 	color: var(--fg);
 	background: var(--sel);
