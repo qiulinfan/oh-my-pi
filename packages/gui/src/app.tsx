@@ -1795,7 +1795,7 @@ export function App(): ReactNode {
 	useEffect(() => {
 		setDrawer(false);
 		setHistory(false);
-	}, [active, target]);
+	}, [active, target, settingsOpen]);
 
 	useEffect(() => {
 		void refresh();

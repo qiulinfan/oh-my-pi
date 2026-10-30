@@ -3398,6 +3398,89 @@ button.picker-item:focus-visible {
 		padding-left: 14px;
 		padding-right: 14px;
 	}
+	/* omp's settings take the whole panel: the pages become a strip across the top, and each setting's
+	   control goes under its description, so no value is cut off at the right edge. */
+	.surface.screen,
+	.settings-panel .surface.screen {
+		padding: 46px 8px 8px;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	/* The corner buttons and what they open stay above a full-screen surface, in the strip it leaves them,
+	   so the session list and history are reachable from the Settings page and over a session's pickers. */
+	.app .top-actions {
+		z-index: 44;
+	}
+	.app .history-backdrop {
+		z-index: 45;
+	}
+	.app .history-menu {
+		z-index: 46;
+	}
+	.app .drawer-backdrop {
+		z-index: 47;
+	}
+	.app .sidebar {
+		z-index: 48;
+	}
+	.app .drawer-toggle {
+		z-index: 49;
+	}
+	.settings-panel .screen-body,
+	.settings-panel .screen-body > .k-col,
+	.settings-panel .screen-body .k-prefs,
+	.k-prefs {
+		width: 100%;
+		height: 100%;
+		margin: 0;
+	}
+	.prefs-main {
+		flex-direction: column;
+	}
+	.prefs-pages {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		width: auto;
+		padding: 6px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		border-right: none;
+		border-bottom: 1px solid var(--line);
+		scrollbar-width: none;
+	}
+	.prefs-page {
+		flex: none;
+		width: auto;
+		white-space: nowrap;
+	}
+	.prefs-pages-sep {
+		flex: none;
+		margin: 0 4px 0 8px;
+	}
+	.prefs-sections {
+		padding: 8px 10px;
+	}
+	.prefs-row {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 6px;
+		padding: 8px 6px;
+	}
+	/* A switch is small enough to stay beside its label. */
+	.prefs-row:has(> .prefs-control > input[type="checkbox"]) {
+		flex-direction: row;
+		align-items: center;
+	}
+	.prefs-control {
+		max-width: 100%;
+	}
+	.prefs-control select,
+	.prefs-control input[type="text"],
+	.prefs-control input[type="number"],
+	.prefs-control input[type="password"] {
+		max-width: 100%;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
