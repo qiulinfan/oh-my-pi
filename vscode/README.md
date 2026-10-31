@@ -38,6 +38,10 @@ button in the view's title reconnects.
   project's sessions.
 - The page lives in a frame inside the view's webview and stays loaded while
   the side bar is hidden. Web and mail links open in your default browser.
+- As the caret settles in a file, the composer shows where it is (file, line
+  and column, and how much is selected), and your next message tells omp that
+  place with the lines around it. The button on that label drops it until the
+  caret moves again.
 
 The server, its sessions and the page's logic are omp's own; the extension
 only finds the server and frames its page (`src/extension.ts`), reaching it

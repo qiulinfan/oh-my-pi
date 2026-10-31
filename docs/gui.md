@@ -329,6 +329,27 @@ running now, then the saved ones (pinned first), for the page's project or for
 all of them, narrowed by a search; its badge counts the running sessions. The
 pen beside it goes back to the start page for a new session.
 
+### Where you are in the editor
+
+In both side bars the page knows where you last were in the editor beside
+it: the file, the caret, the selection and a few lines on either side.
+Obsidian tells it when you move the focus from a note to the omp view; VS
+Code tells it as the caret settles in a file. The embedder posts
+`{type: "omp-gui.editor-context", context}` to the page (`desktop/src/editor-context.ts`
+builds `context`), the composer shows the place with a button that drops it,
+and the page passes it to every open session as a TSP `context` event (a
+dropped place as `context: null`). A first message typed on the start page
+carries it in the spawn request instead, which the server hands to the new
+omp in `OMP_GUI_EDITOR_CONTEXT`, since that omp sends the message before it
+reads events.
+
+omp gives the place to the model with your next message, as a hidden notice
+shown in the transcript as one line (`Editor path:line:col`), and only when
+it differs from the last place it told the model in that session. A dropped
+place stays dropped until the editor reports another one. A page no editor
+embeds sends nothing, so a browser tab on the same session never clears the
+place a side bar reported.
+
 ## VS Code side bar
 
 The VS Code extension in `vscode/` shows the same page in VS Code's secondary

@@ -2,6 +2,7 @@ import { drawMathWithKatexHtml } from "@oh-my-pi/collab-web/src/components/trans
 import hljs from "highlight.js/lib/common";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";
+import { listenToEmbedder } from "./editor-context";
 import { routeLinksToEmbedder } from "./embed";
 import { loadPrefs, reloadPrefsOnReturn } from "./prefs";
 import "katex/dist/katex.min.css";
@@ -13,6 +14,7 @@ drawMathWithKatexHtml();
 (globalThis as { hljs?: unknown }).hljs = hljs;
 
 routeLinksToEmbedder();
+listenToEmbedder();
 
 // The page's preferences come before the first render, so a chosen theme never flashes the default.
 await loadPrefs();

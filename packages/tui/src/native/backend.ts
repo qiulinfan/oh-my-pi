@@ -32,6 +32,7 @@ import {
 	TSP_DEFAULT_CREDITS,
 	TSP_KINDS,
 	TSP_VERSION,
+	type TspEditorContext,
 	type TspEvent,
 	type TspFrame,
 	type TspKind,
@@ -84,6 +85,8 @@ export interface NativeHost {
 	appearanceChanged(dark: boolean): void;
 	/** Reduce Motion toggled. */
 	motionChanged(reduce: boolean): void;
+	/** The embedding editor's caret moved, or the user withdrew it (`null`). */
+	editorContext(context: TspEditorContext | null): void;
 	/** Theme-derived output changed (symbol preset): drop render and describe caches. */
 	invalidate(): void;
 }
@@ -781,6 +784,9 @@ export class NativeBackend {
 				this.#host.motionChanged(event.reduce);
 				return;
 			case "visible":
+				return;
+			case "context":
+				this.#host.editorContext(event.context);
 				return;
 			case "error":
 				logger.warn("TSP: terminal reported an error", event);

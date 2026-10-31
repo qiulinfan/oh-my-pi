@@ -38,6 +38,10 @@ command. The refresh button in the view's header reconnects.
   keeps running.
 - Web and mail links open in your default browser; the page opens nothing
   inside Obsidian.
+- When you move the focus from a note to the view, the composer shows where
+  you were (file, line and column, and how much was selected), and your next
+  message tells omp that place with the lines around it. The button on that
+  label drops it until you come back from a note at another place.
 - The page opens in the vault's folder: new sessions start there, and the
   start page lists that project's sessions. Its other remembered choices
   (theme, model, effort) are the GUI server's, the same in every window.

@@ -1022,6 +1022,36 @@ export type TspReply =
 	  }
 	| { r: "blobs"; have: readonly string[] };
 
+/** The caret, selection and nearby lines of the file open in the embedding editor (`context` event). */
+export interface TspEditorContext {
+	/** Absolute path of the file. */
+	path: string;
+	/** The caret: 1-based line and column (UTF-16 code units). */
+	line: number;
+	col: number;
+	/** The selected text; absent or empty when nothing is selected. */
+	selection?: string;
+	/** Lines around the caret: `text` holds whole lines starting at 1-based line `start`. */
+	excerpt: { start: number; text: string };
+}
+
+/**
+ * A `context` payload as received from outside (a terminal event, a page
+ * message, an environment variable), or null when it is malformed. An empty
+ * selection is dropped.
+ */
+export function parseTspEditorContext(value: unknown): TspEditorContext | null {
+	if (typeof value !== "object" || value === null) return null;
+	const { path, line, col, selection, excerpt } = value as Record<string, unknown>;
+	const position = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1;
+	if (typeof path !== "string" || !path || !position(line) || !position(col)) return null;
+	if (selection !== undefined && typeof selection !== "string") return null;
+	if (typeof excerpt !== "object" || excerpt === null) return null;
+	const { start, text } = excerpt as Record<string, unknown>;
+	if (!position(start) || typeof text !== "string") return null;
+	return { path, line, col, ...(selection ? { selection } : {}), excerpt: { start, text } };
+}
+
 /** Verb `e`: terminal → program events. */
 export type TspEvent =
 	| { ev: "ack"; sf: string; s: number }
@@ -1069,5 +1099,11 @@ export type TspEvent =
 	 * keyboard focus there, or ignores it (a modal overlay keeps the keys).
 	 */
 	| { ev: "focus"; sf: string; id: string }
+	/**
+	 * Where the user last was in the editor embedding this terminal (an
+	 * Obsidian or VS Code side bar), for the program to tell its model with
+	 * the next prompt; `null` withdraws it (the user dismissed it).
+	 */
+	| { ev: "context"; context: TspEditorContext | null }
 	| { ev: "error"; sf?: string; s?: number; op?: number; msg: string }
 	| { ev: "gone"; sf?: string; ids: readonly string[] };

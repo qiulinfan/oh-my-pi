@@ -20,7 +20,9 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import type { TspEditorContext } from "@oh-my-pi/pi-wire";
 import { ApiError, api, errorText, link, type ServerIdentity } from "./api";
+import { EditorContextChip, editorContext } from "./editor-context";
 import { Icon } from "./icons";
 import { keyBytes } from "./keys";
 import {
@@ -167,6 +169,8 @@ interface SpawnRequest {
 	 */
 	preset?: string;
 	prompt?: string;
+	/** Where the user is in the editor embedding the page, for omp to give the model with `prompt`. */
+	context?: TspEditorContext;
 }
 
 /** Where a new session runs: a project root, or "" for a chat in its own empty directory. */
@@ -1281,6 +1285,7 @@ function StartPage({
 					omp
 				</h1>
 				<div className="start-box">
+					<EditorContextChip />
 					<textarea
 						ref={ref}
 						value={prompt}
@@ -2450,6 +2455,7 @@ export function App(): ReactNode {
 										thinking: thinking || undefined,
 										preset: presetRequest(preset),
 										prompt: prompt.trim() || undefined,
+										context: (prompt.trim() && editorContext()) || undefined,
 									},
 								])
 							}

@@ -30,7 +30,7 @@ import { TspDocument } from "@oh-my-pi/pi-tui/native/apply";
 import { TERMINAL_MULTIPLEXER_ENV_KEYS } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { type FileLockHandle, isCompiledBinary, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getAgentDir, VERSION } from "@oh-my-pi/pi-utils/dirs";
-import type { TspFrame, TspNode } from "@oh-my-pi/pi-wire";
+import { parseTspEditorContext, type TspFrame, type TspNode } from "@oh-my-pi/pi-wire";
 import { $ } from "bun";
 import { listPeers } from "../peers/registry";
 import {
@@ -53,6 +53,7 @@ import {
 } from "../config/agent-presets";
 import { Settings } from "../config/settings";
 import { processStartToken } from "../utils/process-identity";
+import { EDITOR_CONTEXT_ENV } from "./editor-context";
 import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } from "./hosted";
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { openCommand, resolveLinkedPath } from "./open-link";
@@ -281,8 +282,19 @@ class PtySession {
 	/** The mode that chip last showed; its first is the mode omp started in, which needs no record. */
 	#workDetail: WorkDetail | undefined;
 
-	constructor(host: SessionHost, id: string, cwd: string, args: string[], resumePath?: string) {
+	/** Variables for omp beyond the server's own environment. */
+	readonly #env: Record<string, string>;
+
+	constructor(
+		host: SessionHost,
+		id: string,
+		cwd: string,
+		args: string[],
+		resumePath?: string,
+		env: Record<string, string> = {},
+	) {
 		this.#host = host;
+		this.#env = env;
 		this.info = {
 			id,
 			cwd,
@@ -310,6 +322,7 @@ class PtySession {
 			cwd,
 			env: {
 				...inherited,
+				...this.#env,
 				TERM: "xterm-256color",
 				COLORTERM: "truecolor",
 				TERM_PROGRAM: "omp-gui",
@@ -968,6 +981,8 @@ interface SpawnBody {
 	 */
 	preset?: string;
 	prompt?: string;
+	/** Where the user is in the editor embedding the page, which omp gives the model with `prompt`. */
+	context?: unknown;
 }
 
 /** A spawn's session: a new one, or one the GUI already runs (`existing`). */
@@ -1563,7 +1578,15 @@ class GuiHost implements SessionHost {
 		}
 		if (from && this.sessions.get(from.guiId)?.info.exited) superseded.add(from.guiId);
 		const id = crypto.randomUUID().slice(0, 8);
-		const session = new PtySession(this, id, cwd, args, resumePath);
+		const context = firstMessage ? parseTspEditorContext(body.context) : null;
+		const session = new PtySession(
+			this,
+			id,
+			cwd,
+			args,
+			resumePath,
+			context ? { [EDITOR_CONTEXT_ENV]: JSON.stringify(context) } : {},
+		);
 		this.sessions.set(id, session);
 
 		const entry: HostedEntry = {

@@ -12,12 +12,25 @@
  * The page opens web links with window.open. A <webview> drops those unless it
  * allows popups, so it allows them and denies every one from the main
  * process, handing http(s) and mail links to the system instead.
+ *
+ * When the view takes the focus, the page hears where the user last was in a
+ * note (desktop/src/editor-context.ts), and offers it to omp with the next
+ * message.
  */
 import * as os from "node:os";
 import * as path from "node:path";
 import { GuiAttachment } from "../../desktop/src/attach";
+import { EDITOR_CONTEXT, type EditorContext, editorContext } from "../../desktop/src/editor-context";
 import { remote, shell } from "electron";
-import { FileSystemAdapter, ItemView, Plugin, PluginSettingTab, Setting, type WorkspaceLeaf } from "obsidian";
+import {
+	FileSystemAdapter,
+	ItemView,
+	MarkdownView,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	type WorkspaceLeaf,
+} from "obsidian";
 
 const VIEW_TYPE = "omp-sidebar";
 const EXTERNAL_LINK = /^(https?|mailto):/i;
@@ -25,6 +38,7 @@ const EXTERNAL_LINK = /^(https?|mailto):/i;
 /** The <webview> element's methods this plugin calls; the DOM typings do not know the tag. */
 interface Webview extends HTMLElement {
 	getWebContentsId(): number;
+	executeJavaScript(code: string): Promise<unknown>;
 }
 
 interface Settings {
@@ -39,6 +53,8 @@ const DEFAULT_SETTINGS: Settings = { ompPath: "", sidebarPlaced: false };
 export default class OmpPlugin extends Plugin {
 	override settings: Settings = { ...DEFAULT_SETTINGS };
 	readonly server = new GuiAttachment();
+	/** The note the user last worked in; the omp view taking the focus does not replace it. */
+	#note: MarkdownView | null = null;
 
 	override async onload(): Promise<void> {
 		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
@@ -46,7 +62,30 @@ export default class OmpPlugin extends Plugin {
 		this.addRibbonIcon("bot", "Open omp", () => void this.reveal());
 		this.addCommand({ id: "open", name: "Open sidebar", callback: () => void this.reveal() });
 		this.addSettingTab(new OmpSettingTab(this));
-		this.app.workspace.onLayoutReady(() => void this.#placeOnce());
+		this.app.workspace.onLayoutReady(() => {
+			this.#note = this.app.workspace.getActiveViewOfType(MarkdownView);
+			void this.#placeOnce();
+		});
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", leaf => {
+				if (leaf?.view instanceof MarkdownView) this.#note = leaf.view;
+			}),
+		);
+	}
+
+	/** Where the user last was in a note: the caret, the selection and the lines around them; null without one. */
+	editorContext(): EditorContext | null {
+		const view = this.#note;
+		const { adapter } = this.app.vault;
+		if (!view?.file || !(adapter instanceof FileSystemAdapter)) return null;
+		const { editor } = view;
+		return editorContext(
+			path.join(adapter.getBasePath(), view.file.path),
+			editor.getCursor(),
+			editor.getSelection(),
+			editor.lineCount(),
+			line => editor.getLine(line),
+		);
 	}
 
 	override onunload(): void {
@@ -166,6 +205,15 @@ class OmpView extends ItemView {
 				return { action: "deny" };
 			});
 		});
+		// Taking the focus is the user turning from their note to omp: tell the page where they were.
+		const report = () => {
+			const context = this.#plugin.editorContext();
+			if (!context) return;
+			const message = JSON.stringify({ type: EDITOR_CONTEXT, context });
+			page.executeJavaScript(`window.postMessage(${message}, "*")`).catch(() => {});
+		};
+		page.addEventListener("focus", report);
+		page.addEventListener("did-finish-load", report);
 		page.setAttribute("src", url);
 		root.appendChild(page);
 	}

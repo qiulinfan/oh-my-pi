@@ -15,6 +15,7 @@ import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message"
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
+import { createEditorContextBlock } from "@oh-my-pi/pi-tui/chat/editor-context-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
@@ -74,6 +75,7 @@ import { extractVisibleAssistantText } from "../rpc/rpc-live";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "../../session/launch-completion";
 import {
 	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
+	EDITOR_CONTEXT_MESSAGE_TYPE,
 	type CustomMessage,
 	isUserTurnInitiator,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
@@ -360,6 +362,12 @@ export class UiHelpers {
 						const details = (message as CustomMessage<AdvisorMessageDetails>).details;
 						this.ctx.chatContainer.addChild(
 							createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme),
+						);
+						break;
+					}
+					if (message.customType === EDITOR_CONTEXT_MESSAGE_TYPE) {
+						this.ctx.chatContainer.addChild(
+							createEditorContextBlock(message as CustomMessage<unknown>, this.ctx.sessionManager.getCwd()),
 						);
 						break;
 					}

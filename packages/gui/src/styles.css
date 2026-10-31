@@ -2569,6 +2569,44 @@ button.picker-item:focus-visible {
 [data-role="omp.composer.line"] {
 	padding-right: 110px;
 }
+/* Where the user is in the editor embedding this page, sent with the next message unless dropped. */
+.editor-context {
+	align-self: flex-start;
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	max-width: calc(100% - 110px);
+	padding: 1px 2px 1px 8px;
+	border: 1px solid var(--line-2);
+	border-radius: 999px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.editor-context-where {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	white-space: nowrap;
+}
+.editor-context-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg);
+}
+.editor-context-drop {
+	display: inline-flex;
+	padding: 2px;
+	border: 0;
+	border-radius: 999px;
+	background: none;
+	color: var(--dim);
+	cursor: pointer;
+}
+.editor-context-drop:hover {
+	background: var(--active);
+	color: var(--fg);
+}
 [data-role="omp.composer.bar"] {
 	color: var(--muted);
 	font-size: 12.5px;
