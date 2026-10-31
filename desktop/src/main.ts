@@ -289,8 +289,10 @@ async function showServer(conn: Connection, env: LoginShellEnv, proc?: GuiProces
 		await win.loadURL(url);
 		shown = { win, url, bootId: conn.bootId };
 	} catch (err) {
-		// Superseded by another load (the page reloading itself), or the window went away.
-		if (quitting || win.isDestroyed() || (err as { code?: unknown }).code === "ERR_ABORTED") return;
+		// Superseded by another load (the page reloading itself), or the window went away. The abort of
+		// the status page this load replaces can reject it too, with errno -3 and an empty code.
+		const { code, errno } = err as { code?: unknown; errno?: unknown };
+		if (quitting || win.isDestroyed() || code === "ERR_ABORTED" || errno === -3) return;
 		await failed(err, proc, conn);
 	}
 }
