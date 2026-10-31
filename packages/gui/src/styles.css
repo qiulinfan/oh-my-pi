@@ -740,8 +740,9 @@ kbd {
 }
 .start-bar {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: 6px 8px;
 }
 .field-chip {
 	display: inline-flex;
@@ -772,6 +773,10 @@ kbd {
 	flex: 1 1 0;
 	min-width: 0;
 	display: flex;
+}
+/* When the chips do not fit, the start bar wraps rather than shrinking the project out of sight. */
+.start-bar > .project-picker {
+	min-width: 9em;
 }
 .field-chip.project {
 	flex: 1;

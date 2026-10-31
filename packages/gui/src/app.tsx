@@ -1048,7 +1048,7 @@ function ProjectPicker({
 		onPick(value);
 	};
 	return (
-		<div className="picker" ref={ref}>
+		<div className="picker project-picker" ref={ref}>
 			<button
 				type="button"
 				className="field-chip project"
