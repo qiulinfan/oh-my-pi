@@ -69,6 +69,34 @@ describe("TSP framing", () => {
 		});
 	});
 
+	it("decodes an editor place and its withdrawal, and drops a malformed place", () => {
+		const context = {
+			path: "/vault/plan.md",
+			line: 4,
+			col: 17,
+			selection: "Friday",
+			excerpt: { start: 1, text: "# Plan\n\nThe deadline is Friday." },
+		};
+		const decode = (event: unknown) => parseTspMessage(encodeTspMessage("e", JSON.stringify(event)));
+		expect(decode({ ev: "context", context })).toEqual({ verb: "e", event: { ev: "context", context } });
+		expect(decode({ ev: "context", context: null })).toEqual({ verb: "e", event: { ev: "context", context: null } });
+		// An empty selection is no selection.
+		expect(decode({ ev: "context", context: { ...context, selection: "" } })).toEqual({
+			verb: "e",
+			event: { ev: "context", context: { ...context, selection: undefined } },
+		});
+		for (const bad of [
+			undefined,
+			{ ...context, path: "" },
+			{ ...context, line: 0 },
+			{ ...context, col: 1.5 },
+			{ ...context, selection: 3 },
+			{ ...context, excerpt: { start: 1 } },
+		]) {
+			expect(decode({ ev: "context", context: bad })).toBeNull();
+		}
+	});
+
 	it("chunks a body over the APC limit and reassembles it byte-exact, never splitting a code point", () => {
 		const body = JSON.stringify({ text: 'ab€漢字🙂🙃 é\u001b"quote" '.repeat(9) });
 		const limit = 23;

@@ -29,6 +29,7 @@ import {
 } from "react";
 import { AnsiBlock } from "./ansi";
 import { Editor } from "./editor";
+import { EditorContextChip } from "./editor-context";
 import { Icon } from "./icons";
 import { EffortPicker, ModelListContext, ModelPicker } from "./pickers";
 import type { SessionConnection } from "./session";
@@ -350,6 +351,7 @@ const Col: R = ({ node }) => {
 				alignItems: p.align === "stretch" ? undefined : p.align,
 			}}
 		>
+			{p.role === "omp.editor" ? <EditorContextChip /> : null}
 			<Kids node={node} />
 		</div>
 	);

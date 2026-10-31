@@ -26,6 +26,9 @@ export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
 export const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
 
+/** Custom message telling the model where the user is in the editor embedding the GUI; `details` is the TSP `context`. */
+export const EDITOR_CONTEXT_MESSAGE_TYPE = "editor-context";
+
 /** Custom message type for the transient Vibe mode directive. */
 export const VIBE_MODE_CONTEXT_MESSAGE_TYPE = "vibe-mode-context";
 

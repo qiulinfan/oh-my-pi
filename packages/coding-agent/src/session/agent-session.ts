@@ -193,6 +193,7 @@ import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionStat
 import { MAGIC_KEYWORDS, type MagicKeywordContext, type MagicKeywordId } from "../modes/magic-keywords";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import type { TspEditorContext } from "@oh-my-pi/pi-wire";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
@@ -203,6 +204,7 @@ import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with {
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
+import editorContextPrompt from "../prompts/system/editor-context.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import manualContinuePrompt from "../prompts/system/manual-continue.md" with { type: "text" };
@@ -397,6 +399,7 @@ import {
 	CHECKPOINT_ACTIVE_REMINDER_TYPE,
 	type CustomMessage,
 	type CustomMessagePayload,
+	EDITOR_CONTEXT_MESSAGE_TYPE,
 	convertToLlm,
 	dedupeEphemeralReply,
 	demoteInterruptedThinking,
@@ -1028,6 +1031,10 @@ export class AgentSession implements SettingsScope {
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	#pendingNextTurnMessages: CustomMessage[] = [];
+	/** Where the user is in the editor embedding the GUI, as it last reported; see {@link setEditorContext}. */
+	#editorContext: TspEditorContext | undefined;
+	/** The session and place the last editor-context notice told the model, so the same place is not told twice. */
+	#toldEditorContext: string | undefined;
 	#scheduledHiddenNextTurnGeneration: number | undefined = undefined;
 	/** Queued extension/agent messages that an editor-restoring interrupt withdrew
 	 *  (`clearQueue({ forInterrupt: true })`). The abort that follows takes them out of the
@@ -8034,6 +8041,49 @@ export class AgentSession implements SettingsScope {
 		};
 	}
 
+	/**
+	 * Where the user is in the editor embedding the GUI (the Obsidian or VS Code side bar), as that editor
+	 * last reported it; `null` when the user dismissed it. The next user prompt carries it to the model,
+	 * unless the model was already told this place in this session.
+	 */
+	setEditorContext(context: TspEditorContext | null): void {
+		this.#editorContext = context ?? undefined;
+	}
+
+	/** The editor context as a notice for a user prompt, or undefined when there is none or it is not new. */
+	#takeEditorContextNotice(): CustomMessage<TspEditorContext> | undefined {
+		const context = this.#editorContext;
+		if (!context) return undefined;
+		const told = `${this.sessionId}\n${JSON.stringify(context)}`;
+		if (told === this.#toldEditorContext) return undefined;
+		this.#toldEditorContext = told;
+		const relative = path.relative(this.sessionManager.getCwd(), context.path);
+		const inside = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+		const { start, text } = context.excerpt;
+		const lines = text.split("\n").map((line, i) => ({
+			n: start + i,
+			text: line,
+			marker: start + i === context.line ? ">" : " ",
+		}));
+		return {
+			role: "custom",
+			customType: EDITOR_CONTEXT_MESSAGE_TYPE,
+			content: prompt.render(editorContextPrompt, {
+				path: inside ? relative : context.path,
+				line: context.line,
+				col: context.col,
+				selection: context.selection,
+				start,
+				end: start + lines.length - 1,
+				lines,
+			}),
+			display: true,
+			details: context,
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+	}
+
 	#buildVibeModeMessage(): CustomMessage | null {
 		if (!this.#vibeModeState?.enabled) return null;
 		return {
@@ -8345,7 +8395,11 @@ export class AgentSession implements SettingsScope {
 		// with the message via prependMessages — not as a separate steer — so the
 		// model sees both in the same turn (#14093).
 		const sessionAgentNotice = options?.synthetic ? undefined : this.#tools.takeSessionAgentNotice();
-		const prependNotices = sessionAgentNotice ? [...keywordNotices, sessionAgentNotice] : keywordNotices;
+		// Where the user is in the editor beside the GUI rides with their message the same way.
+		const editorContextNotice = options?.synthetic ? undefined : this.#takeEditorContextNotice();
+		const prependNotices: CustomMessage[] = [...keywordNotices];
+		if (sessionAgentNotice) prependNotices.push(sessionAgentNotice);
+		if (editorContextNotice) prependNotices.push(editorContextNotice);
 
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) are not user turns.
 		if (options?.userInitiated ?? !options?.synthetic) this.#noteUserTurn();
@@ -8507,11 +8561,13 @@ export class AgentSession implements SettingsScope {
 				prependMessages:
 					preludeMessages.length > 0 ||
 					keywordNotices.length > 0 ||
+					editorContextNotice ||
 					attachmentSourceNotices.length > 0 ||
 					imageDescriptionNotice
 						? [
 								...preludeMessages,
 								...keywordNotices,
+								...(editorContextNotice ? [editorContextNotice] : []),
 								...attachmentSourceNotices,
 								...(imageDescriptionNotice ? [imageDescriptionNotice] : []),
 							]

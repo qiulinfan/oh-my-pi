@@ -18,7 +18,7 @@ import { getDebugLogPath } from "@oh-my-pi/pi-utils/dirs";
 import { $flag } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import type { TspFrame, TspNode, TspText } from "@oh-my-pi/pi-wire";
+import type { TspEditorContext, TspFrame, TspNode, TspText } from "@oh-my-pi/pi-wire";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { TuiDebugServer } from "./debug-server";
 import { extractPrintableText, isKeyRelease, matchesKey } from "./keys";
@@ -933,6 +933,8 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
+	/** Where the user is in the editor embedding a TSP terminal (a TSP `context` event); `null` withdraws it. */
+	onEditorContext?: (context: TspEditorContext | null) => void;
 	#renderRequested = false;
 	#renderTimer: RenderTimer | undefined;
 	#renderScheduler: RenderScheduler;
@@ -1859,6 +1861,7 @@ export class TUI extends Container {
 				this.invalidate();
 				this.requestRender();
 			},
+			editorContext: context => this.onEditorContext?.(context),
 			invalidate: () => this.invalidate(),
 		};
 	}

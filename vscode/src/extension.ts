@@ -11,14 +11,20 @@
  *
  * A webview's sandbox allows no popups, so the framed page posts web links to
  * this view (packages/gui's embed.ts), which opens them in the browser.
+ *
+ * As the caret moves in a file, the page hears where it is
+ * (desktop/src/editor-context.ts), and offers it to omp with the next message.
  */
 import * as vscode from "vscode";
 import { GuiAttachment } from "../../desktop/src/attach";
+import { EDITOR_CONTEXT, type EditorContext, editorContext } from "../../desktop/src/editor-context";
 
 const VIEW_ID = "omp.gui";
 /** What the page posts for a link it cannot open itself; packages/gui/src/embed.ts. */
 const OPEN_EXTERNAL = "omp-gui.open-external";
 const EXTERNAL_LINK = /^(?:https?|mailto):/i;
+/** How long the caret rests before the page hears of it. */
+const CARET_SETTLE_MS = 250;
 
 const server = new GuiAttachment();
 
@@ -31,6 +37,17 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 		vscode.commands.registerCommand("omp.reconnect", () => provider.load()),
 	);
+	let settle: ReturnType<typeof setTimeout> | undefined;
+	const caretMoved = () => {
+		clearTimeout(settle);
+		settle = setTimeout(() => provider.report(vscode.window.activeTextEditor), CARET_SETTLE_MS);
+	};
+	context.subscriptions.push(
+		vscode.window.onDidChangeTextEditorSelection(caretMoved),
+		vscode.window.onDidChangeActiveTextEditor(caretMoved),
+		{ dispose: () => clearTimeout(settle) },
+	);
+	provider.report(vscode.window.activeTextEditor);
 }
 
 export function deactivate(): Promise<void> {
@@ -42,6 +59,22 @@ class OmpViewProvider implements vscode.WebviewViewProvider {
 	#view: vscode.WebviewView | undefined;
 	/** Bumped by each load, so a slow load that a newer one replaced does not draw. */
 	#generation = 0;
+	/** Where the caret last was in a file, which a page loaded later hears first. */
+	#context: EditorContext | null = null;
+
+	/** The page hears where the caret is in `editor`, when it shows a file on disk. */
+	report(editor: vscode.TextEditor | undefined): void {
+		if (editor?.document.uri.scheme !== "file") return;
+		const { document, selection } = editor;
+		this.#context = editorContext(
+			document.uri.fsPath,
+			{ line: selection.active.line, ch: selection.active.character },
+			document.getText(selection),
+			document.lineCount,
+			line => document.lineAt(line).text,
+		);
+		void this.#view?.webview.postMessage({ type: EDITOR_CONTEXT, context: this.#context });
+	}
 
 	resolveWebviewView(view: vscode.WebviewView): void {
 		this.#view = view;
@@ -66,7 +99,7 @@ class OmpViewProvider implements vscode.WebviewViewProvider {
 			// New sessions start in the open folder (the first of a multi-root workspace).
 			const folder = vscode.workspace.workspaceFolders?.find(item => item.uri.scheme === "file")?.uri.fsPath;
 			const url = await server.pageUrl(omp, folder);
-			if (generation === this.#generation) view.webview.html = framePage(url);
+			if (generation === this.#generation) view.webview.html = framePage(url, this.#context);
 		} catch (err) {
 			if (generation === this.#generation) {
 				view.webview.html = statusPage(err instanceof Error ? err.message : String(err), true);
@@ -79,12 +112,20 @@ function nonce(): string {
 	return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
 }
 
+/** JSON to put inside a <script>, which a `</script>` in a file's text cannot end. */
+function scriptJson(value: unknown): string {
+	return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 function escapeHtml(text: string): string {
 	return text.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
 }
 
-/** The page in a frame, and the relay that hands its web links to the extension. */
-function framePage(url: string): string {
+/**
+ * The page in a frame, and the relay between them: the page's web links go to
+ * the extension, and where the caret is goes to the page, `context` first.
+ */
+function framePage(url: string, context: EditorContext | null): string {
 	const origin = new URL(url).origin;
 	const n = nonce();
 	return `<!doctype html>
@@ -99,11 +140,20 @@ function framePage(url: string): string {
 <script nonce="${n}">
 const vscode = acquireVsCodeApi();
 const frame = document.querySelector("iframe");
+const origin = ${JSON.stringify(origin)};
+let caret = ${scriptJson(context ? { type: EDITOR_CONTEXT, context } : null)};
+const tell = () => { if (caret) frame.contentWindow.postMessage(caret, origin); };
+frame.addEventListener("load", tell);
 window.addEventListener("message", event => {
-	if (event.source !== frame.contentWindow || event.origin !== ${JSON.stringify(origin)}) return;
 	const data = event.data;
-	if (data && data.type === ${JSON.stringify(OPEN_EXTERNAL)} && typeof data.url === "string") {
-		vscode.postMessage({ type: data.type, url: data.url });
+	if (event.source === frame.contentWindow) {
+		if (event.origin !== origin) return;
+		if (data && data.type === ${JSON.stringify(OPEN_EXTERNAL)} && typeof data.url === "string") {
+			vscode.postMessage({ type: data.type, url: data.url });
+		}
+	} else if (data && data.type === ${JSON.stringify(EDITOR_CONTEXT)}) {
+		caret = data;
+		tell();
 	}
 });
 </script>

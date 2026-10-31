@@ -42,6 +42,7 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { fetchBuild } from "./cli/build-service";
+import { takeEditorContext } from "./gui/editor-context";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
 import { findConfigFile } from "./config";
@@ -2697,6 +2698,9 @@ export async function runRootCommand(
 				startBackgroundModelDiscovery,
 			} = createdSession;
 			if (!isInteractive) session.validateRetryFallbackChains();
+			// Where the user is in the editor beside omp gui, for the first message it started this session with.
+			const editorContext = takeEditorContext();
+			if (editorContext) session.setEditorContext(editorContext);
 
 			const sessionToolNames = session.getAllToolNames();
 			try {

@@ -12,6 +12,7 @@
  */
 import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
 import {
+	parseTspEditorContext,
 	TSP_APC_ID,
 	TSP_DEFAULT_APC_LIMIT,
 	TSP_VERSION,
@@ -220,6 +221,12 @@ function decodeEvent(value: Record<string, unknown>): TspEvent | null {
 		const { sf, id, text } = value;
 		if (typeof sf !== "string" || !sf || typeof id !== "string" || !id || typeof text !== "string") return null;
 		return { ev: "send", sf, id, text };
+	}
+	if (value.ev === "context") {
+		// Only an explicit null withdraws the place; a malformed one is dropped.
+		if (value.context === null) return { ev: "context", context: null };
+		const context = parseTspEditorContext(value.context);
+		return context ? { ev: "context", context } : null;
 	}
 	const required = EVENT_REQUIRED[value.ev];
 	if (!required) return null;

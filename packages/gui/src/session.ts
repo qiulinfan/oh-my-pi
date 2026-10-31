@@ -13,6 +13,7 @@
  */
 import type { TspNode, TspOp } from "@oh-my-pi/pi-wire";
 import { ApiError, api, link, type ServerIdentity, sleep, TOKEN } from "./api";
+import { editorContext, subscribeEditorContext } from "./editor-context";
 import { SurfaceStore } from "./store";
 
 export interface SurfaceMeta {
@@ -106,6 +107,15 @@ export class SessionConnection {
 	constructor(id: string) {
 		this.id = id;
 		this.#connect();
+		this.#unsubscribeEditor = subscribeEditorContext(() => this.#tellEditorContext());
+	}
+
+	#unsubscribeEditor: () => void;
+
+	/** Tell omp where the user is in the editor embedding this page; nothing when no editor ever reported. */
+	#tellEditorContext(): void {
+		const context = editorContext();
+		if (context !== undefined) this.event({ ev: "context", context });
 	}
 
 	subscribe(listener: Listener): () => void {
@@ -206,12 +216,15 @@ export class SessionConnection {
 				this.synced = true;
 				this.#initAt = Date.now();
 				if (this.#size) this.#send({ t: "resize", ...this.#size });
+				// omp reads events once it has opened a surface; a fresh omp has none yet and is told on `open`.
+				if (this.surfaces.size > 0) this.#tellEditorContext();
 				this.#changed();
 				return;
 			}
 			case "open": {
 				const { root, ...meta } = message.surface as SurfaceMeta & { root: TspNode };
 				this.surfaces.set(meta.id, { meta, store: new SurfaceStore(meta.id, root) });
+				this.#tellEditorContext();
 				this.#changed();
 				return;
 			}
@@ -306,6 +319,7 @@ export class SessionConnection {
 	/** The view is going away: close the socket and never reconnect. */
 	close(): void {
 		this.#disposed = true;
+		this.#unsubscribeEditor();
 		this.#ws?.close();
 	}
 }
