@@ -161,6 +161,11 @@ interface SpawnRequest {
 	workDetail?: string;
 	/** omp's `--approval-mode`; absent starts in the mode omp's settings name. */
 	approvalMode?: string;
+	/**
+	 * omp's `--preset`: an agent preset from the project's .omp/presets/ or ~/.omp/agent/presets/. "" starts
+	 * without one (`--no-preset`); absent takes the `agentPreset` setting.
+	 */
+	preset?: string;
 	prompt?: string;
 }
 
@@ -1170,6 +1175,68 @@ function ApprovalPicker({ value, onPick }: { value: string; onPick: (value: stri
 	);
 }
 
+/** An agent preset a new session can start from, as `/api/presets` lists them. */
+interface PresetInfo {
+	name: string;
+	description?: string;
+	source: "project" | "user";
+}
+
+/** `/api/presets`: what a target offers, and the preset its `agentPreset` setting starts sessions from. */
+interface PresetList {
+	presets: PresetInfo[];
+	default: string | null;
+}
+
+/** The Preset picker's value for no preset; a preset name never starts with ":". */
+const NO_PRESET = ":none";
+
+function PresetPicker({
+	value,
+	list,
+	onPick,
+}: {
+	value: string;
+	list: PresetList;
+	onPick: (value: string) => void;
+}): ReactNode {
+	const fallback: Choice = {
+		value: "",
+		text: list.default ? `Default · ${list.default}` : "Default",
+		title: list.default
+			? `The preset the agentPreset setting names here: ${list.default}`
+			: "No agentPreset setting here, so omp's own prompt, skills and settings",
+	};
+	const none: Choice = {
+		value: NO_PRESET,
+		text: "No preset",
+		title: "omp's own prompt, skills and settings, whatever agentPreset names (--no-preset)",
+	};
+	const label = value === NO_PRESET ? none.text : value || (list.default ? fallback.text : "Preset");
+	return (
+		<ChoicePicker
+			icon="agent"
+			label={label}
+			title="An agent preset from .omp/presets/ or ~/.omp/agent/presets/: its prompt, skills, model and context. Default takes the agentPreset setting. A model or effort picked here outranks the preset's."
+			menuLabel="Preset"
+			value={value}
+			lead={list.default ? [fallback, none] : [fallback]}
+			choices={list.presets.map(preset => ({
+				value: preset.name,
+				text: preset.name,
+				meta: preset.source,
+				title: preset.description,
+			}))}
+			onPick={onPick}
+		/>
+	);
+}
+
+/** What a spawn sends for a picker value: no flag for Default, "" for no preset, else the name. */
+function presetRequest(value: string): string | undefined {
+	return value === NO_PRESET ? "" : value || undefined;
+}
+
 function StartPage({
 	picker,
 	modelPicker,
@@ -1733,6 +1800,11 @@ export function App(): ReactNode {
 	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
 	const [approvalPref, setApproval] = usePref("approvalMode", "");
 	const approvalMode = approvalModeOf(approvalPref);
+	const [presetList, setPresetList] = useState<PresetList>({ presets: [], default: null });
+	const [presetPick, setPreset] = useState("");
+	// A pick that the current target does not offer (another project's preset) falls back to Default.
+	const preset =
+		presetPick === NO_PRESET || presetList.presets.some(item => item.name === presetPick) ? presetPick : "";
 	const pinnedRoots = usePinnedProjects();
 	const toggleProjectPin = (root: string) => pinProject(root, !pinnedRoots.includes(root));
 	const workDetail = workDetailOf(workDetailPref);
@@ -1832,6 +1904,22 @@ export function App(): ReactNode {
 		setOpen(list => list.filter(item => item !== id));
 		setActive(current => (current === id ? null : current));
 	};
+
+	// The presets the picked target offers: its project's and the user's.
+	useEffect(() => {
+		let current = true;
+		api<PresetList>(`/api/presets${target ? `?project=${encodeURIComponent(target)}` : ""}`).then(
+			list => {
+				if (current) setPresetList(list);
+			},
+			err => {
+				if (current && !serverWide(err)) setError(errorText(err));
+			},
+		);
+		return () => {
+			current = false;
+		};
+	}, [target]);
 
 	// Read again on leaving Settings, where the default model may have changed.
 	useEffect(() => {
@@ -2331,6 +2419,7 @@ export function App(): ReactNode {
 									<ModelPicker value={model} list={modelList} onPick={setModel} />
 									<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
 									<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
+									<PresetPicker value={preset} list={presetList} onPick={setPreset} />
 									<ApprovalPicker value={approvalMode} onPick={setApproval} />
 								</>
 							}
@@ -2359,6 +2448,7 @@ export function App(): ReactNode {
 										project: target || undefined,
 										model: model || undefined,
 										thinking: thinking || undefined,
+										preset: presetRequest(preset),
 										prompt: prompt.trim() || undefined,
 									},
 								])

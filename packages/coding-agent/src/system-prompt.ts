@@ -365,7 +365,7 @@ export function withoutAgentsMd<T extends { path: string }>(files: T[]): T[] {
  */
 export async function loadProjectContextFiles(
 	options: LoadContextFilesOptions = {},
-): Promise<Array<{ path: string; content: string; depth?: number }>> {
+): Promise<Array<{ path: string; content: string; depth?: number; level?: ContextFile["level"] }>> {
 	const resolvedCwd = options.cwd ?? getProjectDir();
 
 	const result = await loadCapability(contextFileCapability.id, {
@@ -384,6 +384,7 @@ export async function loadProjectContextFiles(
 				path: contextFile.path,
 				content: await expandAtImports(contextFile.content, contextFile.path),
 				depth: contextFile.depth,
+				level: contextFile.level,
 			};
 		}),
 	);
@@ -799,7 +800,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		const extra = await Promise.all(
 			additionalRoots.map(root => loadProjectContextFiles({ cwd: root }).catch(() => [])),
 		);
-		const merged = dedupeContainedContextFiles([...primary, ...extra.flat()]);
+		// User-level files are the same from every root; the primary set already decided whether they load.
+		const extraProject = extra.flat().filter(file => file.level !== "user");
+		const merged = dedupeContainedContextFiles([...primary, ...extraProject]);
 		return excludeAgentsMd ? withoutAgentsMd(merged) : merged;
 	})();
 	const additionalRootsForTree = additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd));

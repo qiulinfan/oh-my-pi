@@ -45,6 +45,7 @@ import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
 import { findConfigFile } from "./config";
+import { type AgentPreset, applyAgentPreset, resolveLaunchPreset } from "./config/agent-presets";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
@@ -1779,6 +1780,9 @@ export async function buildSessionOptions(
 	if (parsed.noContextFiles) {
 		options.noContextFiles = true;
 	}
+	if (parsed.noUserContextFiles) {
+		options.noUserContextFiles = true;
+	}
 
 	// Trusted extension paths are an exact allowlist for extension modules.
 	if (parsed.trustedExtensions && parsed.trustedExtensions.length > 0) {
@@ -1849,6 +1853,7 @@ export async function runRootCommand(
 		await logger.time("initTheme:initial", ensureTheme);
 
 		const parsedArgs = parsed;
+		let preset: AgentPreset | undefined;
 		try {
 			await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 		} catch (error: unknown) {
@@ -1991,6 +1996,15 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		// The preset fills unset flags before anything below reads them; the setting needs the loaded settings.
+		try {
+			preset = await resolveLaunchPreset(parsedArgs, settingsInstance, getProjectDir());
+			if (preset) applyAgentPreset(parsedArgs, preset);
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+			process.exit(1);
+		}
 		// Process-lifetime: broker/account-policy edits reconfigure the shared credential store.
 		createAuthStorageSettingsSync(settingsInstance, authStorage);
 		if (parsedArgs.approvalMode) {
@@ -2536,6 +2550,8 @@ export async function runRootCommand(
 				},
 			};
 			const initialArgs = applyExtensionFlags(extensionFlagSink, rawArgs) ?? parsedArgs;
+			// The reparse starts from the raw argv again, so the preset fills it as it filled the first parse.
+			if (preset && initialArgs !== parsedArgs) applyAgentPreset(initialArgs, preset);
 			normalizeContinueSessionArgs(initialArgs, rawArgs);
 			try {
 				validateSessionPersistenceArgs(initialArgs);

@@ -173,6 +173,8 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--system-prompt <text\|file>`        | Plain-text system prompt override (default: coding assistant prompt). See [system prompt customization](./system-prompt-customization.md).                                     |
 | `--system-prompt-template <path>`     | Strictly read `<path>` as a Handlebars system-prompt template; mutually exclusive with `--system-prompt`. See [system prompt customization](./system-prompt-customization.md). |
 | `--append-system-prompt <text\|file>` | Append plain text or file contents to the system prompt.                                                                                                                       |
+| `--preset <name>`                     | Start from an [agent preset](./agent-presets.md): its prompt, skills, model, thinking, tools, approval mode and context files. Overrides the `agentPreset` setting; flags given on the command line still win. |
+| `--no-preset`                         | Start without an agent preset, even when the `agentPreset` setting names one.                                                                                                  |
 
 #### Output mode
 

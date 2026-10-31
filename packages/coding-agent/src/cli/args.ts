@@ -30,6 +30,10 @@ export interface Args {
 	addDir?: string[];
 	profile?: string;
 	alias?: string;
+	/** `--preset`: the agent preset whose settings fill the flags left unset (see config/agent-presets). */
+	preset?: string;
+	/** `--no-preset`: start without an agent preset, even when the `agentPreset` setting names one. */
+	noPreset?: boolean;
 	allowHome?: boolean;
 	provider?: string;
 	model?: string;
@@ -100,6 +104,8 @@ export interface Args {
 	skills?: string[];
 	noRules?: boolean;
 	noContextFiles?: boolean;
+	/** Leave out user-level context files (set by a preset with `user-context: false`; no CLI flag). */
+	noUserContextFiles?: boolean;
 	noTitle?: boolean;
 	/** RPC modes only: run extensions without a UI; `rpc-ui` tool UI remains enabled. */
 	noUi?: boolean;
@@ -392,6 +398,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.printThoughts = true;
 		} else if (arg === "--no-extensions") {
 			result.noExtensions = true;
+		} else if (arg === "--no-preset") {
+			result.noPreset = true;
 		} else if (arg === "--no-skills") {
 			result.noSkills = true;
 		} else if (arg === "--no-rules") {

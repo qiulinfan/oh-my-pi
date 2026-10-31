@@ -58,6 +58,11 @@ export interface HostedEntry {
 	 * of this entry starts in it whatever mode the page sends, as with `workDetail`.
 	 */
 	approvalMode?: string;
+	/**
+	 * The `--preset` the session was started with, "" for `--no-preset`; absent when it took the `agentPreset`
+	 * setting. A restore of this entry starts from it, as with `approvalMode`.
+	 */
+	preset?: string;
 	/** A no-project chat, which runs in its own directory under the chats dir. */
 	chat: boolean;
 	/** How omp exited when it ended by itself and not cleanly (a crash, a signal from elsewhere). */
@@ -105,6 +110,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 	if (!optional(entry.sessionFile, "string") || !optional(entry.prompt, "string")) return undefined;
 	if (!optional(entry.model, "string") || !optional(entry.thinking, "string")) return undefined;
 	if (!optional(entry.workDetail, "string") || !optional(entry.approvalMode, "string")) return undefined;
+	if (!optional(entry.preset, "string")) return undefined;
 	if (entry.ending !== undefined && entry.ending !== true) return undefined;
 	if (entry.restoredFrom !== undefined && !isGuiId(entry.restoredFrom)) return undefined;
 	const exit = parseExit(entry.exit);
@@ -121,6 +127,7 @@ function parseEntry(text: string, guiId: string): HostedEntry | undefined {
 		thinking: entry.thinking as string | undefined,
 		workDetail: entry.workDetail as string | undefined,
 		approvalMode: entry.approvalMode as string | undefined,
+		preset: entry.preset as string | undefined,
 		chat: entry.chat,
 		exit,
 		restoredFrom: entry.restoredFrom,

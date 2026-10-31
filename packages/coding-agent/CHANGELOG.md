@@ -10,6 +10,7 @@
 - omp gui's Obsidian and VS Code side bars start in the open folder, list its sessions on the start page, and open every session from a history menu with search at the top right
 - omp gui pins sessions (the same pins as `omp --resume`), listing them first, and orders sessions by their last message
 - omp gui's sidebar gathers pinned sessions under Pinned, and pins projects to the top of Projects
+- Agent presets: `omp --preset <name>` starts a session from a Markdown file in `.omp/presets/` or `~/.omp/agent/presets/` that sets its prompt, skills, model, thinking, tools and approval mode, and can leave out the global AGENTS.md; the `agentPreset` setting gives a project a default preset (`--no-preset` opts out), and omp gui offers Default, No preset or any preset in a Preset picker on the start page
 
 ### Fixed
 

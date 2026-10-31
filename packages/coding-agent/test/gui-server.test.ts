@@ -826,6 +826,63 @@ describe("omp gui: hosted-session roster", () => {
 		const restored = await gui.spawn(served, { from: "0000000f", approvalMode: "yolo" });
 		expect(await gui.args(served, restored.id)).toEqual(["--restore", file, "--approval-mode", "always-ask"]);
 	}, 60_000);
+	test("a session starts from the preset picked, the project default, or none, and a restore keeps its recorded choice", async () => {
+		const gui = await setup();
+		const hosted = path.join(gui.runtimeDir, "hosted");
+		await Bun.write(
+			path.join(gui.project, ".omp", "presets", "reader.md"),
+			"---\ndescription: Reads papers\n---\nRead closely.\n",
+		);
+		await Bun.write(path.join(gui.project, ".omp", "config.yml"), "agentPreset: reader\n");
+		await Bun.write(path.join(gui.home, ".omp", "agent", "presets", "chat.md"), "Just chat.\n");
+		const { file } = await writeSessionFixture(gui.project, gui.project);
+		const { file: noneFile } = await writeSessionFixture(gui.project, gui.project);
+		// Sessions of a previous server: one started from the reader preset, one started with none.
+		const entry = (guiId: string, sessionFile: string, preset: string) =>
+			JSON.stringify({ guiId, sessionFile, startedAt: 1, cwd: gui.project, chat: false, preset });
+		await Bun.write(path.join(hosted, "00000010.json"), entry("00000010", file, "reader"));
+		await Bun.write(path.join(hosted, "00000011.json"), entry("00000011", noneFile, ""));
+		const served = await gui.start();
+		// The project offers its own presets and the user's, and its config names its default; a chat has neither.
+		const listed = await gui.api<{ presets: Array<{ name: string; source: string }>; default: string | null }>(
+			served,
+			`/api/presets?project=${encodeURIComponent(gui.project)}`,
+		);
+		expect({
+			presets: listed.body.presets.map(({ name, source }) => `${name}:${source}`),
+			default: listed.body.default,
+		}).toEqual({ presets: ["reader:project", "chat:user"], default: "reader" });
+		const forChat = await gui.api<{ presets: Array<{ name: string }>; default: string | null }>(
+			served,
+			"/api/presets",
+		);
+		expect({ presets: forChat.body.presets.map(({ name }) => name), default: forChat.body.default }).toEqual({
+			presets: ["chat"],
+			default: null,
+		});
+
+		const unknown = await gui.api<{ code: string }>(served, "/api/spawn", { project: gui.project, preset: "writer" });
+		expect({ status: unknown.status, code: unknown.body.code }).toEqual({ status: 400, code: "bad-request" });
+		const flag = await gui.api<{ code: string }>(served, "/api/spawn", { project: gui.project, preset: "--yolo" });
+		expect(flag.status).toBe(400);
+
+		const picked = await gui.spawn(served, { project: gui.project, preset: "chat" });
+		expect(await gui.args(served, picked.id)).toEqual(["--preset", "chat"]);
+		// A session with no preset flag takes the project's default, and one picked as none opts out of it;
+		// omp gets past its startup either way rather than refusing the flag and exiting.
+		const byDefault = await gui.spawn(served, { project: gui.project });
+		expect(await gui.args(served, byDefault.id)).toEqual([]);
+		await gui.waitForSessionFile(served, byDefault.id);
+		const none = await gui.spawn(served, { project: gui.project, preset: "" });
+		expect(await gui.args(served, none.id)).toEqual(["--no-preset"]);
+		await gui.waitForSessionFile(served, none.id);
+		expect((await Bun.file(path.join(hosted, `${none.id}.json`)).json()).preset).toBe("");
+
+		const restored = await gui.spawn(served, { from: "00000010" });
+		expect(await gui.args(served, restored.id)).toEqual(["--restore", file, "--preset", "reader"]);
+		const restoredNone = await gui.spawn(served, { from: "00000011" });
+		expect(await gui.args(served, restoredNone.id)).toEqual(["--restore", noneFile, "--no-preset"]);
+	}, 60_000);
 	test("a mode switched with the session's chip is recorded, and a restore comes back in it", async () => {
 		const gui = await setup();
 		await gui.skipSetupWizard();

@@ -45,6 +45,13 @@ import { loadPinnedSessionIds, setSessionPinned } from "../session/session-pins"
 import { FileSessionStorage, tryAcquireSessionFileLease } from "../session/session-storage";
 import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-client";
 import { APPROVAL_MODES, isApprovalMode } from "../tools/approval";
+import {
+	defaultAgentPresetName,
+	discoverAgentPresets,
+	isAgentPresetName,
+	loadAgentPreset,
+} from "../config/agent-presets";
+import { Settings } from "../config/settings";
 import { processStartToken } from "../utils/process-identity";
 import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } from "./hosted";
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
@@ -955,6 +962,11 @@ interface SpawnBody {
 	workDetail?: string;
 	/** omp's `--approval-mode` (one of {@link APPROVAL_MODES}); absent keeps `tools.approvalMode`. */
 	approvalMode?: string;
+	/**
+	 * omp's `--preset`: an agent preset visible from the session's directory. "" starts without one
+	 * (`--no-preset`); absent passes no flag, so the session takes the `agentPreset` setting.
+	 */
+	preset?: string;
 	prompt?: string;
 }
 
@@ -1301,6 +1313,17 @@ class GuiHost implements SessionHost {
 			case "/api/model-roles":
 				if (!post) return Response.json(await readModelRoles());
 				break;
+			case "/api/presets": {
+				// The presets a session in `project` can start from; a chat sees the user's presets only.
+				const project = url.searchParams.get("project");
+				const cwd = project ? expandHome(project) : CHATS_DIR;
+				const [presets, settings] = await Promise.all([discoverAgentPresets(cwd), Settings.loadReadOnly({ cwd })]);
+				return Response.json({
+					presets: presets.map(({ name, description, source }) => ({ name, description, source })),
+					// What a session started with no preset flag runs: the `agentPreset` setting there.
+					default: defaultAgentPresetName(settings) ?? null,
+				});
+			}
 			case "/api/prefs":
 				if (!post) return Response.json(await readGuiPrefs());
 				break;
@@ -1397,7 +1420,16 @@ class GuiHost implements SessionHost {
 		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
 		const body = await readBody<SpawnBody>(req);
 		if (body instanceof Response) return body;
-		for (const key of ["project", "from", "model", "thinking", "workDetail", "approvalMode", "prompt"] as const)
+		for (const key of [
+			"project",
+			"from",
+			"model",
+			"thinking",
+			"workDetail",
+			"approvalMode",
+			"preset",
+			"prompt",
+		] as const)
 			if (body[key] !== undefined && typeof body[key] !== "string")
 				return fail(400, "bad-request", `${key} must be a string`);
 		if (body.thinking !== undefined && !CLI_THINKING_LEVELS.includes(body.thinking as ConfiguredThinkingLevel))
@@ -1406,6 +1438,8 @@ class GuiHost implements SessionHost {
 			return fail(400, "bad-request", `workDetail must be one of ${WORK_DETAILS.join(", ")}`);
 		if (body.approvalMode !== undefined && !isApprovalMode(body.approvalMode))
 			return fail(400, "bad-request", `approvalMode must be one of ${APPROVAL_MODES.join(", ")}`);
+		if (body.preset !== undefined && body.preset !== "" && !isAgentPresetName(body.preset))
+			return fail(400, "bad-request", "preset must be a preset name");
 		if (body.resume !== undefined && (typeof body.resume?.path !== "string" || typeof body.resume?.cwd !== "string"))
 			return fail(400, "bad-request", "resume needs a path and a cwd");
 		// A spawn changes the roster, and a restore reads what the previous run left.
@@ -1447,6 +1481,9 @@ class GuiHost implements SessionHost {
 		const approvalMode = bareRestore
 			? (recordedApproval ?? body.approvalMode)
 			: (body.approvalMode ?? recordedApproval);
+		// A preset is what the session is, so it follows the same rule.
+		const recordedPreset = from?.preset === "" || isAgentPresetName(from?.preset) ? from?.preset : undefined;
+		const preset = bareRestore ? (recordedPreset ?? body.preset) : (body.preset ?? recordedPreset);
 		let restore = body.restore === true;
 		let chat = false;
 		if (bareRestore) {
@@ -1493,6 +1530,16 @@ class GuiHost implements SessionHost {
 		if (thinking) args.push("--thinking", thinking);
 		if (workDetail) args.push("--work-detail", workDetail);
 		if (approvalMode) args.push("--approval-mode", approvalMode);
+		if (preset === "") args.push("--no-preset");
+		else if (preset) {
+			// omp refuses an unknown preset at startup; refuse it here, where the page can show why.
+			try {
+				await loadAgentPreset(preset, cwd);
+			} catch (err) {
+				return fail(400, "bad-request", err instanceof Error ? err.message : String(err));
+			}
+			args.push("--preset", preset);
+		}
 		// The first message goes in as omp's positional prompt, so the session starts working on it.
 		const firstMessage = resume ? undefined : prompt?.trim() || undefined;
 		if (firstMessage) args.push("--", firstMessage);
@@ -1529,6 +1576,7 @@ class GuiHost implements SessionHost {
 			thinking: firstMessage ? thinking : undefined,
 			workDetail,
 			approvalMode,
+			preset,
 			chat,
 			restoredFrom: from?.guiId,
 		};

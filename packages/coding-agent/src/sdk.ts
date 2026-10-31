@@ -789,6 +789,8 @@ export interface CreateAgentSessionOptions {
 	noContextFiles?: boolean;
 	/** Drop every context file named `AGENTS.md`: from `contextFiles`, cwd discovery, and additional workspace roots. Set for task subagents. */
 	excludeAgentsMd?: boolean;
+	/** Drop discovered user-level context files (`~/.omp/agent/AGENTS.md` and the like); project files still load. Set by an agent preset with `user-context: false`. */
+	noUserContextFiles?: boolean;
 	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
 	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
@@ -1321,7 +1323,7 @@ export async function discoverContextFiles(
 	cwd?: string,
 	_agentDir?: string,
 	disabledExtensions?: string[],
-): Promise<Array<{ path: string; content: string; depth?: number }>> {
+): Promise<Array<{ path: string; content: string; depth?: number; level?: "user" | "project" }>> {
 	return await loadContextFilesInternal({
 		cwd: cwd ?? getProjectDir(),
 		disabledExtensions,
@@ -1920,8 +1922,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
 	// session-context build, tool creation, MCP discovery, and extension discovery.
 	const excludeAgentsMd = options.excludeAgentsMd === true;
-	const contextFileFilter = <T extends { path: string }>(files: T[]): T[] =>
-		excludeAgentsMd ? withoutAgentsMd(files) : files;
+	const noUserContextFiles = options.noUserContextFiles === true;
+	const contextFileFilter = <T extends { path: string; level?: string }>(files: T[]): T[] => {
+		const kept = noUserContextFiles ? files.filter(file => file.level !== "user") : files;
+		return excludeAgentsMd ? withoutAgentsMd(kept) : kept;
+	};
 	const pinnedContextFiles = options.contextFiles
 		? contextFileFilter(options.contextFiles)
 		: options.noContextFiles

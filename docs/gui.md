@@ -149,6 +149,17 @@ From settings follows `/settings` (Interaction, Tool Approval) from its next
 tool call; one started with a picked mode keeps that mode until it ends, since
 the flag outranks the saved setting.
 
+The Preset picker chooses the [agent preset](agent-presets.md) a new session
+starts from. It lists the project's `.omp/presets/` and the user's
+`~/.omp/agent/presets/`, or only the user's for a chat. Default (the initial
+pick) passes no flag, so the session takes the `agentPreset` setting; the chip
+names the preset that setting gives the project, and the menu then offers No
+preset (`--no-preset`) to start without it. Picking a preset passes
+`--preset`. A model or effort picked on the page outranks the preset's. The
+pick is not remembered between page loads; a restored session comes back with
+the choice it was started with, while a session resumed from the list takes
+the project's default.
+
 In a session, each turn's work (thinking and tool calls) runs down a timeline
 on the left, and the assistant's answer sits at full width between those runs.
 Answers draw Markdown as the terminal reads it, plus what a browser can show:

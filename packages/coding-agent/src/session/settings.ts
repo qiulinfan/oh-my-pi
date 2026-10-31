@@ -101,6 +101,13 @@ export const cfgPrewalkEnabled = register({
 	},
 });
 
+/** The agent preset a session starts from when the command line names none (`--preset`, `--no-preset`); "" for none. */
+export const cfgAgentPreset = register({
+	id: "agentPreset",
+	type: "string",
+	default: "",
+});
+
 export const cfgPrewalkFrom = register({
 	id: "prewalk.from",
 	type: "string",

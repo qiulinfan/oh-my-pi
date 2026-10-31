@@ -119,6 +119,13 @@ export const launchHelp = {
 		"no-extensions": Flags.boolean({
 			description: "Disable extension discovery (explicit -e paths still work)",
 		}),
+		preset: Flags.string({
+			description:
+				"Start from an agent preset in .omp/presets/ or ~/.omp/agent/presets/ (flags given here still win); overrides the agentPreset setting",
+		}),
+		"no-preset": Flags.boolean({
+			description: "Start without an agent preset, even when the agentPreset setting names one",
+		}),
 		"no-skills": Flags.boolean({ description: "Disable skills discovery and loading" }),
 		skills: Flags.string({ description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)" }),
 		"no-rules": Flags.boolean({ description: "Disable rules discovery and loading" }),
