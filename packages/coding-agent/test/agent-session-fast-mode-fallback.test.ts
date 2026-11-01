@@ -49,6 +49,7 @@ describe("AgentSession fast mode after a model rejects priority", () => {
 	beforeAll(async () => {
 		dir = TempDir.createSync("@pi-fast-mode-fallback-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
 	});
 
 	afterAll(() => {

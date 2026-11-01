@@ -70,7 +70,8 @@ import {
 	cfgEvalAutoProvision,
 	cfgEvalToolsEnabled,
 } from "../eval/settings";
-import { cfgTaskMaxRecursionDepth } from "../task/settings";
+import { cfgTaskMaxRecursionDepth, perCallModelEnabled } from "../task/settings";
+import { getPerCallModelAdvertisement, type PerCallModelAdvertisement } from "../task/model-approval";
 import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
 
 /** Language tokens the eval tool accepts, in stable display order. */
@@ -200,6 +201,10 @@ export interface EvalToolDescriptionOptions {
 	inlineTopics?: boolean;
 	/** Whether missing runtimes and environments may be provisioned automatically. */
 	autoProvision?: boolean;
+	/** `task.perCallModel` accepts `model` for eval: advertise it on `agent()`/`workpool()`. Default: false. */
+	perCallModel?: boolean;
+	/** Operator-owned role selectors and narrowing allowlist; bare values use the current model registry. */
+	perCallModelAdvertisement?: PerCallModelAdvertisement;
 	/** Canonical and wire names currently accepted by the session tool bridge. */
 	toolNames?: readonly string[];
 	/** Configured global ceiling for nonzero cell deadlines. */
@@ -219,6 +224,8 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 		spawnDefaultAgent: spawnPolicy.defaultAgent,
 		spawnAllowedAgentsText: spawnPolicy.allowedPromptText,
 		autoProvision: options.autoProvision ?? true,
+		perCallModel: options.perCallModel ?? false,
+		perCallModelAdvertisement: options.perCallModelAdvertisement,
 		timeoutMin: TOOL_TIMEOUTS.eval.min,
 		timeoutMax: TOOL_TIMEOUTS.eval.max,
 		configuredMaxTimeout: options.maxTimeout !== undefined && options.maxTimeout > 0 ? options.maxTimeout : undefined,
@@ -421,6 +428,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			cfgTaskMaxRecursionDepth.get(session.settings),
 			session.taskDepth ?? 0,
 		);
+		const perCallModel = perCallModelEnabled(session.settings, "eval");
 		return {
 			py: backends.python,
 			js: backends.js,
@@ -432,6 +440,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			preludes: this.#advertisedPreludes(session),
 			inlineTopics: session.isToolActive?.("read") === false,
 			autoProvision: cfgEvalAutoProvision.get(session.settings),
+			perCallModel,
+			perCallModelAdvertisement: perCallModel
+				? getPerCallModelAdvertisement(session.settings, session.getActiveModel?.(), session.modelRegistry)
+				: undefined,
 			toolNames: session.getEvalBridgeToolNames?.(),
 			maxTimeout: cfgToolsMaxTimeout.get(session.settings),
 		};
@@ -593,6 +605,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const run = async (
 			runSignal: AbortSignal | undefined,
 			emitUpdate: ((text: string, details: EvalToolDetails) => void) | undefined,
+			foreground: () => boolean,
 		): Promise<AgentToolResult<EvalToolDetails | undefined>> => {
 			// Re-check the retained namespace against the streamed planning snapshot:
 			// timers, background work, or concurrent session users may have changed
@@ -622,6 +635,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					signal: runSignal,
 					sessionAbortController,
 					emitUpdate,
+					foreground,
 				}),
 			);
 			return session.trackEvalExecution?.(execution, sessionAbortController) ?? execution;
@@ -631,7 +645,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		// At the running-job cap, fall through to direct foreground execution
 		// instead of failing every eval call until a slot frees up.
 		if (!cfgEvalAutoBackgroundEnabled.get(session.settings) || !autoBgManager || autoBgManager.atCapacity) {
-			return await run(signal, emitToolUpdate);
+			return await run(signal, emitToolUpdate, () => true);
 		}
 
 		const thresholdMs = Math.max(0, Math.floor(cfgEvalAutoBackgroundThresholdMs.get(session.settings)));
@@ -665,16 +679,24 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					details: EvalToolDetails | undefined,
 					state: "running" | "completed" | "failed" | "cancelled",
 				): void => {
-					if (backgrounded) emitToolUpdate?.(text, { ...details, async: { state, jobId, type: "eval" } });
+					// Replies are drawn from the frames of the call while it waits and from its result;
+					// a job frame repeating them after the call returned would draw them again.
+					if (backgrounded) {
+						emitToolUpdate?.(text, { ...details, replies: undefined, async: { state, jobId, type: "eval" } });
+					}
 				};
 				try {
-					const result = await run(runSignal, (text, details) => {
-						latestText = text;
-						latestDetails = details;
-						void reportProgress(text, { async: { state: "running", jobId, type: "eval" } });
-						if (backgrounded) showJobFrame(text, details, "running");
-						else emitToolUpdate?.(text, details);
-					});
+					const result = await run(
+						runSignal,
+						(text, details) => {
+							latestText = text;
+							latestDetails = details;
+							void reportProgress(text, { async: { state: "running", jobId, type: "eval" } });
+							if (backgrounded) showJobFrame(text, details, "running");
+							else emitToolUpdate?.(text, details);
+						},
+						() => !backgrounded,
+					);
 					const finalText =
 						(result.content.find(block => block.type === "text")?.text ?? "") +
 						formatOutputNotice(result.details?.meta);
@@ -816,8 +838,11 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		signal: AbortSignal | undefined;
 		sessionAbortController: AbortController;
 		emitUpdate?: (text: string, details: EvalToolDetails) => void;
+		/** Whether the call still waits on the cells; `out://` replies are drawn only then. */
+		foreground: () => boolean;
 	}): Promise<AgentToolResult<EvalToolDetails | undefined>> {
-		const { session, cells, languages, notice, excludeWebP, signal, sessionAbortController, emitUpdate } = options;
+		const { session, cells, languages, notice, excludeWebP, signal, sessionAbortController, emitUpdate, foreground } =
+			options;
 		let outputSink: OutputSink | undefined;
 		let outputSummary: OutputSummary | undefined;
 		let outputDumped = false;
@@ -837,6 +862,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
 			const images: ImageContent[] = [];
 			const callStatus: StatusEventLog = {};
+			const replies: string[] = [];
 
 			const cellResults: EvalCellResult[] = cells.map(cell => ({
 				index: cell.index,
@@ -872,6 +898,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					details.statusEvents = callStatus.statusEvents;
 					details.statusEventsElided = callStatus.statusEventsElided;
 				}
+				if (replies.length > 0) {
+					details.replies = [...replies];
+				}
 				if (notice) {
 					details.notice = notice;
 				}
@@ -896,6 +925,17 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			const pushUpdate = () => {
 				if (!emitUpdate || updateTimer) return;
 				updateTimer = setTimeout(flushUpdate, LIVE_UPDATE_INTERVAL_MS);
+			};
+			// What bridged calls write to `out://`. Each frame carries the replies so far and the transcript
+			// draws the new ones; once the call returns (backgrounded), nothing would draw them.
+			const onReply = (text: string): void => {
+				if (!foreground()) {
+					throw new ToolError("out:// replies reach the user only while the eval cell runs in the foreground.");
+				}
+				replies.push(text);
+				// Publish now rather than on the coalescing timer, so a cell backgrounded right after still carries it.
+				pushUpdate();
+				flushUpdate();
 			};
 
 			const sessionFile = session.getSessionFile?.() ?? undefined;
@@ -967,6 +1007,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						onChunk: chunk => {
 							outputSink!.push(chunk);
 						},
+						onReply,
 						onStatus: event => {
 							if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
 								idle?.pause();
@@ -1080,6 +1121,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						cells: cellResults,
 						statusEvents: callStatus.statusEvents,
 						statusEventsElided: callStatus.statusEventsElided,
+						replies: replies.length > 0 ? replies : undefined,
 						isError: true,
 					};
 					if (notice) details.notice = notice;
@@ -1111,6 +1153,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				cells: cellResults,
 				statusEvents: callStatus.statusEvents,
 				statusEventsElided: callStatus.statusEventsElided,
+				replies: replies.length > 0 ? replies : undefined,
 			};
 			if (notice) details.notice = notice;
 

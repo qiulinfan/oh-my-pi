@@ -154,6 +154,9 @@ class LazyFakeSession {
 	setActiveToolsByName(): void {}
 	setClientBridge(): void {}
 	setMcpServerInstructionsSource(): void {}
+	registerSessionChangeCallback(): () => void {
+		return () => {};
+	}
 	getPlanModeState(): undefined {
 		return undefined;
 	}
