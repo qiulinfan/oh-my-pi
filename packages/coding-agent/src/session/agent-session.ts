@@ -1215,6 +1215,8 @@ export class AgentSession implements SettingsScope {
 	 * refreshed exactly once rather than on every response (#9001).
 	 */
 	#lazyContextRefreshed = new Set<string>();
+	// `provider/model` keys already told that fast mode is unavailable for them.
+	#fastModeUnavailableNoticed = new Set<string>();
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
@@ -4797,16 +4799,22 @@ export class AgentSession implements SettingsScope {
 						assistantMsg.serviceTier,
 					);
 				}
+				// The provider remembers the rejection per model and sends that model's
+				// later requests without priority, so one model without fast mode (a
+				// subagent's smaller model, say) leaves it on for every other model.
 				if (
 					assistantMsg.disabledFeatures?.includes("priority") &&
 					this.serviceTierByFamily.anthropic === "priority"
 				) {
-					this.setServiceTierFamily("anthropic", undefined);
-					this.emitNotice(
-						"warning",
-						"Priority/fast mode rejected for this model; retried without it. Fast mode is now off.",
-						"priority",
-					);
+					const key = `${assistantMsg.provider}/${assistantMsg.model}`;
+					if (!this.#fastModeUnavailableNoticed.has(key)) {
+						this.#fastModeUnavailableNoticed.add(key);
+						this.emitNotice(
+							"info",
+							`Fast mode is not available for ${assistantMsg.model}; its requests run at standard speed. Fast mode stays on for other models.`,
+							"priority",
+						);
+					}
 				}
 				this.#ttsr.onAssistantMessageEnd(assistantMsg);
 				if (this.#handoff.isGeneratingHandoff) {
