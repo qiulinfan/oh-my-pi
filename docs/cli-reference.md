@@ -261,7 +261,8 @@ print-mode disposal semantics when the advisor runtime is enabled.
 `--no-ui` (with `--mode rpc` or `--mode rpc-ui`) runs extensions headless: `ctx.hasUI` is `false`, extension dialogs resolve to defaults, and extension presentation updates are dropped. In `rpc-ui`, tool UI such as `ask` still sends `extension_ui_request` frames for the host to answer. Host-issued `login` UI is unaffected. See [RPC startup](./rpc.md#startup).
 
 Windows fork updates replace the standalone binary on PATH while existing sessions keep running.
-The startup check installs newer releases in the background; the next session uses the new binary.
+Interactive, ACP and RPC startup check for newer releases in the background; the next session uses the new binary.
+Protocol handshakes do not wait for the check, and update notices never enter protocol stdout.
 Both the binary and digest are read from the selected `qiulinfan/oh-my-pi` release.
 
 ## Subcommands
