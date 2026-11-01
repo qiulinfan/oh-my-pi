@@ -21,13 +21,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import {
-	$env,
-	isBunTestRuntime,
-	isCompiledBinary,
-	isGuiPipeTransport,
-	setInteractiveHost,
-} from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, isGuiPipeTransport, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
@@ -48,10 +42,16 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
-import { fetchBuild } from "./cli/build-service";
+import { fetchForkBuild, forkBuildLabel, forkRelation } from "./cli/fork-release";
 import { takeEditorContext } from "./gui/editor-context";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import { getLatestRelease, isSourceCheckout, managedInstallName } from "./cli/update-cli";
+import {
+	claimStartupUpdateCheck,
+	isSourceCheckout,
+	managedInstallName,
+	runsInstalledBinary,
+	startBackgroundUpdate,
+} from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { type AgentPreset, applyAgentPreset, resolveLaunchPreset } from "./config/agent-presets";
 import { ModelRegistry } from "./config/model-registry";
@@ -194,7 +194,7 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
-	cfgUpdateChannel,
+	cfgUpdateAuto,
 } from "./modes/settings";
 import {
 	cfgDefaultThinkingLevel,
@@ -290,21 +290,24 @@ function writeStartupWarning(warning: string): void {
 	process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 }
 
-async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
+/**
+ * Ask this fork's releases whether a newer build is out. When one is and this
+ * omp is the installed binary, it is installed in the background (with
+ * `update.auto`), effective from the next start.
+ */
+async function checkForNewVersion(): Promise<{ label: string; installing: boolean } | undefined> {
 	if (!cfgStartupCheckUpdate.get(settings)) {
 		return;
 	}
 	try {
-		// Checkouts update through git and a manager (Tern) updates its omp itself:
-		// "run omp update" would be wrong advice for both.
+		// Checkouts update through git and a manager (Tern) updates its omp itself.
 		if (isSourceCheckout() || (await managedInstallName(process.execPath))) return;
-		const channel = cfgUpdateChannel.get(settings);
-		// A compiled binary updates from the build service; naming the running
-		// version lets the service prepare the patch `omp update` will then use.
-		const { version } = isCompiledBinary()
-			? await fetchBuild({ channel }, { timeoutMs: 5_000, fromVersion: currentVersion })
-			: await getLatestRelease({ timeoutMs: 5_000, channel });
-		return Bun.semver.order(version, currentVersion) > 0 ? version : undefined;
+		if (!claimStartupUpdateCheck()) return;
+		const build = await fetchForkBuild({ timeoutMs: 5_000 });
+		if ((await forkRelation(build, { timeoutMs: 5_000 })) !== "newer") return;
+		const installing = cfgUpdateAuto.get(settings) && runsInstalledBinary();
+		if (installing) startBackgroundUpdate();
+		return { label: forkBuildLabel(build.version, build.commit), installing };
 	} catch {
 		return undefined;
 	}
@@ -661,7 +664,7 @@ async function runInteractiveMode(
 	version: string,
 	startupChangelog: StartupChangelogSelection | undefined,
 	notifs: (InteractiveModeNotify | null)[],
-	versionCheckPromise: Promise<string | undefined>,
+	versionCheckPromise: Promise<{ label: string; installing: boolean } | undefined>,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
@@ -760,7 +763,7 @@ async function runInteractiveMode(
 				return;
 			}
 			if (newVersion) {
-				mode.showNewVersionNotification(newVersion);
+				mode.showNewVersionNotification(newVersion.label, newVersion.installing);
 			}
 		});
 
@@ -2894,7 +2897,7 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);
+				const versionCheckPromise = checkForNewVersion().catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

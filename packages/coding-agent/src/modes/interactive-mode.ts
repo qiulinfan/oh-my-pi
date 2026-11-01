@@ -8654,8 +8654,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setWorkingMessage(message);
 	}
 
-	showNewVersionNotification(newVersion: string): void {
-		this.#uiHelpers.showNewVersionNotification(newVersion);
+	showNewVersionNotification(newVersion: string, installing?: boolean): void {
+		this.#uiHelpers.showNewVersionNotification(newVersion, installing);
 	}
 
 	clearEditor(): void {

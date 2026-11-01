@@ -4,6 +4,7 @@
  * Handles `omp update` to check for and install updates.
  * Uses the installer that owns the active omp executable when it can be detected.
  */
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,7 +16,8 @@ import {
 	APP_NAME,
 	compareVersions,
 	formatBytes,
-	getProjectDir,
+	getAgentDir,
+	getLogsDir,
 	isCompiledBinary,
 	isEnoent,
 	VERSION,
@@ -23,7 +25,6 @@ import {
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
-import { Settings, settings } from "../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	isTimeoutError,
@@ -31,7 +32,7 @@ import {
 	unsupportedProxyMessage,
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
-import { type BuildAnswer, type BuildPatch, type Fetch, fetchBuild, type UpdateChannel } from "./build-service";
+import { type BuildAnswer, type BuildPatch, type Fetch, type UpdateChannel } from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
 	loadNpmRegistryResolver,
@@ -40,7 +41,15 @@ import {
 	npmRegistryPackageUrl,
 } from "./npm-registry";
 
-import { cfgUpdateChannel } from "../modes/settings";
+import {
+	BUILD_COMMIT,
+	FORK_REPO,
+	type ForkBuild,
+	type ForkRelation,
+	fetchForkBuild,
+	forkBuildLabel,
+	forkRelation,
+} from "./fork-release";
 
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
 const HOMEBREW_FORMULA = "can1357/tap/omp";
@@ -980,17 +989,6 @@ export async function pruneBunInstallCache(
 	return { scannedPackages, removedEntries };
 }
 
-async function resolveBunInstallCacheDir(): Promise<string | undefined> {
-	try {
-		const result = await $`bun pm cache`.quiet().nothrow();
-		if (result.exitCode !== 0) return undefined;
-		const output = result.text().trim();
-		return output.length > 0 ? output : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 interface BunGlobalInstallLocations {
 	globalDir?: string;
 	globalBinDir?: string;
@@ -1011,49 +1009,6 @@ export function resolveBunGlobalNodeModulesDirFromLocations({
 		return path.join(path.dirname(cacheDir), "global", "node_modules");
 	}
 	return undefined;
-}
-
-async function resolveBunGlobalNodeModulesDir(cacheDir: string): Promise<string | undefined> {
-	try {
-		const result = await $`bun pm bin -g`.quiet().nothrow();
-		const globalBinDir = result.exitCode === 0 ? result.text().trim() : undefined;
-		return resolveBunGlobalNodeModulesDirFromLocations({
-			globalDir: process.env.BUN_INSTALL_GLOBAL_DIR,
-			globalBinDir,
-			cacheDir,
-		});
-	} catch {
-		return resolveBunGlobalNodeModulesDirFromLocations({
-			globalDir: process.env.BUN_INSTALL_GLOBAL_DIR,
-			cacheDir,
-		});
-	}
-}
-
-async function collectInstalledPackageNames(nodeModulesDir: string): Promise<Set<string>> {
-	const packageNames = new Set<string>();
-	for (const entry of await readdirIfExists(nodeModulesDir)) {
-		if (!entry.isDirectory() || entry.name === ".bin") continue;
-		if (entry.name.startsWith("@")) {
-			for (const scopedEntry of await readdirIfExists(path.join(nodeModulesDir, entry.name))) {
-				if (scopedEntry.isDirectory()) packageNames.add(`${entry.name}/${scopedEntry.name}`);
-			}
-			continue;
-		}
-		packageNames.add(entry.name);
-	}
-	return packageNames;
-}
-
-async function pruneBunCacheAfterGlobalInstall(): Promise<BunInstallCachePruneResult | undefined> {
-	const cacheDir = await resolveBunInstallCacheDir();
-	if (!cacheDir) return undefined;
-	const globalNodeModulesDir = await resolveBunGlobalNodeModulesDir(cacheDir);
-	const packageNames = globalNodeModulesDir
-		? await collectInstalledPackageNames(globalNodeModulesDir)
-		: new Set<string>();
-	if (packageNames.size === 0 && !path.basename(cacheDir).toLowerCase().includes("omp")) return undefined;
-	return await pruneBunInstallCache(cacheDir, packageNames.size === 0 ? undefined : packageNames);
 }
 
 /**
@@ -1084,37 +1039,6 @@ async function reportedVersionAtPath(binaryPath: string): Promise<string | undef
 	} catch {
 		return undefined;
 	}
-}
-
-/** Whether `filePath` starts like an ELF, PE, or Mach-O executable rather than a script. */
-async function isNativeExecutable(filePath: string): Promise<boolean> {
-	const head = Buffer.alloc(4);
-	try {
-		const file = await fs.promises.open(filePath, "r");
-		try {
-			if ((await file.read(head, 0, 4, 0)).bytesRead < 4) return false;
-		} finally {
-			await file.close();
-		}
-	} catch {
-		return false;
-	}
-	if (head.toString("latin1") === "\x7fELF" || head.toString("latin1", 0, 2) === "MZ") return true;
-	return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(head.readUInt32BE(0));
-}
-
-/**
- * The installed version a binary update names to the build service
- * (`from_version`) so its answer carries a patch from that build: what
- * `targetPath` reports when it is a native executable, else the running
- * build's. A patch is applied only to a file whose SHA-256 is the patch's
- * base, so a wrong guess costs a whole-file download, never a broken install.
- */
-async function installedBuildVersion(targetPath: string): Promise<string> {
-	const real = tryRealpath(targetPath);
-	if (isCompiledBinary() && real !== undefined && real === tryRealpath(process.execPath)) return VERSION;
-	if (!(await isNativeExecutable(targetPath))) return VERSION;
-	return (await reportedVersionAtPath(targetPath)) ?? VERSION;
 }
 
 /**
@@ -1174,11 +1098,6 @@ function printVerificationResult(result: InstalledVersionVerification, expectedV
 	}
 	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
 	console.log(chalk.yellow(`You may need to reinstall: ${installerHint()}`));
-}
-
-/** Verify the PATH-resolved launcher and print the outcome. */
-async function printVerification(expectedVersion: string): Promise<void> {
-	printVerificationResult(await verifyInstalledVersion(expectedVersion), expectedVersion);
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -1507,44 +1426,6 @@ export interface RenameMigrationSteps {
 	verify(): Promise<InstalledVersionVerification>;
 }
 
-/** Production {@link RenameMigrationSteps}: bun/npm global installs plus PATH verification. */
-function packageManagerMigrationSteps(manager: "bun" | "npm", release: ReleaseInfo): RenameMigrationSteps {
-	const nativeTag = currentNativeTag();
-	return {
-		async install() {
-			if (manager === "bun") {
-				const args = buildBunInstallArgs(release.version, nativeTag, release.packages, {
-					registry: release.registry,
-					supportsReleaseAgeOverride: await bunSupportsReleaseAgeOverride(),
-				});
-				return (await $`bun ${args}`.nothrow()).exitCode;
-			}
-			const args = buildNpmInstallArgs(release.version, nativeTag, release.packages, {
-				force: true,
-				registry: release.registry,
-			});
-			return (
-				await $`npm ${args}`.env(buildNpmUpdateEnv(process.env, await npmSupportsReleaseAgeOverride())).nothrow()
-			).exitCode;
-		},
-		async removeOld() {
-			// One invocation per package: a single batched remove fails wholesale
-			// when any name is absent (e.g. the platform leaf on an old install),
-			// which would skip the agent package that actually owns the bin.
-			let agentExit = 0;
-			for (const pkg of buildRenameCleanupPackages(release.packages, nativeTag)) {
-				const result =
-					manager === "bun"
-						? await $`bun remove -g ${pkg}`.quiet().nothrow()
-						: await $`npm uninstall -g ${pkg}`.quiet().nothrow();
-				if (pkg === PACKAGE) agentExit = result.exitCode;
-			}
-			return agentExit;
-		},
-		verify: () => verifyInstalledVersion(release.version),
-	};
-}
-
 /**
  * Migrate a package-manager install across an `omp.rename` hop without a
  * window where no working `omp` exists:
@@ -1587,75 +1468,6 @@ export async function migrateRenamedInstall(release: ReleaseInfo, steps: RenameM
 	printVerifiedVersion(release.version);
 }
 
-/** Older bun releases predate `--minimum-release-age` and reject unknown flags, so probe the installed help output before passing it. */
-async function bunSupportsReleaseAgeOverride(): Promise<boolean> {
-	const help = await $`bun install --help`.quiet().nothrow();
-	return help.exitCode === 0 && /--minimum-release-age\b/.test(help.text());
-}
-
-/**
- * npm predating `min-release-age` (11.10.0, npm/cli#8965) warns "Unknown env
- * config" for the overlay key and gains nothing from it. Probed from a neutral
- * directory: inside an npm workspaces checkout the config query exits with
- * ENOWORKSPACES before it ever reads the key.
- */
-async function npmSupportsReleaseAgeOverride(): Promise<boolean> {
-	const probe = await $`npm config get min-release-age`.cwd(os.tmpdir()).quiet().nothrow();
-	return probe.exitCode === 0 && probe.text().trim() !== "undefined";
-}
-
-/**
- * Update via package manager.
- *
- * Returns the PATH-resolved launcher check so the caller can repair a launcher
- * the manager left unusable, or `undefined` when a rename migration already
- * verified and reported its own result.
- */
-async function updateViaBun(release: ReleaseInfo): Promise<InstalledVersionVerification | undefined> {
-	console.log(chalk.dim("Updating via bun..."));
-	let verification: InstalledVersionVerification | undefined;
-	if (release.packages.pkg !== PACKAGE) {
-		await migrateRenamedInstall(release, packageManagerMigrationSteps("bun", release));
-	} else {
-		const args = buildBunInstallArgs(release.version, currentNativeTag(), release.packages, {
-			registry: release.registry,
-			supportsReleaseAgeOverride: await bunSupportsReleaseAgeOverride(),
-		});
-		const result = await $`bun ${args}`.nothrow();
-		if (result.exitCode !== 0) {
-			throw new Error(`bun install failed with exit code ${result.exitCode}`);
-		}
-		verification = await verifyInstalledVersion(release.version);
-	}
-	try {
-		const pruneResult = await pruneBunCacheAfterGlobalInstall();
-		if (pruneResult && pruneResult.removedEntries > 0) {
-			console.log(chalk.dim(`Pruned ${pruneResult.removedEntries} stale Bun cache entries`));
-		}
-	} catch (err) {
-		console.log(chalk.yellow(`Warning: could not prune stale Bun cache entries: ${err}`));
-	}
-	return verification;
-}
-
-async function updateViaNpm(release: ReleaseInfo): Promise<InstalledVersionVerification | undefined> {
-	console.log(chalk.dim("Updating via npm..."));
-	if (release.packages.pkg !== PACKAGE) {
-		await migrateRenamedInstall(release, packageManagerMigrationSteps("npm", release));
-		return undefined;
-	}
-	const args = buildNpmInstallArgs(release.version, currentNativeTag(), release.packages, {
-		registry: release.registry,
-	});
-	const result = await $`npm ${args}`
-		.env(buildNpmUpdateEnv(process.env, await npmSupportsReleaseAgeOverride()))
-		.nothrow();
-	if (result.exitCode !== 0) {
-		throw new Error(`npm install failed with exit code ${result.exitCode}`);
-	}
-
-	return await verifyInstalledVersion(release.version);
-}
 /** Injectable steps for {@link updateViaManager}; mirrors {@link RenameMigrationSteps}. */
 export interface ManagerUpdateSteps {
 	/** Manager name used in progress and recovery messages. */
@@ -1670,30 +1482,6 @@ export interface ManagerUpdateSteps {
 	verify(): Promise<InstalledVersionVerification>;
 	/** Take `launcherPath` over with the standalone release binary. */
 	repair(launcherPath: string): Promise<void>;
-}
-
-/**
- * Production {@link ManagerUpdateSteps}: a bun/npm global install plus an
- * in-place takeover with the build service's build of the same version.
- */
-function packageManagerUpdateSteps(manager: "bun" | "npm", release: ReleaseInfo): ManagerUpdateSteps {
-	return {
-		manager,
-		install: () => (manager === "bun" ? updateViaBun(release) : updateViaNpm(release)),
-		verify: () => verifyInstalledVersion(release.version),
-		repair: async launcherPath => {
-			// The launcher is a manager's script or shim, never a build a patch
-			// could start from, so the check names no installed version.
-			const build = await fetchBuild({ version: release.version });
-			// npm's script shims outrank `.exe` in PowerShell and Git Bash, so
-			// they must be retired rather than merely shadowed.
-			if (isWindowsScriptLauncherPath(launcherPath)) {
-				await updateViaShimTakeover(launcherPath, build);
-			} else {
-				await updateViaBinaryAt(launcherPath, build);
-			}
-		},
-	};
 }
 
 /**
@@ -1757,45 +1545,6 @@ export async function updateViaManager(
 			`This install is no longer managed by ${steps.manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
 		),
 	);
-}
-
-async function updateViaHomebrew(expectedVersion: string, force: boolean): Promise<void> {
-	console.log(chalk.dim("Updating Homebrew formulae..."));
-	const update = await $`brew update`.nothrow();
-	if (update.exitCode !== 0) {
-		throw new Error(`brew update failed with exit code ${update.exitCode}`);
-	}
-
-	console.log(chalk.dim("Updating via Homebrew..."));
-	const args = buildHomebrewUpdateArgs(force);
-	const result = await $`brew ${args}`.nothrow();
-	if (result.exitCode !== 0) {
-		throw new Error(`brew ${args[0]} failed with exit code ${result.exitCode}`);
-	}
-
-	await printVerification(expectedVersion);
-}
-
-async function updateViaMise(expectedVersion: string, force: boolean): Promise<void> {
-	console.log(chalk.dim("Updating via mise..."));
-	const env = buildMiseUpdateEnv();
-	const help = await $`mise upgrade --help`.env(env).quiet().nothrow();
-	const supportsReleaseAgeOverride = help.exitCode === 0 && /(?:--minimum-release-age|--before)\b/.test(help.text());
-	const args = buildMiseUpgradeArgs(supportsReleaseAgeOverride);
-	const result = await $`mise ${args}`.env(env).nothrow();
-	if (result.exitCode !== 0) {
-		throw new Error(`mise upgrade failed with exit code ${result.exitCode}`);
-	}
-
-	if (force) {
-		const forceArgs = buildMiseForceInstallArgs(expectedVersion);
-		const forceResult = await $`mise ${forceArgs}`.env(env).nothrow();
-		if (forceResult.exitCode !== 0) {
-			throw new Error(`mise install --force failed with exit code ${forceResult.exitCode}`);
-		}
-	}
-
-	await printVerification(expectedVersion);
 }
 
 // Monotonic within this process so two updates started in the same millisecond
@@ -2085,209 +1834,29 @@ export async function updateViaShimTakeover(
  * mode prefers a bun-based install whenever bun is present, which would send
  * a user recovering from a binary-only release straight back through bun.
  */
+/** Where to get a binary by hand when an update cannot proceed. */
 function installerHint(): string {
-	return process.platform === "win32"
-		? "& ([scriptblock]::Create((irm https://omp.sh/install.ps1))) -Binary"
-		: "curl -fsSL https://omp.sh/install | sh -s -- --binary";
-}
-
-/** Persisted channel, or undefined when settings are unavailable (SDK/test embedding without `Settings.init()`). */
-function readPersistedChannel(): UpdateChannel | undefined {
-	try {
-		return cfgUpdateChannel.get(settings);
-	} catch {
-		return undefined;
-	}
-}
-
-/** Persist an explicit channel switch; tolerated as a no-op when settings are unavailable. */
-function persistChannel(channel: UpdateChannel): void {
-	try {
-		cfgUpdateChannel.set(settings, channel);
-	} catch {
-		// Outside a CLI host the explicit flag still applied for this run.
-	}
-}
-
-type BinaryUpdateTarget = Extract<UpdateTarget, { method: "binary" }>;
-type ManagedUpdateTarget = Exclude<UpdateTarget, { method: "binary" }>;
-
-/** What `omp update` was asked to do, after resolving the channel. */
-interface UpdateRequest {
-	force: boolean;
-	check: boolean;
-	channel: UpdateChannel;
-	/** An explicit channel differing from the persisted one. */
-	isChannelSwitch: boolean;
-	/** Persist `channel` once the update succeeds (`--canary`/`--stable` given). */
-	persistChannel: boolean;
-}
-
-/**
- * Print how the offered `version` relates to the running build. Returns false
- * when there is nothing to install: not newer, and neither `--force` nor a
- * channel switch asks for it.
- */
-function announceOffer(version: string, request: UpdateRequest): boolean {
-	const comparison = compareVersions(version, VERSION);
-	if (comparison <= 0 && !request.force && !request.isChannelSwitch) {
-		const icon = theme?.status?.success ?? "✔";
-		console.log(chalk.green(`${icon} Already up to date`));
-		return false;
-	}
-	if (request.isChannelSwitch) {
-		console.log(
-			chalk.yellow(
-				`Switching to ${request.channel} ${version}${comparison < 0 ? ` (downgrade from ${VERSION})` : ""}`,
-			),
-		);
-	} else if (comparison > 0) {
-		console.log(chalk.cyan(`New version available: ${version}`));
-	} else {
-		console.log(chalk.yellow(`Forcing reinstall of ${version}`));
-	}
-	return true;
-}
-
-/**
- * Update a standalone binary install from the build service: the newest build
- * on the channel, asked with the installed version so the answer can carry a
- * patch from it. npm is never consulted.
- */
-async function runBinaryUpdate(
-	target: BinaryUpdateTarget | undefined,
-	targetError: unknown,
-	request: UpdateRequest,
-): Promise<void> {
-	let build: BuildAnswer;
-	try {
-		const fromVersion = target ? await installedBuildVersion(target.path) : VERSION;
-		build = await fetchBuild({ channel: request.channel }, { fromVersion });
-	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
-	}
-	if (!announceOffer(build.version, request) || request.check) return;
-
-	try {
-		if (!target) throw targetError;
-		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
-		if (request.persistChannel) persistChannel(request.channel);
-	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
-	}
-}
-
-/**
- * Replace a bun/npm install with the standalone binary because npm says the
- * release is binary-only ({@link shouldForceBinaryUpdate}).
- *
- * The launcher is resolved again without package-manager routing: a manager
- * symlink is taken over in place, a Windows script launcher gets `omp.exe`
- * beside it. The binary is the build service's newest on the channel. A build
- * older than npm's release that would not move the install forward means the
- * release is still uploading, so the update stops instead of reinstalling or
- * downgrading.
- */
-async function updateToStandaloneBinary(
-	manager: "bun" | "npm",
-	release: ReleaseInfo,
-	channel: UpdateChannel,
-): Promise<void> {
-	const target = await resolveUpdateTarget({ allowPackageManagers: false });
-	const fromVersion = target.method === "binary" ? await installedBuildVersion(target.path) : VERSION;
-	const build = await fetchBuild({ channel }, { fromVersion });
-	if (compareVersions(build.version, release.version) < 0 && compareVersions(build.version, VERSION) <= 0) {
-		throw new Error(
-			`${release.version} ships as a standalone binary, but the newest ${channel} build of it published for this platform is ${build.version}; retry in a few minutes once it finishes uploading, or reinstall with: ${installerHint()}`,
-		);
-	}
-	if (build.version !== release.version) {
-		console.log(chalk.dim(`Installing the newest published ${channel} build, ${build.version}.`));
-	}
-	const unmanaged = `This install is no longer managed by ${manager}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`;
-	if (target.method === "binary") {
-		if (target.replacesSymlink) {
-			console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
-		}
-		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
-		if (target.replacesSymlink) console.log(chalk.yellow(unmanaged));
-		return;
-	}
-	// Without package-manager routing only a Windows script launcher resolves
-	// to a manager (the bun/npm bin-dir probes are skipped), so its path is known.
-	if (target.method !== "npm" || !target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
-	console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
-	await updateViaShimTakeover(target.path, build);
-	console.log(chalk.yellow(unmanaged));
-}
-
-/**
- * Update a package-manager install (bun, npm, Homebrew, mise, Nix) to npm's
- * release for the channel.
- */
-async function runManagedUpdate(
-	target: ManagedUpdateTarget | undefined,
-	targetError: unknown,
-	request: UpdateRequest,
-): Promise<void> {
-	let release: ReleaseInfo;
-	try {
-		release = await getLatestRelease({ channel: request.channel });
-	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
-	}
-	if (!announceOffer(release.version, request)) return;
-	if (release.packages.pkg !== PACKAGE) {
-		console.log(chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`));
-	}
-	if (request.check) return;
-
-	try {
-		if (!target) throw targetError;
-		if (
-			request.channel === "canary" &&
-			(target.method === "nix" || target.method === "brew" || target.method === "mise")
-		) {
-			console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
-			return;
-		}
-		if (target.method === "nix") {
-			console.log(chalk.yellow("This installation is managed by Nix and cannot update itself."));
-			console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
-			return;
-		}
-		if (target.method === "brew") {
-			await updateViaHomebrew(release.version, request.force);
-		} else if (target.method === "mise") {
-			await updateViaMise(release.version, request.force);
-		} else if (shouldForceBinaryUpdate(release)) {
-			await updateToStandaloneBinary(target.method, release, request.channel);
-		} else {
-			await updateViaManager(release, target.path, packageManagerUpdateSteps(target.method, release));
-		}
-		if (request.persistChannel) persistChannel(request.channel);
-	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
-	}
+	return `https://github.com/${FORK_REPO}/releases/latest`;
 }
 
 /**
  * Run the update command.
  *
- * The installer that owns the PATH `omp` decides where the version comes
- * from: a standalone binary asks the build service, a package-manager install
- * asks npm. When no target resolves, the running build's kind decides, so
- * `--check` still answers; installing then fails on the unresolved target.
+ * This fork installs only its own releases ({@link fetchForkBuild}): the
+ * standalone binary on PATH is replaced in place. Upstream's build service,
+ * npm, Homebrew and mise would put upstream's build there, so an install they
+ * manage is refused, and so is the canary channel, which the fork does not
+ * publish.
  */
 export async function runUpdateCommand(opts: {
 	force: boolean;
 	check: boolean;
 	channel?: UpdateChannel;
 }): Promise<void> {
+	if (opts.channel === "canary") {
+		console.error(chalk.red(`${FORK_REPO} publishes no canary builds.`));
+		process.exit(1);
+	}
 	const ompPath = resolveOmpPath();
 	const manager = ompPath ? await managedInstallName(ompPath) : undefined;
 	if (manager) {
@@ -2296,33 +1865,96 @@ export async function runUpdateCommand(opts: {
 		);
 		return;
 	}
-	// `update.channel` picks the channel; --canary/--stable switch and persist it.
-	await Settings.init({ cwd: getProjectDir() });
-	console.log(chalk.dim(`Current version: ${VERSION}`));
-	const persistedChannel = readPersistedChannel() ?? "stable";
-	const channel = opts.channel ?? persistedChannel;
-	if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
-	const request: UpdateRequest = {
-		force: opts.force,
-		check: opts.check,
-		channel,
-		isChannelSwitch: opts.channel !== undefined && opts.channel !== persistedChannel,
-		persistChannel: opts.channel !== undefined,
-	};
+	console.log(chalk.dim(`Current version: ${forkBuildLabel(VERSION, BUILD_COMMIT)}`));
 
-	let target: UpdateTarget | undefined;
-	let targetError: unknown;
+	let build: ForkBuild;
+	let relation: ForkRelation;
 	try {
-		target = await resolveUpdateTarget({ allowPackageManagers: true });
+		build = await fetchForkBuild();
+		relation = await forkRelation(build);
 	} catch (err) {
-		targetError = err;
+		console.error(chalk.red(`Failed to check for updates: ${err}`));
+		process.exit(1);
 	}
-	if (target?.method === "binary") {
-		await runBinaryUpdate(target, targetError, request);
-	} else if (!target && isCompiledBinary()) {
-		await runBinaryUpdate(undefined, targetError, request);
-	} else {
-		await runManagedUpdate(target, targetError, request);
+	const label = forkBuildLabel(build.version, build.commit);
+	if (relation !== "newer" && !opts.force) {
+		const icon = theme?.status?.success ?? "✔";
+		const why =
+			relation === "same"
+				? "Already up to date"
+				: relation === "older"
+					? `Already newer than the latest release, ${label}`
+					: `This build is not on the line of the latest release, ${label}; --force installs it`;
+		console.log(relation === "diverged" ? chalk.yellow(why) : chalk.green(`${icon} ${why}`));
+		return;
+	}
+	console.log(chalk.cyan(relation === "newer" ? `New version available: ${label}` : `Forcing install of ${label}`));
+	if (opts.check) return;
+
+	try {
+		const target = await resolveUpdateTarget({ allowPackageManagers: true });
+		if (target.method !== "binary") {
+			throw new Error(
+				`this ${APP_NAME} is a ${target.method} install; ${FORK_REPO} updates only a standalone binary on PATH`,
+			);
+		}
+		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
+	} catch (err) {
+		console.error(chalk.red(`Update failed: ${err}`));
+		process.exit(1);
+	}
+}
+
+/**
+ * Whether the startup check may install in the background: a compiled binary
+ * that is the `omp` on PATH, the file `omp update` would replace. A copy run
+ * from elsewhere (a test, an older build) never updates the install.
+ */
+export function runsInstalledBinary(): boolean {
+	if (!isCompiledBinary() || isSourceCheckout()) return false;
+	const ompPath = resolveOmpPath();
+	const installed = ompPath ? tryRealpath(ompPath) : undefined;
+	return installed !== undefined && installed === tryRealpath(process.execPath);
+}
+
+/** How often the startup check asks GitHub, across every omp started on this machine. */
+const STARTUP_CHECK_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Claim this hour's startup check: false when another omp checked within
+ * {@link STARTUP_CHECK_INTERVAL_MS}, so starting many sessions stays within
+ * GitHub's unauthenticated rate limit and starts one background install.
+ */
+export function claimStartupUpdateCheck(now: number = Date.now()): boolean {
+	const stamp = path.join(getAgentDir(), "update-check");
+	try {
+		if (now - fs.statSync(stamp).mtimeMs < STARTUP_CHECK_INTERVAL_MS) return false;
+	} catch (err) {
+		if (!isEnoent(err)) return false;
+	}
+	try {
+		fs.mkdirSync(path.dirname(stamp), { recursive: true });
+		fs.writeFileSync(stamp, `${new Date(now).toISOString()}\n`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Run `omp update` detached, its output appended to `update.log` in the logs
+ * directory. The swap is a rename, so the running omp and every other open
+ * session keep the build they started with; the next start uses the new one.
+ */
+export function startBackgroundUpdate(): void {
+	const logDir = getLogsDir();
+	fs.mkdirSync(logDir, { recursive: true });
+	const log = fs.openSync(path.join(logDir, "update.log"), "a");
+	try {
+		const child = spawn(process.execPath, ["update"], { detached: true, stdio: ["ignore", log, log] });
+		child.unref();
+	} finally {
+		fs.closeSync(log);
 	}
 }
 
@@ -2337,16 +1969,15 @@ ${chalk.bold("Usage:")}
 
 ${chalk.bold("Options:")}
   -c, --check     Check for updates without installing
-  -f, --force     Force reinstall even if up to date
+  -f, --force     Install the latest release even if it is not newer
   -l, --plugins   Update installed plugins
-  --canary        Switch to the canary channel and update
-  --stable        Switch back to the stable channel
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} update              Update to latest version
   ${APP_NAME} update --check      Check if updates are available
   ${APP_NAME} update --force      Force reinstall
   ${APP_NAME} update -l           Update installed plugins
-  ${APP_NAME} update --canary    Switch to the canary channel and update
+
+Updates come from the releases of github.com/${FORK_REPO}.
 `);
 }

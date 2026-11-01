@@ -1,8 +1,8 @@
-# Builds this fork's omp for Windows (omp.exe) and Linux (for WSL) and publishes
-# both in one GitHub Release, so those machines install the fork by downloading
-# it instead of compiling it. Every upstream workflow is removed from this fork;
-# this is the only one.
-name: Fork Windows omp
+# Builds this fork's omp for macOS (arm64), Windows (omp.exe) and Linux (for WSL)
+# and publishes them in one GitHub Release, which `omp update` and the startup
+# check install from (src/cli/fork-release.ts). Every upstream workflow is
+# removed from this fork; this is the only one.
+name: Fork omp
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: fork-windows-omp-${{ github.ref }}
+  group: fork-omp-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -27,6 +27,8 @@ jobs:
           - { os: windows-2022, binary: omp.exe, asset: omp-windows-x64.exe }
           # ubuntu-22.04's glibc 2.35 keeps the binary runnable on newer distributions such as WSL's.
           - { os: ubuntu-22.04, binary: omp, asset: omp-linux-x64 }
+          # macos-15 is Apple silicon; build-binary.ts signs the binary ad hoc.
+          - { os: macos-15, binary: omp, asset: omp-darwin-arm64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -78,7 +80,11 @@ jobs:
           mkdir -p release
           cp "packages/coding-agent/dist/${{ matrix.binary }}" "release/${{ matrix.asset }}"
           cd release
-          sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -108,6 +114,6 @@ jobs:
           version="$(jq -r .version packages/coding-agent/package.json)"
           sha="${GITHUB_SHA:0:10}"
           tag="fork-v$version-$sha"
-          notes="Builds of qiulinfan/oh-my-pi main at $GITHUB_SHA (omp $version): omp-windows-x64.exe for Windows and omp-linux-x64 for WSL. update-forks installs each after checking it against its .sha256."
+          notes="Builds of qiulinfan/oh-my-pi main at $GITHUB_SHA (omp $version): omp-darwin-arm64 for macOS, omp-windows-x64.exe for Windows and omp-linux-x64 for WSL. omp update installs this platform's binary after checking it against its .sha256."
           gh release create "$tag" release/* -R "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --title "omp $version (fork, $sha)" --notes "$notes" --latest

@@ -35,6 +35,16 @@ export interface CodingAgentCompileOptions {
 }
 
 /**
+ * The commit a build is made from, which the fork's updater compares with its
+ * releases (`src/cli/fork-release.ts`): CI's `GITHUB_SHA`, else the checkout's HEAD.
+ */
+function buildCommit(repoRoot: string): string {
+	if (Bun.env.GITHUB_SHA) return Bun.env.GITHUB_SHA;
+	const result = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot, stdout: "pipe", stderr: "ignore" });
+	return result.exitCode === 0 ? result.stdout.toString().trim() : "";
+}
+
+/**
  * Compile the coding-agent executable with its legacy Pi compatibility module
  * graph supplied by an in-memory build plugin rather than generated files.
  */
@@ -51,6 +61,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: options.native ? await embeddedAddonFiles(options.native) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
+				"process.env.PI_BUILD_COMMIT": JSON.stringify(buildCommit(options.repoRoot)),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 			},

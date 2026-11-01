@@ -345,6 +345,12 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
 
+## Updates (fork-only)
+
+- `omp update` and the startup check read only this fork's GitHub Releases (`src/cli/fork-release.ts`), never upstream's build service or npm, which would install upstream's build over the fork. `.github/workflows/fork_omp.yml` publishes every push to `main` as `fork-v<version>-<commit10>` with `omp-darwin-arm64`, `omp-linux-x64` and `omp-windows-x64.exe` and their `.sha256`.
+- Fork builds of one upstream version share its version, so the commit decides: `scripts/compile-binary.ts` defines `PI_BUILD_COMMIT` (CI's `GITHUB_SHA`, else `git rev-parse HEAD`), and a release replaces the install only when its version is higher or GitHub's compare says its commit is ahead. A local build of unpushed commits is never replaced by an older release.
+- The startup check (`startup.checkUpdate`, at most hourly through the `update-check` stamp in the agent dir) installs in the background with `update.auto` by running `omp update` detached (output in the logs dir's `update.log`), only when the running binary is the `omp` on PATH. Test it with a copy on a PATH of its own, never the installed omp.
+
 ## GUI development (fork-only)
 
 - If `OMP_GUI_SERVER_PID` is set, this session runs inside that `omp gui` server. Stopping it ends this turn and every session it hosts: never signal it (kill, pkill, Ctrl+C) or quit the desktop app, and never read or write `~/.omp/run/gui` (it holds the token).

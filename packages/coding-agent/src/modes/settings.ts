@@ -1168,17 +1168,28 @@ export const cfgStartupSetupWizard = register({
 	},
 });
 
-// Off in this fork: it is rebuilt from its own checkout, and the `omp update` the notice
-// suggests would replace it with upstream's build.
+// This fork checks its own releases (cli/fork-release.ts), never upstream's.
 export const cfgStartupCheckUpdate = register({
 	id: "startup.checkUpdate",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
 		label: "Check for Updates",
-		description: "Check for omp updates on startup",
+		description: "Check the fork's releases for a newer omp on startup",
+	},
+});
+
+export const cfgUpdateAuto = register({
+	id: "update.auto",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "Install Updates",
+		description: "Install a newer release found at startup in the background; the next start uses it",
 	},
 });
 

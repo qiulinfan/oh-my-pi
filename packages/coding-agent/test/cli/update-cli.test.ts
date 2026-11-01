@@ -2,11 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { removeWithRetries, setAgentDir, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
-import { currentBuildHost } from "../../src/cli/build-service";
+import { removeWithRetries, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { FORK_REPO, forkAssetName } from "../../src/cli/fork-release";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import { getLatestRelease, runUpdateCommand } from "../../src/cli/update-cli";
-import { cfgUpdateChannel } from "../../src/modes/settings";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
@@ -74,54 +73,85 @@ describe("runUpdateCommand version source", () => {
 		vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
 			throw new Error(`process.exit(${code}): ${logs.join("\n")}`);
 		}) as typeof process.exit);
-		vi.spyOn(cfgUpdateChannel, "get").mockReturnValue("stable");
 		return { logs };
 	}
 
-	it("checks npm, with a timeout, when no standalone binary is on PATH", async () => {
+	const asset = forkAssetName();
+	const tag = "fork-v999.0.0-aaaaaaaaaa";
+	const releasesUrl = `https://api.github.com/repos/${FORK_REPO}/releases?per_page=20`;
+	const download = `https://github.com/${FORK_REPO}/releases/download/${tag}`;
+
+	/** The fork's release list and digest, plus the binary `next`, served the way GitHub serves them. */
+	function forkRelease(next: string): (url: string) => Response {
+		return url => {
+			if (url === releasesUrl) {
+				return Response.json([
+					{
+						tag_name: tag,
+						target_commitish: "a".repeat(40),
+						draft: false,
+						prerelease: false,
+						published_at: "2026-11-01T07:00:00Z",
+						assets: [asset, `${asset}.sha256`].map(name => ({
+							name,
+							size: Buffer.byteLength(next),
+							browser_download_url: `${download}/${name}`,
+						})),
+					},
+				]);
+			}
+			if (url === `${download}/${asset}.sha256`) return new Response(`${Bun.SHA256.hash(next, "hex")}  ${asset}\n`);
+			if (url === `${download}/${asset}`) return new Response(next);
+			return new Response(null, { status: 404 });
+		};
+	}
+
+	it.skipIf(!asset)("checks only the fork's releases, with a timeout", async () => {
 		await isolatePath();
-		process.env.PI_BUILD_URL = "https://build.test";
-		quiet();
-		const requests = stubFetch(() => Response.json({ version: "999.0.0" }));
+		const { logs } = quiet();
+		const requests = stubFetch(forkRelease("#!/bin/sh\necho omp/999.0.0\n"));
 
 		await runUpdateCommand({ force: false, check: true });
 
-		expect(requests.length).toBeGreaterThan(0);
-		expect(requests.some(request => request.url.startsWith("https://build.test/"))).toBe(false);
+		expect(requests.map(request => request.url)).toEqual([releasesUrl, `${download}/${asset}.sha256`]);
 		for (const request of requests) expect(request.signal).toBeInstanceOf(AbortSignal);
+		expect(logs.some(line => line.includes("New version available: 999.0.0 (aaaaaaaaaa)"))).toBe(true);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"updates a standalone binary from the build service without asking npm",
+	it.skipIf(!asset || process.platform === "win32")(
+		"replaces the standalone binary on PATH with the fork's release",
 		async () => {
 			const dir = await isolatePath();
 			const ompPath = path.join(dir, "omp");
 			await Bun.write(ompPath, "#!/bin/sh\necho omp/1.0.0\n");
 			await fs.chmod(ompPath, 0o755);
 			const next = "#!/bin/sh\necho omp/999.0.0\n";
-			const { target, fileName } = await currentBuildHost();
-			process.env.PI_BUILD_URL = "https://build.test";
-			const check = `https://build.test/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
 			const { logs } = quiet();
-			const requests = stubFetch(url => {
-				if (url === check) {
-					return Response.json({
-						build: { version: "999.0.0" },
-						file: { name: fileName, size: Buffer.byteLength(next), sha256: Bun.SHA256.hash(next, "hex") },
-						download: "https://r2.test/omp",
-					});
-				}
-				if (url === "https://r2.test/omp") return new Response(next);
-				return new Response(null, { status: 404 });
-			});
+			const requests = stubFetch(forkRelease(next));
 
 			await runUpdateCommand({ force: false, check: false });
 
-			expect(requests.map(request => request.url)).toEqual([check, "https://r2.test/omp"]);
+			expect(requests.map(request => request.url)).toEqual([
+				releasesUrl,
+				`${download}/${asset}.sha256`,
+				`${download}/${asset}`,
+			]);
 			expect(await Bun.file(ompPath).text()).toBe(next);
 			expect(logs.some(line => line.includes("Updated to 999.0.0"))).toBe(true);
 		},
 	);
+
+	it("refuses the canary channel, which the fork does not publish", async () => {
+		await isolatePath();
+		const { logs } = quiet();
+		const requests = stubFetch(() => new Response(null, { status: 404 }));
+
+		await expect(runUpdateCommand({ force: false, check: true, channel: "canary" })).rejects.toThrow(
+			"process.exit(1)",
+		);
+		expect(requests).toEqual([]);
+		expect(logs.some(line => line.includes("publishes no canary builds"))).toBe(true);
+	});
 });
 
 describe("getLatestRelease rename pointers", () => {
