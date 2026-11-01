@@ -63,7 +63,10 @@ jobs:
 
       - name: Test Windows release updates
         if: runner.os == 'Windows'
-        run: bun test packages/coding-agent/test/update-windows-native.test.ts packages/coding-agent/test/fork-release.test.ts packages/coding-agent/test/cli/update-cli.test.ts
+        run: >-
+          bun test packages/coding-agent/test/update-windows-native.test.ts
+          packages/coding-agent/test/fork-release.test.ts packages/coding-agent/test/cli/update-cli.test.ts
+          packages/coding-agent/test/protocol-fork-update.test.ts packages/coding-agent/test/acp-stdout-hygiene.test.ts
 
       - name: Check GUI settings round trip
         run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page|work-detail mode picked|End stops omp as|recorded pid is signalled"

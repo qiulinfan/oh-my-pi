@@ -295,8 +295,10 @@ function writeStartupWarning(warning: string): void {
  * omp is the installed binary, it is installed in the background (with
  * `update.auto`), effective from the next start.
  */
-async function checkForNewVersion(): Promise<{ label: string; installing: boolean } | undefined> {
-	if (!cfgStartupCheckUpdate.get(settings)) {
+async function checkForNewVersion(
+	activeSettings: Settings = settings,
+): Promise<{ label: string; installing: boolean } | undefined> {
+	if (!cfgStartupCheckUpdate.get(activeSettings)) {
 		return;
 	}
 	try {
@@ -305,7 +307,7 @@ async function checkForNewVersion(): Promise<{ label: string; installing: boolea
 		if (!claimStartupUpdateCheck()) return;
 		const build = await fetchForkBuild({ timeoutMs: 5_000 });
 		if ((await forkRelation(build, { timeoutMs: 5_000 })) !== "newer") return;
-		const installing = cfgUpdateAuto.get(settings) && runsInstalledBinary();
+		const installing = cfgUpdateAuto.get(activeSettings) && runsInstalledBinary();
 		if (installing) startBackgroundUpdate();
 		return { label: forkBuildLabel(build.version, build.commit), installing };
 	} catch {
@@ -1842,6 +1844,7 @@ export async function buildSessionOptions(
 }
 
 interface RunRootCommandDependencies {
+	checkForNewVersion?: typeof checkForNewVersion;
 	createAgentSession?: typeof createAgentSession;
 	discoverAuthStorage?: typeof discoverAuthStorage;
 	selectSession?: SessionPicker;
@@ -2505,6 +2508,10 @@ export async function runRootCommand(
 			return result;
 		};
 
+		// Editor sidebars also discover fork releases. Never block their protocol
+		// handshake or print a TUI update notice onto the protocol's stdout.
+		if (isProtocolMode) void (deps.checkForNewVersion ?? checkForNewVersion)(settingsInstance).catch(() => undefined);
+
 		if (mode === "acp") {
 			// ACP binds extensions per `session/new`, and any of them may own a flag
 			// the bootstrap parse rejected, so pending invalid enum values are
@@ -2897,7 +2904,9 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const versionCheckPromise = checkForNewVersion().catch(() => undefined);
+				const versionCheckPromise = (deps.checkForNewVersion ?? checkForNewVersion)(settingsInstance).catch(
+					() => undefined,
+				);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(

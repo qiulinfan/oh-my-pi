@@ -4,6 +4,7 @@
 
 ### Added
 
+- ACP and RPC hosts check this fork's releases at startup without blocking the protocol handshake or writing update notices to stdout.
 - omp gui and its VS Code and Obsidian sidebars support Windows, with native executable discovery and a pipe transport that preserves interface messages.
 
 - Saved sessions record the front end that started them in their header (`origin`): the TUI, omp gui, print/RPC runs, or the ACP client by name (`zed`, `iina`).
