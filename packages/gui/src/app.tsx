@@ -1167,28 +1167,49 @@ function approvalModeOf(value: string): string {
 	return APPROVAL_MODES.some(choice => choice.value === value) ? value : "";
 }
 
-const SETTINGS_SPEED: Choice = {
-	value: "",
-	text: "Speed from settings",
-	title: "The service tier omp's settings name for the model's provider (serviceTier.*)",
-};
-const FAST_SPEED: Choice[] = [
-	{ value: "fast", text: "Fast", title: "Fast mode: the provider's priority tier, at a higher per-token price" },
-];
-
-/** Shown only for a model that has fast mode, so it never offers what the provider would refuse. */
-function FastPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
+/**
+ * Fast mode as a switch: on starts the session on the model's priority tier (`--fast`), off on the tier omp's
+ * settings name. A model whose provider has no fast mode gets the switch greyed out with an empty-set mark.
+ */
+function FastSwitch({
+	on,
+	available,
+	onToggle,
+}: {
+	on: boolean;
+	available: boolean;
+	onToggle: (on: boolean) => void;
+}): ReactNode {
+	const checked = available && on;
 	return (
-		<ChoicePicker
-			icon="fast"
-			label={value === "fast" ? "Fast" : "Speed"}
-			title="Start the session in fast mode (the priority tier) on this model's provider. In a session, /fast turns it on or off."
-			menuLabel="Speed"
-			value={value}
-			lead={[SETTINGS_SPEED]}
-			choices={FAST_SPEED}
-			onPick={onPick}
-		/>
+		<button
+			type="button"
+			role="switch"
+			aria-checked={checked}
+			aria-label="Fast mode"
+			disabled={!available}
+			className={`field-chip fast-switch${available ? "" : " unavailable"}`}
+			title={
+				available
+					? checked
+						? "Fast mode on: the session starts on the provider's priority tier, at a higher per-token price. In a session, /fast turns it off."
+						: "Fast mode off: the session starts on the tier omp's settings name. In a session, /fast turns it on."
+					: "This model's provider has no fast mode"
+			}
+			onClick={() => onToggle(!on)}
+		>
+			{available ? (
+				<Icon name="fast" size={14} />
+			) : (
+				<span className="fast-none" aria-hidden="true">
+					∅
+				</span>
+			)}
+			<span className="chip-label">Fast</span>
+			<span className="switch-track" aria-hidden="true">
+				<span className="switch-knob" />
+			</span>
+		</button>
 	);
 }
 
@@ -2456,7 +2477,11 @@ export function App(): ReactNode {
 								<>
 									<ModelPicker value={model} list={modelList} onPick={setModel} />
 									<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
-									{fastAvailable ? <FastPicker value={fast ? "fast" : ""} onPick={setFast} /> : null}
+									<FastSwitch
+										on={fastPref === "fast"}
+										available={fastAvailable}
+										onToggle={on => setFast(on ? "fast" : "")}
+									/>
 									<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
 									<PresetPicker value={preset} list={presetList} onPick={setPreset} />
 									<ApprovalPicker value={approvalMode} onPick={setApproval} />
