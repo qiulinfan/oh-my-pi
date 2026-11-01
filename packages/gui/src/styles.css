@@ -3477,8 +3477,38 @@ button.picker-item:focus-visible {
 		line-height: 13px;
 		font-variant-numeric: tabular-nums;
 	}
+	/* In a side panel the start page's box sits where a session's composer does, at the bottom: the
+	   title and the saved sessions come first and scroll above it. */
 	.start {
-		padding: 12vh 14px 32px;
+		/* Room above the title for the session list and new-session buttons in the corners. */
+		padding: 52px 14px 0;
+	}
+	.start-inner {
+		min-height: 100%;
+	}
+	.start-title {
+		font-size: 24px;
+	}
+	.start-title .brand-pi {
+		font-size: 27px;
+	}
+	.start-recent {
+		order: 1;
+		margin-top: 4px;
+	}
+	.start-box {
+		order: 2;
+		position: sticky;
+		bottom: 0;
+		margin-top: auto;
+		/* The page's background below the box, so the list never shows under it. */
+		box-shadow:
+			var(--shadow-md),
+			0 14px 0 var(--bg);
+		margin-bottom: 14px;
+	}
+	.start-hint {
+		display: none;
 	}
 	.start-bar {
 		flex-wrap: wrap;

@@ -14,6 +14,10 @@
 - Agent presets: `omp --preset <name>` starts a session from a Markdown file in `.omp/presets/` or `~/.omp/agent/presets/` that sets its prompt, skills, model, thinking, tools and approval mode, and can leave out the global AGENTS.md; the `agentPreset` setting gives a project a default preset (`--no-preset` opts out), and omp gui offers Default, No preset or any preset in a Preset picker on the start page
 - `omp --fast` starts a session in fast mode (the priority tier) on the model's provider when the model has it, and omp gui's start page has a Fast switch, greyed out for models whose provider has no fast mode; `omp models --json` reports `fast` per model
 
+### Changed
+
+- omp gui's start page in the Obsidian and VS Code side bars keeps its message box at the bottom, where a session's composer is, with the title and saved sessions above it
+
 ### Fixed
 
 - One model that does not support fast mode (a subagent's smaller model, say) no longer turns fast mode off for every model; omp says once that the model runs at standard speed
