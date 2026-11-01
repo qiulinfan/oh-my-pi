@@ -91,6 +91,9 @@ export const launchHelp = {
 			description: "OpenAI service tier for this session (none omits service_tier)",
 			options: [...SERVICE_TIER_OPENAI_VALUES],
 		}),
+		fast: Flags.boolean({
+			description: "Start with fast mode (priority tier) on the starting model's family, when the model supports it",
+		}),
 		"hide-thinking": Flags.boolean({
 			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
 		}),

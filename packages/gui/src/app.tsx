@@ -29,6 +29,7 @@ import {
 	type Choice,
 	ChoicePicker,
 	EffortPicker,
+	fastFor,
 	findModel,
 	type ModelList,
 	ModelListContext,
@@ -159,6 +160,8 @@ interface SpawnRequest {
 	model?: string;
 	/** omp's `--thinking` level; absent starts at omp's default. */
 	thinking?: string;
+	/** omp's `--fast`: fast mode on the model's family. */
+	fast?: boolean;
 	/** omp's `--work-detail` mode: compact, standard or verbose. */
 	workDetail?: string;
 	/** omp's `--approval-mode`; absent starts in the mode omp's settings name. */
@@ -1164,6 +1167,31 @@ function approvalModeOf(value: string): string {
 	return APPROVAL_MODES.some(choice => choice.value === value) ? value : "";
 }
 
+const SETTINGS_SPEED: Choice = {
+	value: "",
+	text: "Speed from settings",
+	title: "The service tier omp's settings name for the model's provider (serviceTier.*)",
+};
+const FAST_SPEED: Choice[] = [
+	{ value: "fast", text: "Fast", title: "Fast mode: the provider's priority tier, at a higher per-token price" },
+];
+
+/** Shown only for a model that has fast mode, so it never offers what the provider would refuse. */
+function FastPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
+	return (
+		<ChoicePicker
+			icon="fast"
+			label={value === "fast" ? "Fast" : "Speed"}
+			title="Start the session in fast mode (the priority tier) on this model's provider. In a session, /fast turns it on or off."
+			menuLabel="Speed"
+			value={value}
+			lead={[SETTINGS_SPEED]}
+			choices={FAST_SPEED}
+			onPick={onPick}
+		/>
+	);
+}
+
 function ApprovalPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
 	return (
 		<ChoicePicker
@@ -1803,6 +1831,7 @@ export function App(): ReactNode {
 	const [thinkingPref, setThinking] = usePref("thinking", "");
 	const thinkingChoice = thinkingPref.trim();
 	const [workDetailPref, setWorkDetail] = usePref("workDetail", "");
+	const [fastPref, setFast] = usePref("fast", "");
 	const [approvalPref, setApproval] = usePref("approvalMode", "");
 	const approvalMode = approvalModeOf(approvalPref);
 	const [presetList, setPresetList] = useState<PresetList>({ presets: [], default: null });
@@ -2006,11 +2035,15 @@ export function App(): ReactNode {
 	// The level a session starts at: the picked one when the picked model takes it, else omp's default.
 	const thinking =
 		thinkingChoice && thinkingFor(model, modelList).choices.includes(thinkingChoice) ? thinkingChoice : "";
+	// Fast applies only where the picked model has it; the pick stays for the next model that does.
+	const fastAvailable = fastFor(model, modelList);
+	const fast = fastAvailable && fastPref === "fast";
 
 	const resumeRequest = (session: SavedSession): SpawnRequest => ({
 		resume: { path: session.path, cwd: session.cwd },
 		model: model || undefined,
 		thinking: thinking || undefined,
+		fast: fast || undefined,
 	});
 
 	// --restore takes no prompt, and the turn continues on the model it was running.
@@ -2423,6 +2456,7 @@ export function App(): ReactNode {
 								<>
 									<ModelPicker value={model} list={modelList} onPick={setModel} />
 									<EffortPicker value={thinking} model={model} list={modelList} onPick={setThinking} />
+									{fastAvailable ? <FastPicker value={fast ? "fast" : ""} onPick={setFast} /> : null}
 									<WorkDetailPicker value={workDetail} onPick={setWorkDetail} />
 									<PresetPicker value={preset} list={presetList} onPick={setPreset} />
 									<ApprovalPicker value={approvalMode} onPick={setApproval} />
@@ -2453,6 +2487,7 @@ export function App(): ReactNode {
 										project: target || undefined,
 										model: model || undefined,
 										thinking: thinking || undefined,
+										fast: fast || undefined,
 										preset: presetRequest(preset),
 										prompt: prompt.trim() || undefined,
 										context: (prompt.trim() && editorContext()) || undefined,

@@ -8,6 +8,7 @@ import * as fsSync from "node:fs";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import { realizesPriorityServiceTier, serviceTierFamily } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import {
@@ -60,7 +61,7 @@ import {
 	type ScopedModel,
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
-import { serviceTierSettingToTier } from "./config/service-tier";
+import { buildServiceTierByFamily, serviceTierSettingToTier } from "./config/service-tier";
 import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/registry";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
@@ -199,6 +200,9 @@ import {
 	cfgSessionMaxCost,
 	cfgSessionWarnCost,
 	cfgSessionWorktreeScope,
+	cfgTierAnthropic,
+	cfgTierGoogle,
+	cfgTierOpenai,
 } from "./session/settings";
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelExactMatch } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
@@ -1444,6 +1448,20 @@ export async function buildSessionOptions(
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
 	if (parsed.serviceTier !== undefined) {
 		options.openAIServiceTier = serviceTierSettingToTier(parsed.serviceTier) ?? null;
+	}
+	// `--fast` (omp gui's Fast switch): the configured tiers, with the final model's
+	// family on priority when that model realizes it; otherwise it changes nothing.
+	if (parsed.fast) {
+		options.resolveServiceTierByFamily = model => {
+			const tiers = buildServiceTierByFamily(
+				cfgTierOpenai.get(activeSettings),
+				cfgTierAnthropic.get(activeSettings),
+				cfgTierGoogle.get(activeSettings),
+			);
+			const family = model ? serviceTierFamily(model) : undefined;
+			if (model && family && realizesPriorityServiceTier("priority", model)) tiers[family] = "priority";
+			return tiers;
+		};
 	}
 	const cliDirs = parsed.addDir ?? [];
 	const settingsDirs = cfgWorkspaceAdditionalDirectories.get(activeSettings);

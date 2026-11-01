@@ -77,6 +77,8 @@ export interface ModelChoice {
 	thinkingSelectors: string[];
 	/** The level a session on it starts at when nothing names one; null when it does not think. */
 	thinkingStart: string | null;
+	/** Fast mode (the priority tier) reaches it on the wire. */
+	fast: boolean;
 }
 
 export interface ModelList {
@@ -116,6 +118,12 @@ export function thinkingFor(
 		start: (!model && found.level) || found.choice.thinkingStart,
 		known: true,
 	};
+}
+
+/** Whether the model a selector names (the default role when empty) has fast mode; false when the page cannot tell. */
+export function fastFor(model: string, list: ModelList | null): boolean {
+	const found = list ? findModel(model || list.default || "", list) : undefined;
+	return found?.choice.fast ?? false;
 }
 
 function effortLabel(level: string): string {

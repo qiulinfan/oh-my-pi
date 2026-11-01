@@ -12,6 +12,7 @@
  * forces the network (`online`).
  */
 import type { Api, Effort, Model } from "@oh-my-pi/pi-ai";
+import { realizesPriorityServiceTier } from "@oh-my-pi/pi-ai";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { getEffectiveTokenCost, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -96,6 +97,8 @@ interface ModelJson {
 	thinkingSelectors: ConfiguredThinkingLevel[];
 	/** The level a session on the model starts at when nothing names one, under the configured default; null when it does not think. */
 	thinkingStart: ConfiguredThinkingLevel | null;
+	/** Whether fast mode (the priority tier, `/fast`, `--fast`) reaches this model on the wire. */
+	fast: boolean;
 	input: ("text" | "image")[];
 	cost: Model<Api>["cost"];
 	pricingStatus: ModelPricingStatus;
@@ -142,6 +145,7 @@ function toModelJson(model: Model<Api>, configuredThinking: ConfiguredThinkingLe
 		reasoning: model.reasoning,
 		thinking: model.thinking ? getSupportedEfforts(model) : null,
 		thinkingSelectors: effortSelectors(model, getSupportedEfforts(model)),
+		fast: realizesPriorityServiceTier("priority", model),
 		// Clamped into the model's ladder, as the session does; auto stays auto until a turn resolves it.
 		thinkingStart:
 			start === undefined

@@ -57,6 +57,8 @@ export interface Args {
 	appendSystemPrompt?: string;
 	thinking?: ConfiguredThinkingLevel;
 	serviceTier?: ServiceTierOpenAISettingValue;
+	/** `--fast`: start with fast mode (the priority tier) on the starting model's family, when the model realizes it. */
+	fast?: boolean;
 	hideThinking?: boolean;
 	/** `--work-detail`: this session's `display.workDetail` (runtime override, not persisted). */
 	workDetail?: WorkDetail;
@@ -376,6 +378,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noLsp = true;
 		} else if (arg === "--no-pty") {
 			result.noPty = true;
+		} else if (arg === "--fast") {
+			result.fast = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
 		} else if (arg === "--advisor") {

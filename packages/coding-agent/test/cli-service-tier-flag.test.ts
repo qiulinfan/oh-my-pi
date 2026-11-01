@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -125,6 +126,31 @@ describe("--service-tier", () => {
 			} finally {
 				await resumed.dispose();
 			}
+		} finally {
+			authStorage.close();
+		}
+	});
+});
+
+// omp gui's Fast switch starts sessions with `--fast`; it must reach only a model whose
+// provider realizes the priority tier, and never put priority on another family.
+describe("--fast", () => {
+	it("puts the final model's family on priority only when that model realizes it", async () => {
+		const authStorage = await AuthStorage.create(":memory:");
+		try {
+			const options = await buildSessionOptions(
+				parseArgs(["--fast", "hello"]),
+				[],
+				SessionManager.inMemory(),
+				new ModelRegistry(authStorage),
+				Settings.isolated(),
+			);
+			const resolve = options.resolveServiceTierByFamily;
+			expect(resolve).toBeDefined();
+			const anthropic = getBundledModels("anthropic")[0];
+			expect(resolve?.(anthropic)).toEqual({ anthropic: "priority" });
+			const without = getBundledModels("mistral")[0];
+			expect(resolve?.(without)).toEqual({});
 		} finally {
 			authStorage.close();
 		}

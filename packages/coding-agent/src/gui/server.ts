@@ -894,6 +894,8 @@ interface ModelChoice {
 	thinkingSelectors: string[];
 	/** The level a session on it starts at when nothing names one; null when it does not think. */
 	thinkingStart: string | null;
+	/** Fast mode (the priority tier) reaches it, so the start page offers the Fast switch. */
+	fast: boolean;
 }
 
 interface ModelList {
@@ -910,12 +912,13 @@ async function listModels(): Promise<ModelList> {
 	const { models } = result.json() as { models: ModelChoice[] };
 	return {
 		// omp works out both thinking fields itself (`omp models --json`), so the start page agrees with a session.
-		models: models.map(({ selector, name, provider, thinkingSelectors, thinkingStart }) => ({
+		models: models.map(({ selector, name, provider, thinkingSelectors, thinkingStart, fast }) => ({
 			selector,
 			name,
 			provider,
 			thinkingSelectors: Array.isArray(thinkingSelectors) ? thinkingSelectors : [],
 			thinkingStart: typeof thinkingStart === "string" ? thinkingStart : null,
+			fast: fast === true,
 		})),
 		default: null,
 	};
@@ -971,6 +974,8 @@ interface SpawnBody {
 	model?: string;
 	/** omp's `--thinking` level: off, minimal..max or auto (adaptive); absent keeps omp's default. */
 	thinking?: string;
+	/** omp's `--fast`: fast mode on the model's family, for a model that has it. */
+	fast?: boolean;
 	/** omp's `--work-detail` mode (one of {@link WORK_DETAILS}); absent keeps omp's default. */
 	workDetail?: string;
 	/** omp's `--approval-mode` (one of {@link APPROVAL_MODES}); absent keeps `tools.approvalMode`. */
@@ -1447,6 +1452,8 @@ class GuiHost implements SessionHost {
 		] as const)
 			if (body[key] !== undefined && typeof body[key] !== "string")
 				return fail(400, "bad-request", `${key} must be a string`);
+		if (body.fast !== undefined && typeof body.fast !== "boolean")
+			return fail(400, "bad-request", "fast must be a boolean");
 		if (body.thinking !== undefined && !CLI_THINKING_LEVELS.includes(body.thinking as ConfiguredThinkingLevel))
 			return fail(400, "bad-request", `thinking must be one of ${CLI_THINKING_LEVELS.join(", ")}`);
 		if (body.workDetail !== undefined && !isWorkDetail(body.workDetail))
@@ -1543,6 +1550,8 @@ class GuiHost implements SessionHost {
 		}
 		if (model) args.push("--model", model);
 		if (thinking) args.push("--thinking", thinking);
+		// A restore keeps the service tier the session recorded.
+		if (body.fast && !restore) args.push("--fast");
 		if (workDetail) args.push("--work-detail", workDetail);
 		if (approvalMode) args.push("--approval-mode", approvalMode);
 		if (preset === "") args.push("--no-preset");

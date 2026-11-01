@@ -18,6 +18,7 @@ export const GUI_PREF_KEYS = [
 	"project",
 	"model",
 	"thinking",
+	"fast",
 	"workDetail",
 	"approvalMode",
 	"pinnedProjects",
