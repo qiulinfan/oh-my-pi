@@ -1205,7 +1205,8 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 		}
 	}, 30_000);
 
-	test.skipIf(process.getuid?.() === 0)(
+	// These fault injections use Unix permission bits, not Windows ACLs.
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"a session file the server cannot read counts as saved: it is never traded for a restart of its first message",
 		async () => {
 			const gui = await setup();
@@ -1229,7 +1230,8 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 		30_000,
 	);
 
-	test.skipIf(process.getuid?.() === 0)(
+	// These fault injections use Unix permission bits, not Windows ACLs.
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"a session the roster cannot record is refused before its omp starts",
 		async () => {
 			const gui = await setup();
