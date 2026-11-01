@@ -127,6 +127,12 @@ export async function fetchForkBuild(options: ForkReleaseOptions = {}): Promise<
 	if (!release) throw new Error(`No ${FORK_REPO} release carries ${assetName} yet`);
 	const binary = release.assets.find(asset => asset.name === assetName)!;
 	const digestAsset = release.assets.find(asset => asset.name === `${assetName}.sha256`)!;
+	const downloadPrefix = `https://github.com/${FORK_REPO}/releases/download/${release.tag_name}/`;
+	for (const asset of [binary, digestAsset]) {
+		if (asset.browser_download_url !== downloadPrefix + asset.name) {
+			throw new Error(`${asset.name} is not served from ${FORK_REPO}'s selected release`);
+		}
+	}
 
 	const timeoutMs = options.timeoutMs ?? CHECK_TIMEOUT_MS;
 	const digestResponse = await (options.fetchImpl ?? fetch)(digestAsset.browser_download_url, {
@@ -137,9 +143,6 @@ export async function fetchForkBuild(options: ForkReleaseOptions = {}): Promise<
 	if (!digestResponse.ok) throw new Error(`Could not read ${digestAsset.name}: ${digestResponse.status}`);
 	const sha256 = (await digestResponse.text()).trim().split(/\s+/)[0]?.toLowerCase() ?? "";
 	if (!SHA256_HEX.test(sha256)) throw new Error(`${digestAsset.name} holds no SHA-256 digest`);
-	if (!binary.browser_download_url.startsWith(`https://github.com/${FORK_REPO}/releases/download/`)) {
-		throw new Error(`${assetName} is not served from ${FORK_REPO}'s releases`);
-	}
 
 	return {
 		tag: release.tag_name,

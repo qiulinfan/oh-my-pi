@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- Windows background updates keep the helper console hidden and verify both asset URLs belong to the selected fork release.
+
 - One model that does not support fast mode (a subagent's smaller model, say) no longer turns fast mode off for every model; omp says once that the model runs at standard speed
 - ACP clients such as Zed no longer leave an empty session in the session list for every thread they open; a session is saved once it is first prompted
 ## [18.14.2] - 2026-10-31

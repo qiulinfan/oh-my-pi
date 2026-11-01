@@ -1951,7 +1951,11 @@ export function startBackgroundUpdate(): void {
 	fs.mkdirSync(logDir, { recursive: true });
 	const log = fs.openSync(path.join(logDir, "update.log"), "a");
 	try {
-		const child = spawn(process.execPath, ["update"], { detached: true, stdio: ["ignore", log, log] });
+		const child = spawn(process.execPath, ["update"], {
+			detached: true,
+			windowsHide: true,
+			stdio: ["ignore", log, log],
+		});
 		child.unref();
 	} finally {
 		fs.closeSync(log);

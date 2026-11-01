@@ -61,6 +61,10 @@ jobs:
       - name: Check GUI host transport
         run: bun test packages/coding-agent/test/gui-terminal-process.test.ts packages/coding-agent/test/gui-open-link.test.ts packages/coding-agent/test/gui-settings-api.test.ts desktop/test/windows-client.test.ts
 
+      - name: Test Windows release updates
+        if: runner.os == 'Windows'
+        run: bun test packages/coding-agent/test/update-windows-native.test.ts packages/coding-agent/test/fork-release.test.ts packages/coding-agent/test/cli/update-cli.test.ts
+
       - name: Check GUI settings round trip
         run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page|work-detail mode picked|End stops omp as|recorded pid is signalled"
 
