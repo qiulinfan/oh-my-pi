@@ -16,6 +16,7 @@
 - omp gui's Obsidian and VS Code side bars tell omp where you are in the editor (file, caret, selection and nearby lines) with your next message; the composer shows the place with a button that drops it
 - Agent presets: `omp --preset <name>` starts a session from a Markdown file in `.omp/presets/` or `~/.omp/agent/presets/` that sets its prompt, skills, model, thinking, tools and approval mode, and can leave out the global AGENTS.md; the `agentPreset` setting gives a project a default preset (`--no-preset` opts out), and omp gui offers Default, No preset or any preset in a Preset picker on the start page
 - `omp --fast` starts a session in fast mode (the priority tier) on the model's provider when the model has it, and omp gui's start page has a Fast switch, greyed out for models whose provider has no fast mode; `omp models --json` reports `fast` per model
+- omp gui's session composer has the start page's Fast switch and approval mode menu, so fast mode and tool approvals can change mid-session; a restored session keeps the approval mode picked there
 
 ### Changed
 

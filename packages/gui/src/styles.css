@@ -809,6 +809,11 @@ kbd {
 	background: var(--overlay);
 	box-shadow: var(--shadow-md);
 }
+/* Lined up with the picker's right edge when it would run past the window's (see useAlignsEnd). */
+.picker-menu.end {
+	left: auto;
+	right: 0;
+}
 /* Opened above the picker when it would be cut off below (see useOpensUp). */
 .picker-menu.up {
 	top: auto;

@@ -26,9 +26,12 @@ import { EditorContextChip, editorContext } from "./editor-context";
 import { Icon } from "./icons";
 import { keyBytes } from "./keys";
 import {
+	APPROVAL_MODES,
+	ApprovalPicker,
 	type Choice,
 	ChoicePicker,
 	EffortPicker,
+	FastSwitch,
 	fastFor,
 	findModel,
 	type ModelList,
@@ -1140,92 +1143,9 @@ function WorkDetailPicker({ value, onPick }: { value: string; onPick: (value: st
 	);
 }
 
-/** omp's `--approval-mode` values, as its settings panel names them. */
-const APPROVAL_MODES: Choice[] = [
-	{ value: "always-ask", text: "Always ask", title: "Run read-only tools; ask before every write and command" },
-	{
-		value: "always-ask-cached",
-		text: "Ask and remember",
-		title: "Ask before reading or writing a file, with answers that can remember the file or its folder",
-	},
-	{ value: "write", text: "Write", title: "Run read-only tools and workspace edits; ask before every command" },
-	{
-		value: "auto",
-		text: "Auto",
-		title: "Like Write, and a judge model runs routine commands, asks about risky ones and refuses destructive ones",
-	},
-	{ value: "yolo", text: "Yolo", title: "Run every tool without asking" },
-];
-const SETTINGS_APPROVAL: Choice = {
-	value: "",
-	text: "From settings",
-	title: "The mode omp's settings name (tools.approvalMode)",
-};
-
 /** The stored approval choice, or "" (omp's settings) when none, or an unknown one, is stored. */
 function approvalModeOf(value: string): string {
 	return APPROVAL_MODES.some(choice => choice.value === value) ? value : "";
-}
-
-/**
- * Fast mode as a switch: on starts the session on the model's priority tier (`--fast`), off on the tier omp's
- * settings name. A model whose provider has no fast mode gets the switch greyed out with an empty-set mark.
- */
-function FastSwitch({
-	on,
-	available,
-	onToggle,
-}: {
-	on: boolean;
-	available: boolean;
-	onToggle: (on: boolean) => void;
-}): ReactNode {
-	const checked = available && on;
-	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={checked}
-			aria-label="Fast mode"
-			disabled={!available}
-			className={`field-chip fast-switch${available ? "" : " unavailable"}`}
-			title={
-				available
-					? checked
-						? "Fast mode on: the session starts on the provider's priority tier, at a higher per-token price. In a session, /fast turns it off."
-						: "Fast mode off: the session starts on the tier omp's settings name. In a session, /fast turns it on."
-					: "This model's provider has no fast mode"
-			}
-			onClick={() => onToggle(!on)}
-		>
-			{available ? (
-				<Icon name="fast" size={14} />
-			) : (
-				<span className="fast-none" aria-hidden="true">
-					∅
-				</span>
-			)}
-			<span className="chip-label">Fast</span>
-			<span className="switch-track" aria-hidden="true">
-				<span className="switch-knob" />
-			</span>
-		</button>
-	);
-}
-
-function ApprovalPicker({ value, onPick }: { value: string; onPick: (value: string) => void }): ReactNode {
-	return (
-		<ChoicePicker
-			icon="key"
-			label={APPROVAL_MODES.find(choice => choice.value === value)?.text ?? "Approvals"}
-			title="Which tool calls a new session asks you about first. Every mode asks before a critical command such as rm -rf /. A picked mode holds for the session's life; From settings follows /settings."
-			menuLabel="Approvals"
-			value={value}
-			lead={[SETTINGS_APPROVAL]}
-			choices={APPROVAL_MODES}
-			onPick={onPick}
-		/>
-	);
 }
 
 /** An agent preset a new session can start from, as `/api/presets` lists them. */

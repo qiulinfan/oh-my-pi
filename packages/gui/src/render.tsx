@@ -31,7 +31,7 @@ import { AnsiBlock } from "./ansi";
 import { Editor } from "./editor";
 import { EditorContextChip } from "./editor-context";
 import { Icon } from "./icons";
-import { EffortPicker, ModelListContext, ModelPicker } from "./pickers";
+import { ApprovalPicker, EffortPicker, FastSwitch, ModelListContext, ModelPicker } from "./pickers";
 import type { SessionConnection } from "./session";
 import type { StoreNode, SurfaceStore } from "./store";
 
@@ -391,8 +391,40 @@ const ComposerModel = ({ node }: { node: StoreNode }): ReactNode => {
 	);
 };
 
+/** omp's fast-mode chip (`on`, `off` or `unavailable` for the session's model) as the start page's Fast switch. */
+const ComposerFast = ({ node }: { node: StoreNode }): ReactNode => {
+	const { session, sf } = useSurface();
+	const state: string = node.p.value;
+	return (
+		<div className="composer-pickers">
+			<FastSwitch
+				on={state === "on"}
+				available={state !== "unavailable"}
+				running
+				onToggle={on => session.event({ ev: "action", sf, id: node.id, act: "fast.set", value: on ? "on" : "off" })}
+			/>
+		</div>
+	);
+};
+
+/** omp's approval-mode chip as the start page's approval menu; a pick switches this session's mode. */
+const ComposerApproval = ({ node }: { node: StoreNode }): ReactNode => {
+	const { session, sf } = useSurface();
+	return (
+		<div className="composer-pickers">
+			<ApprovalPicker
+				value={node.p.value}
+				running
+				onPick={value => session.event({ ev: "action", sf, id: node.id, act: "approval.set", value })}
+			/>
+		</div>
+	);
+};
+
 const Row: R = ({ node }) => {
 	if (node.p.role === "omp.composer.model" && node.p.value) return <ComposerModel node={node} />;
+	if (node.p.role === "omp.composer.fast" && node.p.value) return <ComposerFast node={node} />;
+	if (node.p.role === "omp.composer.approval" && node.p.value) return <ComposerApproval node={node} />;
 	// Its level shows in the composer model's own effort menu.
 	if (node.p.role === "omp.composer.effort") return null;
 	return <PlainRow node={node} />;

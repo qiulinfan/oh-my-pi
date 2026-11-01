@@ -1,6 +1,7 @@
 /**
- * The model and thinking-effort menus. The start page sets them for the session it starts; a running
- * session's composer draws them in place of omp's own model chip and sends the pick back to omp.
+ * The model, thinking-effort and approval menus and the Fast switch. The start page sets them for the
+ * session it starts; a running session's composer draws them in place of omp's own chips and sends the
+ * pick back to omp.
  */
 import {
 	createContext,
@@ -55,6 +56,25 @@ function useOpensUp(
 		setUp(list.offsetHeight + 6 > below && at.top - box.top > below);
 	}, [open, picker, menu]);
 	return open && up;
+}
+
+/**
+ * Whether a menu opened under `picker` would run past the window's right edge, so it lines up with the
+ * picker's right edge instead: a chip near the end of a narrow side panel's composer.
+ */
+function useAlignsEnd(
+	open: boolean,
+	picker: RefObject<HTMLElement | null>,
+	menu: RefObject<HTMLElement | null>,
+): boolean {
+	const [end, setEnd] = useState(false);
+	useLayoutEffect(() => {
+		const anchor = picker.current;
+		const list = menu.current;
+		if (!open || !anchor || !list) return;
+		setEnd(anchor.getBoundingClientRect().left + list.offsetWidth > document.documentElement.clientWidth);
+	}, [open, picker, menu]);
+	return open && end;
 }
 
 /** Closes a popover when the pointer goes down outside `ref`. */
@@ -165,6 +185,7 @@ export function ChoicePicker({
 	const trigger = useRef<HTMLButtonElement>(null);
 	const menu = useRef<HTMLDivElement>(null);
 	const up = useOpensUp(open, ref, menu);
+	const end = useAlignsEnd(open, ref, menu);
 	useDismiss(
 		ref,
 		open,
@@ -220,7 +241,7 @@ export function ChoicePicker({
 			</button>
 			{open ? (
 				<div
-					className={`picker-menu ${up ? "up" : ""}`}
+					className={`picker-menu ${up ? "up" : ""} ${end ? "end" : ""}`}
 					role="menu"
 					aria-label={menuLabel}
 					ref={menu}
@@ -232,6 +253,112 @@ export function ChoicePicker({
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+/** omp's `--approval-mode` values, as its settings panel names them. */
+export const APPROVAL_MODES: Choice[] = [
+	{ value: "always-ask", text: "Always ask", title: "Run read-only tools; ask before every write and command" },
+	{
+		value: "always-ask-cached",
+		text: "Ask and remember",
+		title: "Ask before reading or writing a file, with answers that can remember the file or its folder",
+	},
+	{ value: "write", text: "Write", title: "Run read-only tools and workspace edits; ask before every command" },
+	{
+		value: "auto",
+		text: "Auto",
+		title: "Like Write, and a judge model runs routine commands, asks about risky ones and refuses destructive ones",
+	},
+	{ value: "yolo", text: "Yolo", title: "Run every tool without asking" },
+];
+const SETTINGS_APPROVAL: Choice = {
+	value: "",
+	text: "From settings",
+	title: "The mode omp's settings name (tools.approvalMode)",
+};
+
+/**
+ * Fast mode as a switch: on the start page, on starts the session on the model's priority tier (`--fast`),
+ * off on the tier omp's settings name; in a session (`running`), it turns `/fast` on or off. A model whose
+ * provider has no fast mode gets the switch greyed out with an empty-set mark.
+ */
+export function FastSwitch({
+	on,
+	available,
+	running = false,
+	onToggle,
+}: {
+	on: boolean;
+	available: boolean;
+	running?: boolean;
+	onToggle: (on: boolean) => void;
+}): ReactNode {
+	const checked = available && on;
+	return (
+		<button
+			type="button"
+			role="switch"
+			aria-checked={checked}
+			aria-label="Fast mode"
+			disabled={!available}
+			className={`field-chip fast-switch${available ? "" : " unavailable"}`}
+			title={
+				!available
+					? "This model's provider has no fast mode"
+					: running
+						? checked
+							? "Fast mode on: requests use the provider's priority tier, at a higher per-token price"
+							: "Fast mode off: requests use the tier omp's settings name"
+						: checked
+							? "Fast mode on: the session starts on the provider's priority tier, at a higher per-token price. In a session, /fast turns it off."
+							: "Fast mode off: the session starts on the tier omp's settings name. In a session, /fast turns it on."
+			}
+			onClick={() => onToggle(!on)}
+		>
+			{available ? (
+				<Icon name="fast" size={14} />
+			) : (
+				<span className="fast-none" aria-hidden="true">
+					∅
+				</span>
+			)}
+			<span className="chip-label">Fast</span>
+			<span className="switch-track" aria-hidden="true">
+				<span className="switch-knob" />
+			</span>
+		</button>
+	);
+}
+
+/**
+ * The approval mode menu. On the start page it picks the new session's `--approval-mode`, or omp's settings;
+ * in a session (`running`) it switches the session's own mode, which holds until the session ends.
+ */
+export function ApprovalPicker({
+	value,
+	running = false,
+	onPick,
+}: {
+	value: string;
+	running?: boolean;
+	onPick: (value: string) => void;
+}): ReactNode {
+	return (
+		<ChoicePicker
+			icon="key"
+			label={APPROVAL_MODES.find(choice => choice.value === value)?.text ?? "Approvals"}
+			title={
+				running
+					? "Which tool calls this session asks you about first. Every mode asks before a critical command such as rm -rf /. A picked mode holds until the session ends."
+					: "Which tool calls a new session asks you about first. Every mode asks before a critical command such as rm -rf /. A picked mode holds for the session's life; From settings follows /settings."
+			}
+			menuLabel="Approvals"
+			value={value}
+			lead={running ? [] : [SETTINGS_APPROVAL]}
+			choices={APPROVAL_MODES}
+			onPick={onPick}
+		/>
 	);
 }
 

@@ -398,6 +398,41 @@ describe("native composer", () => {
 		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.detail")).toBeUndefined();
 	});
 
+	it("draws the fast chip as on, off or unavailable, and turns fast mode on or off", () => {
+		let fast: ComposerNativeState["fast"] = "off";
+		const editor = new CustomEditor(getEditorTheme());
+		editor.composerState = () => ({ running: false, fast });
+		editor.onSetFastMode = vi.fn();
+		const chip = () => byRole(editor.describe(cx), "omp.composer.fast");
+		expect(chip()?.p).toMatchObject({ value: "off", actions: { click: "fast.toggle" } });
+		editor.handleNativeEvent({ type: "action", key: "bar/fast", act: "fast.toggle", mods: [] });
+		expect(editor.onSetFastMode).toHaveBeenLastCalledWith(true);
+		fast = "on";
+		editor.handleNativeEvent({ type: "action", key: "bar/fast", act: "fast.toggle", mods: [] });
+		expect(editor.onSetFastMode).toHaveBeenLastCalledWith(false);
+		// A terminal drawing its own switch sends the state it wants.
+		editor.handleNativeEvent({ type: "action", key: "bar/fast", act: "fast.set", value: "on", mods: [] });
+		expect(editor.onSetFastMode).toHaveBeenLastCalledWith(true);
+
+		fast = "unavailable";
+		expect(chip()?.p?.actions).toBeUndefined();
+		editor.handleNativeEvent({ type: "action", key: "bar/fast", act: "fast.toggle", mods: [] });
+		expect(editor.onSetFastMode).toHaveBeenCalledTimes(3);
+		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.fast")).toBeUndefined();
+	});
+
+	it("draws the approval chip with its mode and routes a picked mode to the host", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.composerState = () => ({ running: false, approval: { mode: "write", label: "Write" } });
+		const chip = byRole(editor.describe(cx), "omp.composer.approval")!;
+		expect(chip.p).toMatchObject({ value: "write" });
+		expect(nodes(chip).find(n => n.k === "text")?.p).toMatchObject({ text: "Write" });
+
+		editor.onSetApprovalMode = vi.fn();
+		editor.handleNativeEvent({ type: "action", key: "bar/approval", act: "approval.set", value: "auto", mods: [] });
+		expect(editor.onSetApprovalMode).toHaveBeenCalledWith("auto");
+	});
+
 	it("omits the effort chip when the model has no thinking", () => {
 		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.effort")).toBeUndefined();
 	});

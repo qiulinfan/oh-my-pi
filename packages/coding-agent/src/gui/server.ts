@@ -44,7 +44,7 @@ import {
 import { loadPinnedSessionIds, setSessionPinned } from "../session/session-pins";
 import { FileSessionStorage, tryAcquireSessionFileLease } from "../session/session-storage";
 import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-client";
-import { APPROVAL_MODES, isApprovalMode } from "../tools/approval";
+import { APPROVAL_MODES, type ApprovalMode, isApprovalMode } from "../tools/approval";
 import {
 	defaultAgentPresetName,
 	discoverAgentPresets,
@@ -80,6 +80,8 @@ const ESC = "\x1b";
 const SESSION_FILE_VAR = "omp_session_file";
 /** The composer chip omp draws its work-detail mode in: a row whose text child is the mode's label. */
 const WORK_DETAIL_CHIP_ROLE = "omp.composer.detail";
+/** The composer chip omp draws its approval mode in: a row whose value is the mode. */
+const APPROVAL_CHIP_ROLE = "omp.composer.approval";
 
 /** The work-detail mode a composer chip shows, from its label (see WORK_DETAIL_INFO); undefined for none. */
 function chipWorkDetail(chip: TspNode | undefined): WorkDetail | undefined {
@@ -210,6 +212,8 @@ interface SessionHost {
 	sessionFileChanged(session: PtySession): void;
 	/** omp's composer chip shows another work-detail mode: the user switched it in the session. */
 	workDetailChanged(session: PtySession, mode: WorkDetail): void;
+	/** omp's composer chip shows another approval mode: the user switched it in the session. */
+	approvalModeChanged(session: PtySession, mode: ApprovalMode): void;
 	/** Settle the roster for a session whose omp has exited; resolves whether it holds anything to restore. */
 	exited(session: PtySession): Promise<boolean>;
 }
@@ -282,6 +286,10 @@ class PtySession {
 	#detailChip: { sf: string; id: string } | undefined;
 	/** The mode that chip last showed; its first is the mode omp started in, which needs no record. */
 	#workDetail: WorkDetail | undefined;
+	/** The approval-mode chip in omp's composer, once drawn, with the surface it is on. */
+	#approvalChip: { sf: string; id: string } | undefined;
+	/** The approval mode that chip last showed; its first is the mode omp started in. */
+	#approvalMode: ApprovalMode | undefined;
 
 	/** Variables for omp beyond the server's own environment. */
 	readonly #env: Record<string, string>;
@@ -598,6 +606,23 @@ class PtySession {
 		if (switched) this.#host.workDetailChanged(this, mode);
 	}
 
+	/** Follow the approval-mode chip in omp's composer as {@link #trackWorkDetail} follows the work-detail one. */
+	#trackApprovalMode(sf: string, ops: TspFrame["ops"]): void {
+		const surface = this.#surfaces.get(sf);
+		if (!surface) return;
+		for (const op of ops)
+			if (op[0] === "add") {
+				const [id] = idsWithRole(op[4], APPROVAL_CHIP_ROLE);
+				if (id !== undefined) this.#approvalChip = { sf, id };
+			}
+		if (this.#approvalChip?.sf !== sf) return;
+		const mode = (surface.doc.get(this.#approvalChip.id)?.p as { value?: unknown } | undefined)?.value;
+		if (!isApprovalMode(mode) || mode === this.#approvalMode) return;
+		const switched = this.#approvalMode !== undefined;
+		this.#approvalMode = mode;
+		if (switched) this.#host.approvalModeChanged(this, mode);
+	}
+
 	#onCsi(prefix: string, params: string, final: string): void {
 		if (final === "c" && prefix === "" && (params === "" || params === "0")) this.#write(`${ESC}[?62;22c`);
 		else if (final === "n" && prefix === "" && params === "6") this.#write(`${ESC}[${this.#rows};1R`);
@@ -702,6 +727,7 @@ class PtySession {
 					if (ops.length > 0) this.#broadcast({ t: "frame", sf: body.sf, ops });
 					this.#trackBusy(body.sf, ops);
 					this.#trackWorkDetail(body.sf, ops);
+					this.#trackApprovalMode(body.sf, ops);
 				}
 				this.#ack(body.sf, body.s);
 				return;
@@ -1210,6 +1236,13 @@ class GuiHost implements SessionHost {
 		this.#persist(entry);
 	}
 
+	approvalModeChanged(session: PtySession, mode: ApprovalMode): void {
+		const entry = this.#hosted.get(session.info.id);
+		if (!entry || entry.approvalMode === mode) return;
+		entry.approvalMode = mode;
+		this.#persist(entry);
+	}
+
 	async exited(session: PtySession): Promise<boolean> {
 		const { id, endedBy, exit } = session.info;
 		// Ended by the user: it leaves the live list, and its entry goes (/api/kill drops it too, but not when
@@ -1254,6 +1287,7 @@ class GuiHost implements SessionHost {
 			identity: () => this.identity(),
 			sessionFileChanged: () => {},
 			workDetailChanged: () => {},
+			approvalModeChanged: () => {},
 			exited: async session => {
 				if (this.#settingsPanel === session) this.#settingsPanel = undefined;
 				return false;

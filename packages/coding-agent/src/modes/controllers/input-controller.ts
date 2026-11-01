@@ -57,7 +57,9 @@ import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
+import { isApprovalMode } from "../../tools/approval";
 import { resolveReadPath } from "../../tools/path-utils";
+import { cfgToolsApprovalMode } from "../../tools/settings";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { vocalizer } from "../../tts/vocalizer";
 import {
@@ -716,6 +718,17 @@ export class InputController {
 		this.ctx.editor.onSetThinkingLevel = level => {
 			hintUsage.record("effort");
 			void executeBuiltinSlashCommand(`/effort ${level}`, { ctx: this.ctx, draftDetached: true });
+		};
+		// The fast chip's click, or `omp gui`'s switch.
+		this.ctx.editor.onSetFastMode = on => {
+			void executeBuiltinSlashCommand(`/fast ${on ? "on" : "off"}`, { ctx: this.ctx, draftDetached: true });
+		};
+		// `omp gui`'s approval menu: a runtime override of `tools.approvalMode`, as `--approval-mode` sets at
+		// startup, so the mode holds for this session and never reaches the settings file.
+		this.ctx.editor.onSetApprovalMode = mode => {
+			if (!isApprovalMode(mode) || mode === cfgToolsApprovalMode.get(this.ctx.settings)) return;
+			cfgToolsApprovalMode.override(this.ctx.settings, mode);
+			this.ctx.ui.requestRender();
 		};
 		this.ctx.editor.setActionKeys("app.model.cycleForward", this.ctx.keybindings.getKeys("app.model.cycleForward"));
 		this.ctx.editor.onCycleModelForward = () => this.cycleRoleModel("forward");

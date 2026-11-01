@@ -64,6 +64,10 @@ export interface ComposerNativeState {
 	readonly thinkingInModel?: boolean;
 	/** The session's work-detail mode, drawn as a chip that opens its picker; undefined hides the chip. */
 	readonly detail?: WorkDetail;
+	/** Fast mode on the active model, drawn as a chip a click toggles; `unavailable` when the model has none. */
+	readonly fast?: "on" | "off" | "unavailable";
+	/** The session's tool approval mode (`tools.approvalMode`) and its label; undefined hides the chip. */
+	readonly approval?: { readonly mode: string; readonly label: string };
 	/** Generation tok/s after the thinking level (live while running, else the last reading); undefined hides it. */
 	readonly rate?: number;
 	/** A turn is running: the send keycap becomes a Stop button. */
@@ -93,6 +97,8 @@ interface ComposerControls {
 	readonly model: NativeNode | undefined;
 	readonly effort: NativeNode | undefined;
 	readonly detail: NativeNode | undefined;
+	readonly fast: NativeNode | undefined;
+	readonly approval: NativeNode | undefined;
 	readonly dictation: NativeNode | undefined;
 	readonly submit: NativeNode;
 }
@@ -1113,11 +1119,11 @@ export class CustomEditor extends Editor {
 	 * a turn runs) over the context hairline, the viewing header while a
 	 * subagent is focused, the attachment chips, a `line` row of the
 	 * shell-mode chip and the input, and the `bar`: model chip, effort chip
-	 * (or the effort glyph as the model chip's icon), the work-detail chip, the
-	 * generation rate, the other status facts, usage, dictation, then send (Stop
-	 * while a turn runs). Clicks come back as `status.model`, `thinking.select`,
-	 * `detail.select`, `dictation.toggle`, `submit`, `interrupt` and
-	 * `focus:<id>` actions.
+	 * (or the effort glyph as the model chip's icon), the work-detail, fast-mode
+	 * and approval-mode chips, the generation rate, the other status facts,
+	 * usage, dictation, then send (Stop while a turn runs). Clicks come back as
+	 * `status.model`, `thinking.select`, `detail.select`, `fast.toggle`,
+	 * `dictation.toggle`, `submit`, `interrupt` and `focus:<id>` actions.
 	 */
 	override describeLayout = (input: NativeNode, cx: DescribeContext): NativeEditorLayout => {
 		const effortGlyph = cx.supports("effort");
@@ -1140,6 +1146,8 @@ export class CustomEditor extends Editor {
 			effortGlyph,
 			state.thinkingInModel,
 			state.detail,
+			state.fast,
+			state.approval?.mode,
 		].join("\0");
 		const rate = state.rate;
 		const chips = this.attachmentChips;
@@ -1168,6 +1176,8 @@ export class CustomEditor extends Editor {
 								controls.model,
 								controls.effort,
 								controls.detail,
+								controls.fast,
+								controls.approval,
 								rate !== undefined &&
 									node(
 										"rate",
@@ -1350,6 +1360,46 @@ export class CustomEditor extends Editor {
 				],
 				"detail",
 			);
+		const fastOn = state.fast === "on";
+		const fast =
+			state.fast &&
+			node(
+				"row",
+				{
+					role: "omp.composer.fast",
+					gap: "xs",
+					align: "center",
+					tone: state.fast === "unavailable" ? "muted" : undefined,
+					value: state.fast,
+					title:
+						state.fast === "unavailable"
+							? "This model has no fast mode"
+							: `Fast mode ${fastOn ? "on" : "off"}. Click to turn it ${fastOn ? "off" : "on"}`,
+					actions: state.fast === "unavailable" ? undefined : { click: "fast.toggle" },
+				},
+				[
+					node("icon", { name: "fast" }, undefined, "icon"),
+					node("text", { text: fastOn ? "Fast" : "Fast off", wrap: "none" }, undefined, "label"),
+				],
+				"fast",
+			);
+		const approval =
+			state.approval &&
+			node(
+				"row",
+				{
+					role: "omp.composer.approval",
+					gap: "xs",
+					align: "center",
+					value: state.approval.mode,
+					title: `Tool approvals: ${state.approval.label}`,
+				},
+				[
+					node("icon", { name: "key" }, undefined, "icon"),
+					node("text", { text: state.approval.label, wrap: "none" }, undefined, "label"),
+				],
+				"approval",
+			);
 		const recording = state.dictation === "recording";
 		const starting = state.dictation === "starting";
 		const transcribing = state.dictation === "transcribing";
@@ -1407,7 +1457,7 @@ export class CustomEditor extends Editor {
 					undefined,
 					"send",
 				);
-		if (!shell) return { focus, mode: undefined, model, effort, detail, dictation, submit };
+		if (!shell) return { focus, mode: undefined, model, effort, detail, fast, approval, dictation, submit };
 		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
 		const mode = keyed(
 			row(
@@ -1430,7 +1480,7 @@ export class CustomEditor extends Editor {
 			),
 			"mode",
 		);
-		return { focus, mode, model, effort, detail, dictation, submit };
+		return { focus, mode, model, effort, detail, fast, approval, dictation, submit };
 	}
 
 	/**
@@ -1474,6 +1524,16 @@ export class CustomEditor extends Editor {
 			case "detail.select":
 				this.onSelectWorkDetail?.();
 				return;
+			case "fast.toggle":
+				if (this.composerState().fast !== "unavailable") this.onSetFastMode?.(this.composerState().fast !== "on");
+				return;
+			// A terminal drawing its own switch and approval menu sends the choice as the value.
+			case "fast.set":
+				if (event.value === "on" || event.value === "off") this.onSetFastMode?.(event.value === "on");
+				return;
+			case "approval.set":
+				if (event.value) this.onSetApprovalMode?.(event.value);
+				return;
 			case "settings.open":
 				this.onOpenSettings?.();
 				return;
@@ -1509,6 +1569,10 @@ export class CustomEditor extends Editor {
 	onSetThinkingLevel?: (level: string) => void;
 	/** Opens the work-detail picker (a click on the work-detail chip). */
 	onSelectWorkDetail?: () => void;
+	/** Turns fast mode on or off for the active model (a click on the fast chip, or the terminal's own switch). */
+	onSetFastMode?: (on: boolean) => void;
+	/** Sets the session's tool approval mode chosen in the terminal's own menu. */
+	onSetApprovalMode?: (mode: string) => void;
 	onCycleModelForward?: () => void;
 	onCycleModelBackward?: () => void;
 	onSelectModel?: () => void;

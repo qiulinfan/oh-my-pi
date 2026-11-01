@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import { realizesPriorityServiceTier } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import type {
@@ -424,7 +425,7 @@ import {
 	cfgTuiVimMode,
 	cfgTuiVimModeDisplay,
 } from "./settings";
-import { cfgTasksTodoClearDelay } from "../tools/settings";
+import { cfgTasksTodoClearDelay, cfgToolsApprovalMode } from "../tools/settings";
 import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
@@ -435,6 +436,7 @@ import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
+import type { SubmenuOption } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgExtensionAssistantTextRenderers } from "../extensibility/settings";
@@ -4603,6 +4605,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			thinking: thinkingLevelWord(this.viewSession),
 			thinkingInModel: cfgStatusLineCompactThinkingLevel.get(settings),
 			detail: cfgDisplayWorkDetail.get(this.settings),
+			fast: this.#composerFastMode(),
+			approval: this.#composerApprovalMode(),
 			rate: this.#nativeTokenRate(),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
 			dictation:
@@ -4614,6 +4618,23 @@ export class InteractiveMode implements InteractiveModeContext {
 			viewing: this.#viewingLineage(),
 			title: this.sessionManager.getSessionName(),
 		};
+	}
+
+	/** Fast mode on the active model as the composer's chip shows it. */
+	#composerFastMode(): ComposerNativeState["fast"] {
+		const model = this.session.model;
+		if (!model || !realizesPriorityServiceTier("priority", model)) return "unavailable";
+		return this.session.isFastModeActive() ? "on" : "off";
+	}
+
+	/** The session's approval mode and its settings label, for the composer's chip. */
+	#composerApprovalMode(): ComposerNativeState["approval"] {
+		const mode = cfgToolsApprovalMode.get(this.settings);
+		const ui = cfgToolsApprovalMode.definition.ui;
+		const options: ReadonlyArray<SubmenuOption> =
+			ui && "options" in ui && Array.isArray(ui.options) ? ui.options : [];
+		const label = options.find(option => option.value === mode)?.label ?? mode;
+		return { mode, label };
 	}
 
 	/** The focused subagent and its live ancestors below main, outermost first; undefined on the main session. */

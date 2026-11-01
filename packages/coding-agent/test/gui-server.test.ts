@@ -56,7 +56,7 @@ function exitOf(view: View): Record<string, unknown> | undefined {
 interface DocNode {
 	id: string;
 	k: string;
-	p?: { text?: string; role?: string };
+	p?: { text?: string; role?: string; value?: string };
 	c?: DocNode[];
 }
 
@@ -928,6 +928,36 @@ describe("omp gui: hosted-session roster", () => {
 		// The page sends its own pick; the restore still takes the mode the session last ran in.
 		const restored = await gui.spawn(second, { from: session.id, workDetail: "compact" });
 		expect(await gui.args(second, restored.id)).toEqual(["--restore", file, "--work-detail", "verbose"]);
+	}, 90_000);
+	test("an approval mode picked in the session applies to it, and a restore comes back in it", async () => {
+		const gui = await setup();
+		await gui.skipSetupWizard();
+		const { file } = await writeSessionFixture(gui.project, gui.project);
+		const first = await gui.start();
+		const session = await gui.spawn(first, { resume: { path: file, cwd: gui.project }, approvalMode: "yolo" });
+		const doc = async () => (await gui.api<DocNode | null>(first, `/api/doc?id=${session.id}&sf=s:1`)).body;
+		const chip = async () => findNode(await doc(), node => node.p?.role === "omp.composer.approval");
+		await waitFor(async () => (await chip())?.p?.value === "yolo", 30_000);
+		const ws = new WebSocket(`ws://127.0.0.1:${first.port}/pty?id=${session.id}&t=${first.token}`);
+		const opened = Promise.withResolvers<void>();
+		ws.addEventListener("open", () => opened.resolve());
+		ws.addEventListener("error", () => opened.reject(new Error("the session socket did not open")));
+		await opened.promise;
+		const entryFile = path.join(gui.runtimeDir, "hosted", `${session.id}.json`);
+		try {
+			const { id } = (await chip())!;
+			ws.send(JSON.stringify({ t: "ev", ev: { ev: "action", sf: "s:1", id, act: "approval.set", value: "write" } }));
+			// omp redraws its chip in the new mode, and the server records it for a restore.
+			await waitFor(async () => (await chip())?.p?.value === "write");
+			await waitFor(async () => (await Bun.file(entryFile).json()).approvalMode === "write");
+		} finally {
+			ws.close();
+		}
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
+
+		const second = await gui.start();
+		const restored = await gui.spawn(second, { from: session.id });
+		expect(await gui.args(second, restored.id)).toEqual(["--restore", file, "--approval-mode", "write"]);
 	}, 90_000);
 });
 
