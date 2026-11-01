@@ -149,6 +149,11 @@ function spawnShell(shell: string, base: NodeJS.ProcessEnv, cwd: string): ChildP
 /** Read the login shell's environment once. Never rejects: a failed read returns `base` and the reason. */
 export async function readLoginShellEnv(options: LoginShellOptions = {}): Promise<LoginShellEnv> {
 	const base = options.base ?? process.env;
+	// Native Windows editors inherit their environment from Explorer. A POSIX
+	// login probe would start Git Bash instead of the native tools they run.
+	if (process.platform === "win32" && !options.shell) {
+		return { env: withoutSessionKeys(base), shell: base.ComSpec ?? "cmd.exe" };
+	}
 	const shell = options.shell ?? accountShell();
 	const result = await readShell(
 		shell,

@@ -97,7 +97,8 @@ export async function findOmp(
 		return named;
 	}
 	const dirs = (searchPath ?? "").split(path.delimiter).filter(dir => path.isAbsolute(dir));
-	for (const candidate of [...dirs.map(dir => path.join(dir, "omp")), path.join(home, ".local", "bin", "omp")]) {
+	const name = process.platform === "win32" ? "omp.exe" : "omp";
+	for (const candidate of [...dirs.map(dir => path.join(dir, name)), path.join(home, ".local", "bin", name)]) {
 		if (await isExecutableFile(candidate)) return candidate;
 	}
 	throw new Error("omp was not found on the login shell's PATH or at ~/.local/bin/omp.");
@@ -195,7 +196,12 @@ export class GuiProcess {
 		this.omp = omp;
 		const { promise, resolve } = Promise.withResolvers<ExitStatus>();
 		this.exited = promise;
-		this.child = spawn(omp, options.args ?? GUI_ARGS, { cwd: options.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+		this.child = spawn(omp, options.args ?? GUI_ARGS, {
+			cwd: options.cwd,
+			env,
+			windowsHide: true,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
 		this.child.once("exit", (code, signal) => {
 			this.#status = { code, signal };
 			resolve(this.#status);
@@ -266,7 +272,8 @@ export class GuiProcess {
 
 	async #stop(graceMs: number, killMs: number): Promise<boolean> {
 		if (!this.alive) return true;
-		this.child.kill("SIGTERM");
+		if (process.platform === "win32") this.child.stdin.end();
+		else this.child.kill("SIGTERM");
 		if (await settlesWithin(this.exited, graceMs)) return true;
 		this.child.kill("SIGKILL");
 		return settlesWithin(this.exited, killMs);

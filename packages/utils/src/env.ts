@@ -482,3 +482,12 @@ export function parseFlag(value: string | undefined, def = false): boolean {
 export function $flag(name: string, def: boolean = false): boolean {
 	return parseFlag($env[name], def);
 }
+
+/** Windows GUI children exchange terminal protocol bytes over pipes, bypassing ConPTY's APC filtering. */
+export function isGuiPipeTransport(): boolean {
+	return (
+		process.platform === "win32" &&
+		process.env.OMP_GUI_TRANSPORT === "pipe" &&
+		/^[1-9]\d*$/.test(process.env.OMP_GUI_SERVER_PID ?? "")
+	);
+}

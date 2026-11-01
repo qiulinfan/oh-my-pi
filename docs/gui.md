@@ -5,6 +5,12 @@ the Tern Surface Protocol, so the transcript, pickers, slash commands, settings
 and the agent hub behave as they do in a terminal. The macOS desktop app
 (`desktop/`) is a native window onto the same page.
 
+Windows runs the GUI server and the VS Code and Obsidian sidebars with the
+fork's `omp.exe`. GUI children carry TSP over pipes: ConPTY interprets and
+drops the APC messages the interface needs. The pipe host handles keyboard
+input and in-band geometry; ordinary terminal sessions keep their console
+behavior, and POSIX GUI sessions keep their PTYs.
+
 ## Running it
 
 ```sh

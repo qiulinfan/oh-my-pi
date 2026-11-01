@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { openCommand, resolveLinkedPath } from "@oh-my-pi/pi-coding-agent/gui/open-link";
 
 // A transcript link is model output: clicking one must open what it names without ever running it.
@@ -22,11 +23,22 @@ describe("omp gui transcript links", () => {
 			path: path.join(dir, "src", "a.ts"),
 			directory: false,
 		});
-		expect(await resolveLinkedPath(`file://${path.join(dir, "src")}`, undefined)).toEqual({
+		expect(await resolveLinkedPath(pathToFileURL(path.join(dir, "src")).href, undefined)).toEqual({
 			path: path.join(dir, "src"),
 			directory: true,
 		});
 	});
+
+	test.if(process.platform === "win32")(
+		"Windows drive paths and file URLs resolve; executable links open as text",
+		async () => {
+			const file = path.join(dir, "run.command");
+			expect(await resolveLinkedPath(file, undefined)).toEqual({ path: file, directory: false });
+			expect(await resolveLinkedPath(pathToFileURL(file).href, undefined)).toEqual({ path: file, directory: false });
+			expect(openCommand(file, false)).toEqual(["notepad.exe", file]);
+			expect(openCommand(dir, true)).toEqual(["explorer.exe", dir]);
+		},
+	);
 
 	test("web links, page anchors, missing files and relative links without a session resolve to nothing", async () => {
 		for (const href of ["https://example.com", "mailto:a@b.c", "#top", "src/missing.ts", ""]) {

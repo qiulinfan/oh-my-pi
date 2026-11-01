@@ -1,7 +1,7 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
 import { TtyWriter } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, isGuiPipeTransport, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils/loop-phase";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -978,7 +978,8 @@ export class ProcessTerminal implements Terminal {
 
 	constructor(options?: ProcessTerminalOptions) {
 		this.#conpty = options?.conpty ?? isConPTYHosted();
-		this.#nativeWindowsConsole = options?.nativeWindowsConsole ?? process.platform === "win32";
+		this.#nativeWindowsConsole =
+			options?.nativeWindowsConsole ?? (process.platform === "win32" && !isGuiPipeTransport());
 	}
 
 	get kittyProtocolActive(): boolean {
@@ -1195,7 +1196,7 @@ export class ProcessTerminal implements Terminal {
 		// been revoked. Raw mode is then impossible, so take the normal terminal
 		// disconnect path rather than letting Bun abort startup with EIO.
 		this.#wasRaw = process.stdin.isRaw || false;
-		if (process.stdin.setRawMode) {
+		if (process.stdin.setRawMode && !isGuiPipeTransport()) {
 			try {
 				process.stdin.setRawMode(true);
 			} catch (err) {
@@ -1301,7 +1302,7 @@ export class ProcessTerminal implements Terminal {
 	 * so modified keys (for example Shift+Tab) arrive as VT escape sequences.
 	 */
 	#enableWindowsVTInput(): void {
-		if (process.platform !== "win32") return;
+		if (!this.#nativeWindowsConsole) return;
 		this.#restoreWindowsVTInput();
 		try {
 			const kernel32 = dlopen("kernel32.dll", {
@@ -2587,7 +2588,7 @@ export class ProcessTerminal implements Terminal {
 		if (this.#dead) return;
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
-		if (!process.stdout.isTTY) return;
+		if (!process.stdout.isTTY && !isGuiPipeTransport()) return;
 		this.#ensureStdoutErrorHandler();
 		this.#trackCursorVisibility(data);
 		const pump = this.#outputPump;
@@ -2657,7 +2658,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get columns(): number {
-		if (this.#inBandResizeActive && this.#reportedColumns) return this.#reportedColumns;
+		if ((this.#inBandResizeActive || isGuiPipeTransport()) && this.#reportedColumns) return this.#reportedColumns;
 		return process.stdout.columns || Number(Bun.env.COLUMNS) || 80;
 	}
 	/**
@@ -2727,7 +2728,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	get rows(): number {
-		if (this.#inBandResizeActive && this.#reportedRows) return this.#reportedRows;
+		if ((this.#inBandResizeActive || isGuiPipeTransport()) && this.#reportedRows) return this.#reportedRows;
 		return process.stdout.rows || Number(Bun.env.LINES) || 24;
 	}
 

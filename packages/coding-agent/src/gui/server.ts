@@ -58,6 +58,7 @@ import { type ExitStatus, type HostedEntry, HostedRoster, learnSessionFile } fro
 import { groupBelow, killGroup, killLeftovers, killPinned } from "./process-group";
 import { openCommand, resolveLinkedPath } from "./open-link";
 import { OutputTail, PtyStream, type StringKind } from "./pty-stream";
+import { spawnTerminalProcess, type TerminalProcess } from "./terminal-process";
 import {
 	defaultModelRole,
 	pinGuiProject,
@@ -272,7 +273,7 @@ class PtySession {
 	#cols = 110;
 	#rows = 40;
 	/** The child, once started: the server records the session before it starts omp. */
-	#proc: Bun.Subprocess | undefined;
+	#proc: TerminalProcess | undefined;
 	/** Settles once the child has exited and its views have been told. */
 	#ended: Promise<void> | undefined;
 	#stopped: Promise<boolean> | undefined;
@@ -313,12 +314,12 @@ class PtySession {
 	}
 
 	/** Start omp. False when the session was ended before it started; throws when the spawn fails. */
-	start(): boolean {
+	async start(): Promise<boolean> {
 		if (this.info.exited || this.#proc) return false;
 		const { id, cwd, args } = this.info;
 		const inherited: Record<string, string | undefined> = { ...process.env };
 		for (const key of HOST_TERMINAL_ENV_KEYS) delete inherited[key];
-		const proc = Bun.spawn([...resolveCliEntryCmd(), ...args], {
+		const proc = await spawnTerminalProcess([...resolveCliEntryCmd(), ...args], {
 			cwd,
 			env: {
 				...inherited,
@@ -329,37 +330,39 @@ class PtySession {
 				// Tells an agent in this session which server hosts it (never the token, port or URL).
 				OMP_GUI_SERVER_PID: String(process.pid),
 			},
-			terminal: {
-				cols: this.#cols,
-				rows: this.#rows,
-				data: (_term, bytes) => {
-					try {
-						this.#stream.write(bytes);
-					} catch (err) {
-						// A parser fault outside one message: its state is unknown, so start over.
-						logger.warn("gui: dropped omp output after a parser fault", { session: id, error: String(err) });
-						this.#stream.reset();
-						this.#chunks.clear();
-						this.#resyncViews();
-					}
-				},
-				// EOF: omp's session has let go of the terminal and every byte it wrote has been read.
-				// Bun keeps the PTY master open until it is closed, and PTYs are a machine-wide limit.
-				exit: term => {
-					term.close();
-					try {
-						// A message omp never finished (it died writing one) holds back what it printed after.
-						this.#stream.end();
-					} catch (err) {
-						logger.warn("gui: could not read omp's last output", { session: id, error: String(err) });
-					}
-					this.#eof.resolve();
-				},
+			cols: this.#cols,
+			rows: this.#rows,
+			data: bytes => {
+				try {
+					this.#stream.write(bytes);
+				} catch (err) {
+					// A parser fault outside one message: its state is unknown, so start over.
+					logger.warn("gui: dropped omp output after a parser fault", { session: id, error: String(err) });
+					this.#stream.reset();
+					this.#chunks.clear();
+					this.#resyncViews();
+				}
+			},
+			// EOF: omp's session has let go of the terminal and every byte it wrote has been read.
+			// Bun keeps the PTY master open until it is closed, and PTYs are a machine-wide limit.
+			eof: () => {
+				try {
+					// A message omp never finished (it died writing one) holds back what it printed after.
+					this.#stream.end();
+				} catch (err) {
+					logger.warn("gui: could not read omp's last output", { session: id, error: String(err) });
+				}
+				this.#eof.resolve();
 			},
 		});
 		this.#proc = proc;
 		this.info.pid = proc.pid;
 		this.#ended = proc.exited.then(() => this.#onExit(proc));
+		if (this.info.exited || this.#host.stopping) {
+			proc.kill("SIGKILL");
+			await this.#ended;
+			return false;
+		}
 		return true;
 	}
 
@@ -472,7 +475,7 @@ class PtySession {
 		return id ? surface?.doc.get(id) : surface?.doc.snapshot();
 	}
 
-	async #onExit(proc: Bun.Subprocess): Promise<void> {
+	async #onExit(proc: TerminalProcess): Promise<void> {
 		this.info.exited = true;
 		this.info.busy = false;
 		const exit: ExitStatus = { code: proc.exitCode, signal: proc.signalCode };
@@ -878,6 +881,16 @@ function expandHome(dir: string): string {
 
 /** The macOS folder chooser, shown by this local server; null when the owner cancels. */
 async function chooseFolder(): Promise<string | null> {
+	if (process.platform === "win32") {
+		const script =
+			'Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; try { if ($dialog.ShowDialog() -eq "OK") { [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::Write($dialog.SelectedPath) } } finally { $dialog.Dispose() }';
+		const proc = Bun.spawn(
+			["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+			{ stdout: "pipe", stderr: "ignore", windowsHide: true },
+		);
+		const selected = await new Response(proc.stdout).text();
+		return (await proc.exited) === 0 ? selected.trim() || null : null;
+	}
 	const result =
 		await $`osascript -e ${"activate"} -e ${'POSIX path of (choose folder with prompt "Choose a project folder for omp")'}`
 			.quiet()
@@ -1229,7 +1242,7 @@ class GuiHost implements SessionHost {
 	}
 
 	/** Start the Settings page's omp in the home directory (so no project layer applies), or name the running one. */
-	#openSettingsPanel(): Response {
+	async #openSettingsPanel(): Promise<Response> {
 		const running = this.#settingsPanel;
 		if (running && !running.info.exited && !running.info.stopping) return Response.json({ id: running.info.id });
 		if (this.stopping) return fail(503, "stopping", "the GUI server is stopping");
@@ -1250,12 +1263,13 @@ class GuiHost implements SessionHost {
 			"--no-session",
 			"--settings-panel",
 		]);
+		this.#settingsPanel = panel;
 		try {
-			panel.start();
+			await panel.start();
 		} catch (err) {
+			if (this.#settingsPanel === panel) this.#settingsPanel = undefined;
 			return fail(500, "internal", `could not start omp: ${err}`);
 		}
-		this.#settingsPanel = panel;
 		return Response.json({ id: panel.info.id });
 	}
 
@@ -1624,7 +1638,7 @@ class GuiHost implements SessionHost {
 		}
 		let started: boolean;
 		try {
-			started = session.start();
+			started = await session.start();
 		} catch (err) {
 			this.sessions.delete(id);
 			await this.#unrecord(id);

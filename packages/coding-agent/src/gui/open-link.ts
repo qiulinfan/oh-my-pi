@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** What a viewer opens as it is; any other file opens as text, so a link never runs a script or an app. */
 const VIEWABLE_FILE = /\.(?:pdf|png|jpe?g|gif|webp|heic|svg|bmp|tiff?|mp4|mov|m4v|webm|mp3|m4a|wav|flac)$/i;
@@ -20,13 +21,18 @@ export async function resolveLinkedPath(
 	let target: string;
 	if (href.startsWith("file://")) {
 		try {
-			target = decodeURIComponent(new URL(href).pathname);
+			target = fileURLToPath(href);
 		} catch {
 			return null;
 		}
 	} else {
 		// A scheme (`https:`), but not a file name with a line (`a.ts:12`).
-		if (href === "" || /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(href) || href.startsWith("#")) return null;
+		if (
+			href === "" ||
+			(!/^[a-z]:[\\/]/i.test(href) && /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(href)) ||
+			href.startsWith("#")
+		)
+			return null;
 		let raw = href;
 		try {
 			raw = decodeURIComponent(href);
@@ -48,6 +54,10 @@ export async function resolveLinkedPath(
  * text editor (`open -t`), never in the app that would run it (`.command`, `.sh`, `.workflow`).
  */
 export function openCommand(file: string, directory: boolean): string[] {
+	if (process.platform === "win32") {
+		if (directory) return ["explorer.exe", file];
+		return VIEWABLE_FILE.test(file) ? ["rundll32.exe", "url.dll,FileProtocolHandler", file] : ["notepad.exe", file];
+	}
 	if (process.platform !== "darwin") return ["xdg-open", file];
 	if (directory) return ["open", "-R", file];
 	return VIEWABLE_FILE.test(file) ? ["open", file] : ["open", "-t", file];

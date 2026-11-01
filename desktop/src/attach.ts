@@ -54,7 +54,7 @@ export class GuiAttachment {
 		this.#owned = null;
 		this.#env ??= readLoginShellEnv();
 		const env = await this.#env;
-		const omp = await findOmp(named, env.env.PATH, os.homedir()).catch(err => {
+		const omp = await findOmp(named, env.env.PATH ?? env.env.Path, os.homedir()).catch(err => {
 			const why = env.failure ? ` (The login shell's environment could not be read: ${env.failure}.)` : "";
 			throw new Error(`${err instanceof Error ? err.message : String(err)}${why}`);
 		});

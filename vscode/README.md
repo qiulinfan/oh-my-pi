@@ -18,6 +18,10 @@ bun run install-app   # package, then `code --install-extension` it
 (`extensionKind: ui`), so in a Remote window it still uses this machine's omp.
 It needs VS Code 1.140 or later.
 
+Windows uses the editor's native environment and finds `omp.exe` on PATH or
+at `~/.local/bin/omp.exe`. Use this fork's Windows release with GUI pipe
+transport support; the extension does not use WSL or Git Bash.
+
 ## Use
 
 Open the secondary side bar (⌥⌘B) and pick the **omp** tab. The refresh

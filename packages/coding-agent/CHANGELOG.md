@@ -4,6 +4,8 @@
 
 ### Added
 
+- omp gui and its VS Code and Obsidian sidebars support Windows, with native executable discovery and a pipe transport that preserves interface messages.
+
 - Saved sessions record the front end that started them in their header (`origin`): the TUI, omp gui, print/RPC runs, or the ACP client by name (`zed`, `iina`).
 - ACP `session/list` names the sessions `omp gc` archived (`_meta.archivedSessionIds` on the first page), so a client such as Zed can archive their threads instead of treating them as deleted
 - omp gui keeps its theme, answer font and the start page's last picks for every window, so the desktop app and the Obsidian and VS Code side bars show the same choices.

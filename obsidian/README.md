@@ -17,6 +17,10 @@ Then enable **omp** under Settings → Community plugins. `install-vault`
 refuses a directory without `.obsidian/`, so it never makes a vault out of a
 folder Obsidian has not opened. `bun run check` type-checks the plugin.
 
+On Windows (including justnotes), it uses the editor's native environment and
+finds `omp.exe` on PATH or at `~/.local/bin/omp.exe`. Install this fork's
+Windows release with GUI pipe transport support first.
+
 The plugin reaches the GUI server through `desktop/src/attach.ts`, which it
 shares with the VS Code extension (`vscode/`) and which builds on the desktop
 app's Electron-free modules; all of it is bundled into `main.js`.

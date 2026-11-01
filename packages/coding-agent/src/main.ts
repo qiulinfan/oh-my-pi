@@ -21,7 +21,13 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
+import {
+	$env,
+	isBunTestRuntime,
+	isCompiledBinary,
+	isGuiPipeTransport,
+	setInteractiveHost,
+} from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
@@ -1949,12 +1955,13 @@ export async function runRootCommand(
 		// See getDbBusyTimeoutMs().
 		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
 		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
-		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
+		const pipedInput =
+			isProtocolMode || isGuiPipeTransport() ? undefined : await logger.time("readPipedInput", readPipedInput);
 		// Without a terminal on stdin the TUI cannot run, so such a launch is always
 		// headless: a piped or argv prompt runs like `-p`, and one with no prompt
 		// fails with a usage error instead of booting the interactive stack and
 		// exiting silently.
-		const stdinIsTerminal = process.stdin.isTTY === true;
+		const stdinIsTerminal = process.stdin.isTTY === true || isGuiPipeTransport();
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
