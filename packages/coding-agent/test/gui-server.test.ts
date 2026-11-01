@@ -172,20 +172,29 @@ class GuiFixture {
 		stdin: "ignore" | "pipe" = "ignore",
 		env: Record<string, string> = {},
 	): Bun.Subprocess<"ignore" | "pipe", "pipe", "pipe"> {
-		const proc = Bun.spawn([process.execPath, cliEntry, "gui", "--no-open", "--json", "--port", "0", ...extra], {
-			env: { ...this.env(), ...env },
-			cwd: this.home,
-			stdin,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+		const lifeline =
+			process.platform === "win32" && !extra.includes("--exit-on-stdin-close") ? ["--exit-on-stdin-close"] : [];
+		const proc = Bun.spawn(
+			[process.execPath, cliEntry, "gui", "--no-open", "--json", "--port", "0", ...lifeline, ...extra],
+			{
+				env: { ...this.env(), ...env },
+				cwd: this.home,
+				stdin: process.platform === "win32" ? "pipe" : stdin,
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
 		this.#procs.push(proc);
 		return proc;
 	}
 
 	/** A process of the test's own (`sleep`), to wear a pid a roster entry names; killed at cleanup. */
 	sleeper(): Bun.Subprocess {
-		const proc = Bun.spawn(["sleep", "120"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+		const proc = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 120000)"], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
 		this.#procs.push(proc);
 		return proc;
 	}
@@ -306,7 +315,8 @@ class GuiFixture {
 
 	/** SIGTERM the server and wait for it to finish its stop (postmortem exits 143 after its cleanup). */
 	async stop(served: Served): Promise<number> {
-		served.proc.kill("SIGTERM");
+		if (process.platform === "win32") (served.proc.stdin as Bun.FileSink).end();
+		else served.proc.kill("SIGTERM");
 		return served.proc.exited;
 	}
 
@@ -482,7 +492,7 @@ describe("omp gui: token and request fence", () => {
 		const first = await gui.start();
 		const firstBoot = (await gui.api<{ bootId: string }>(first, "/api/ping")).body.bootId;
 		expect(first.token).toMatch(/^[0-9a-f]{32}$/);
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 		expect(await Bun.file(path.join(gui.runtimeDir, "server.json")).exists()).toBe(false);
 
 		const second = await gui.start();
@@ -549,7 +559,7 @@ describe("omp gui: ending sessions", () => {
 		await waitFor(async () => exitOf(endedView) !== undefined);
 		// SIGINT is the user's own stop: omp never offers the turn it cut off for --restore.
 		expect(exitOf(endedView)).toMatchObject({ code: 130, signal: null, endedBy: "user", restorable: false });
-		expect(await gui.stop(served)).toBe(143);
+		expect(await gui.stop(served)).toBe(process.platform === "win32" ? 0 : 143);
 		await waitFor(async () => exitOf(stoppedView) !== undefined);
 		expect(exitOf(stoppedView)).toMatchObject({ code: 143, signal: null, endedBy: "server" });
 	}, 60_000);
@@ -566,19 +576,23 @@ describe("omp gui: ending sessions", () => {
 		expect(info!.lastOutput).not.toContain("\x1b");
 	}, 30_000);
 
-	test("a session that ignores its stop signal is killed", async () => {
-		const gui = await setup();
-		const served = await gui.start();
-		const session = await gui.spawn(served, { project: gui.project });
-		// A stopped process leaves the signal pending: it cannot act on it, like a wedged event loop.
-		process.kill(session.pid, "SIGSTOP");
+	test.skipIf(process.platform === "win32")(
+		"a session that ignores its stop signal is killed",
+		async () => {
+			const gui = await setup();
+			const served = await gui.start();
+			const session = await gui.spawn(served, { project: gui.project });
+			// A stopped process leaves the signal pending: it cannot act on it, like a wedged event loop.
+			process.kill(session.pid, "SIGSTOP");
 
-		const started = Date.now();
-		const killed = await gui.api<{ ok: boolean }>(served, "/api/kill", { id: session.id });
-		expect(killed.body).toEqual({ ok: true });
-		expect(processGone(session.pid)).toBe(true);
-		expect(Date.now() - started).toBeLessThan(9500);
-	}, 30_000);
+			const started = Date.now();
+			const killed = await gui.api<{ ok: boolean }>(served, "/api/kill", { id: session.id });
+			expect(killed.body).toEqual({ ok: true });
+			expect(processGone(session.pid)).toBe(true);
+			expect(Date.now() - started).toBeLessThan(9500);
+		},
+		30_000,
+	);
 });
 
 describe("omp gui: a session's terminal", () => {
@@ -601,7 +615,7 @@ describe("omp gui: hosted-session roster", () => {
 		const ended = await gui.spawn(first, { project: gui.project, prompt: "end me" });
 		const running = await gui.spawn(first, { resume: { path: file, cwd: gui.project } });
 		expect((await gui.api<{ ok: boolean }>(first, "/api/kill", { id: ended.id })).body.ok).toBe(true);
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 		expect(processGone(running.pid)).toBe(true);
 
 		// An entry that does not parse is set aside, not taken for an empty roster.
@@ -616,7 +630,7 @@ describe("omp gui: hosted-session roster", () => {
 
 		const dismissed = await gui.api<{ ok: boolean }>(second, "/api/interrupted/dismiss", { guiId: running.id });
 		expect(dismissed.body.ok).toBe(true);
-		expect(await gui.stop(second)).toBe(143);
+		expect(await gui.stop(second)).toBe(process.platform === "win32" ? 0 : 143);
 
 		// Dismissal is durable.
 		const third = await gui.start();
@@ -628,7 +642,7 @@ describe("omp gui: hosted-session roster", () => {
 		const first = await gui.start();
 		// With no model configured in the throwaway home, the session never writes the file it names.
 		const lost = await gui.spawn(first, { project: gui.project, prompt: "say hi" });
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		const second = await gui.start();
 		const [entry] = await gui.interrupted(second);
@@ -674,7 +688,7 @@ describe("omp gui: hosted-session roster", () => {
 		const again = await gui.api<{ id: string; existing?: boolean }>(first, "/api/spawn", { from: crashed.id });
 		expect(again.body).toEqual({ id: restored.id, existing: true });
 		expect(new Set((await gui.live(first)).map(session => session.id))).toEqual(new Set([empty.id, restored.id]));
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		// The restored session's roster entry went with it: the next server offers only the restore.
 		const second = await gui.start();
@@ -692,7 +706,7 @@ describe("omp gui: hosted-session roster", () => {
 		await waitFor(async () => (await gui.live(first)).find(session => session.id === gone.id)?.exited === true);
 		const resumed = await gui.spawn(first, resume);
 		expect((await gui.live(first)).map(session => session.id)).toEqual([resumed.id]);
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		const second = await gui.start();
 		const interrupted = await gui.interrupted(second);
@@ -908,7 +922,7 @@ describe("omp gui: hosted-session roster", () => {
 		} finally {
 			ws.close();
 		}
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		const second = await gui.start();
 		// The page sends its own pick; the restore still takes the mode the session last ran in.
@@ -1027,7 +1041,7 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 		// omp names the new session's file before its first write, and with no model it never writes it:
 		// stand in for the first turn after /new that omp persisted before the server stopped.
 		await Bun.write(newFile, sessionJournal(crypto.randomUUID(), gui.project, ["a task after /new"]));
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		const second = await gui.start();
 		const interrupted = await gui.interrupted(second);
@@ -1057,18 +1071,17 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 		process.kill(dismissed.pid, "SIGKILL");
 		const ended = Object.fromEntries((await gui.waitForAllSettled(first)).map(session => [session.id, session]));
 		expect(ended[quit.id]).toMatchObject({ exit: { code: 0, signal: null }, restorable: false });
-		expect(ended[crashed.id]).toMatchObject({ exit: { code: null, signal: "SIGKILL" }, restorable: true });
+		const crashExit = process.platform === "win32" ? { code: 1, signal: null } : { code: null, signal: "SIGKILL" };
+		expect(ended[crashed.id]).toMatchObject({ exit: crashExit, restorable: true });
 
 		const dismiss = await gui.api<{ ok: boolean }>(first, "/api/interrupted/dismiss", { guiId: dismissed.id });
 		expect(dismiss.body).toEqual({ ok: true });
 		expect(new Set((await gui.live(first)).map(session => session.id))).toEqual(new Set([quit.id, crashed.id]));
-		expect(await gui.stop(first)).toBe(143);
+		expect(await gui.stop(first)).toBe(process.platform === "win32" ? 0 : 143);
 
 		const second = await gui.start();
 		const interrupted = await gui.interrupted(second);
-		expect(interrupted.map(entry => [entry.guiId, entry.exit])).toEqual([
-			[crashed.id, { code: null, signal: "SIGKILL" }],
-		]);
+		expect(interrupted.map(entry => [entry.guiId, entry.exit])).toEqual([[crashed.id, crashExit]]);
 	}, 60_000);
 
 	test("an entry a later restore names in restoredFrom is dropped, so its first message starts once", async () => {
@@ -1129,7 +1142,7 @@ describe("omp gui: sessions that outlive or leave their server", () => {
 		const hosted = path.join(gui.runtimeDir, "hosted");
 		const recorded = { cwd: gui.project, chat: false, startedAt: 1, prompt: "say hi", ending: true };
 		// What a server that died while ending two sessions leaves: one omp gone since, one still running.
-		const gone = Bun.spawn(["true"]);
+		const gone = Bun.spawn([process.execPath, "-e", "process.exit(0)"]);
 		await gone.exited;
 		const omp = gui.sleeper();
 		const startToken = await processStartToken(omp.pid);

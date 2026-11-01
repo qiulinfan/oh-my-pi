@@ -60,7 +60,7 @@ jobs:
         run: bun test packages/coding-agent/test/gui-terminal-process.test.ts packages/coding-agent/test/gui-open-link.test.ts packages/coding-agent/test/gui-settings-api.test.ts desktop/test/windows-client.test.ts
 
       - name: Check GUI settings round trip
-        run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page|work-detail mode picked"
+        run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page|work-detail mode picked|End stops omp as"
 
       - name: Smoke the binary
         shell: bash

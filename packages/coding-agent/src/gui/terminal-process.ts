@@ -47,6 +47,8 @@ export async function spawnTerminalProcess(cmd: string[], options: TerminalProce
 		stdout: "pipe",
 		stderr: "pipe",
 		windowsHide: true,
+		// The child receives graceful stop requests without a Windows console.
+		ipc: () => {},
 	});
 	let closed = false;
 	const drain = async (stream: ReadableStream<Uint8Array>) => {
@@ -78,7 +80,7 @@ export async function spawnTerminalProcess(cmd: string[], options: TerminalProce
 			},
 		},
 		kill: signal => {
-			if (signal === "SIGINT") proc.stdin.write("\x03");
+			if (signal === "SIGINT" || signal === "SIGTERM") proc.send({ ompGuiSignal: signal });
 			else proc.kill(signal);
 		},
 	};

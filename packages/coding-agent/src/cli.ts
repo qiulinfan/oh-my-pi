@@ -28,6 +28,7 @@ import {
 } from "@oh-my-pi/pi-utils/dirs";
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
+import { isGuiPipeTransport } from "@oh-my-pi/pi-utils/env";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
 	BLOB_BROKER_WORKER_ARG,
@@ -50,6 +51,15 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 		`error: Bun runtime must be >= ${MIN_BUN_VERSION} (found v${Bun.version}). Please upgrade: bun upgrade\n`,
 	);
 	process.exit(1);
+}
+
+if (isGuiPipeTransport() && typeof process.send === "function") {
+	process.on("message", message => {
+		if (!message || typeof message !== "object" || !("ompGuiSignal" in message)) return;
+		const signal = message.ompGuiSignal;
+		if (signal !== "SIGINT" && signal !== "SIGTERM") return;
+		if (!process.emit(signal)) process.exit(signal === "SIGINT" ? 130 : 143);
+	});
 }
 
 // On Windows `process.title` is the shared console title, not a process name

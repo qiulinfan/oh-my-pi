@@ -10,6 +10,8 @@ fork's `omp.exe`. GUI children carry TSP over pipes: ConPTY interprets and
 drops the APC messages the interface needs. The pipe host handles keyboard
 input and in-band geometry; ordinary terminal sessions keep their console
 behavior, and POSIX GUI sessions keep their PTYs.
+Windows GUI stop requests travel over the child IPC channel so omp runs its
+normal interrupt or shutdown cleanup before the server closes the streams.
 
 ## Running it
 

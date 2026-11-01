@@ -488,6 +488,6 @@ export function isGuiPipeTransport(): boolean {
 	return (
 		process.platform === "win32" &&
 		process.env.OMP_GUI_TRANSPORT === "pipe" &&
-		/^[1-9]\d*$/.test(process.env.OMP_GUI_SERVER_PID ?? "")
+		Number(process.env.OMP_GUI_SERVER_PID) === process.ppid
 	);
 }
