@@ -57,10 +57,10 @@ jobs:
         run: bun --cwd=packages/coding-agent run build
 
       - name: Check GUI host transport
-        run: bun test packages/coding-agent/test/gui-terminal-process.test.ts packages/coding-agent/test/gui-open-link.test.ts desktop/test/windows-client.test.ts
+        run: bun test packages/coding-agent/test/gui-terminal-process.test.ts packages/coding-agent/test/gui-open-link.test.ts packages/coding-agent/test/gui-settings-api.test.ts desktop/test/windows-client.test.ts
 
       - name: Check GUI settings round trip
-        run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page"
+        run: bun test packages/coding-agent/test/gui-server.test.ts --test-name-pattern "Settings page|work-detail mode picked"
 
       - name: Smoke the binary
         shell: bash

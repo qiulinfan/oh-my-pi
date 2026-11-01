@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest } from "../src/config/settings";
+import { AgentStorage } from "../src/session/agent-storage";
 import {
 	readGuiPrefs,
 	readInstructions,
@@ -77,6 +78,7 @@ describe("omp gui: model roles", () => {
 	afterEach(async () => {
 		resetSettingsForTest();
 		setAgentDir(previous);
+		AgentStorage.close();
 		await removeWithRetries(agentDir);
 	});
 

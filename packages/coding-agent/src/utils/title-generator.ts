@@ -19,7 +19,7 @@ import { writeTerminalSequence } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
-import { $env, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, isGuiPipeTransport, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 
 import { roleCandidatePool } from "../config/model-roles";
@@ -753,7 +753,7 @@ export function reportTernSession(): void {
 	if (terminalTitleRuntime.disposed) return;
 	const host = $env.TERM_PROGRAM?.toLowerCase();
 	if (host !== "tern" && host !== "omp-gui") return;
-	if (!process.stdout.isTTY || isTerminalHeadless()) return;
+	if ((!process.stdout.isTTY && !isGuiPipeTransport()) || isTerminalHeadless()) return;
 	const tern = host === "tern";
 	const file = sessionSource?.file();
 	const resolvedFile = file ? path.resolve(file) : undefined;
