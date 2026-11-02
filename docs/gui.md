@@ -112,6 +112,13 @@ opens the macOS folder chooser. "No project" starts a chat in its own empty
 directory under `~/.omp/chats/`; chats share the session directory
 `~/.omp/agent/sessions-chats/`.
 
+The start page's text goes in as the new session's first message, except a
+slash command: omp runs those only from its composer and would send one given
+as a first message to the model. A `/` typed into the empty box starts the
+session at once and carries the text into its composer, where omp's command
+list opens; text starting with `/` sent with Enter is carried over the same
+way, and Enter there runs it.
+
 The model picker lists the models `omp models` reports, with the `default`
 model role from `config.yml` first.
 

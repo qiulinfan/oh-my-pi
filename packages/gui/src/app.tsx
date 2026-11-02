@@ -137,6 +137,11 @@ interface Project {
 	sessions: SavedSession[];
 }
 
+/** Start-page text that is a slash command, which omp runs only from its composer. */
+export function isSlashCommand(text: string): boolean {
+	return text.trimStart().startsWith("/");
+}
+
 /** GET /api/sessions. */
 interface Listing {
 	live: LiveSession[];
@@ -1258,7 +1263,12 @@ function StartPage({
 					<textarea
 						ref={ref}
 						value={prompt}
-						onChange={event => setPrompt(event.target.value)}
+						onChange={event => {
+							const value = event.target.value;
+							setPrompt(value);
+							// A slash typed into the empty box starts the session at once, so omp's command list opens there.
+							if (!prompt && value === "/" && !spawning) onStart(value);
+						}}
 						onKeyDown={event => {
 							if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
 								event.preventDefault();
@@ -1933,7 +1943,8 @@ export function App(): ReactNode {
 				connections.current.get(request.from)?.info?.sessionFile,
 			));
 
-	const spawn = async (requests: SpawnRequest[], replaces?: string) => {
+	/** `draft` goes into the first session's composer rather than in as its first message. */
+	const spawn = async (requests: SpawnRequest[], replaces?: string, draft?: string) => {
 		if (spawnInFlight.current) return;
 		spawnInFlight.current = true;
 		setSpawning(true);
@@ -1963,6 +1974,10 @@ export function App(): ReactNode {
 			// with that session, as when two roster entries name the same file.
 			const unique = [...new Set(ids)];
 			for (const id of unique.slice(1)) connect(id);
+			if (unique.length && draft) {
+				connect(unique[0]!);
+				connections.current.get(unique[0]!)!.draft = draft;
+			}
 			if (unique.length) {
 				setOpen(current => [...current, ...unique.filter(id => !current.includes(id))]);
 				show(unique[0]!);
@@ -2426,19 +2441,25 @@ export function App(): ReactNode {
 							onPin={session => void pin(session)}
 							spawning={spawning}
 							isCutOff={isCutOff}
-							onStart={prompt =>
-								void spawn([
-									{
-										project: target || undefined,
-										model: model || undefined,
-										thinking: thinking || undefined,
-										fast: fast || undefined,
-										preset: presetRequest(preset),
-										prompt: prompt.trim() || undefined,
-										context: (prompt.trim() && editorContext()) || undefined,
-									},
-								])
-							}
+							onStart={prompt => {
+								// omp runs a slash command only from its composer; a first message is sent to the model.
+								const command = isSlashCommand(prompt);
+								void spawn(
+									[
+										{
+											project: target || undefined,
+											model: model || undefined,
+											thinking: thinking || undefined,
+											fast: fast || undefined,
+											preset: presetRequest(preset),
+											prompt: command ? undefined : prompt.trim() || undefined,
+											context: (!command && prompt.trim() && editorContext()) || undefined,
+										},
+									],
+									undefined,
+									command ? prompt.trimStart() : undefined,
+								);
+							}}
 							onResume={session => void spawn([resumeRequest(session)])}
 							onRestore={restoreSaved}
 						/>
