@@ -105,7 +105,7 @@ import type {
 	SessionModeResult,
 	SessionModeState,
 } from "../extensibility/extensions/types";
-import type { Skill } from "../extensibility/skills";
+import { getSkillSlashCommandName, type Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { GoalModeState } from "../goals/state";
@@ -2964,7 +2964,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
 	}
 
-	/** Builtin, extension, custom, and `/skill:<name>` commands derived from live session state. */
+	/** Builtin, extension, and custom commands derived from live session state. */
 	#buildPendingSlashCommands(): SlashCommand[] {
 		this.#slashIconPreset = theme.getSymbolPreset();
 		const builtinCommands: SlashCommand[] = buildTuiBuiltinSlashCommands({
@@ -2997,26 +2997,32 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 		});
 
-		const skillCommandList: SlashCommand[] = [];
-		this.skillCommands.clear();
-		if (this.session.skillsSettings?.enableSkillCommands !== false) {
-			const icon = getSlashCommandTypeIcon("skill");
-			for (const skill of this.session.skills) {
-				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill);
-				skillCommandList.push({
-					name: commandName,
-					description: skill.description,
-					icon,
-					iconName: "skill",
-				});
-			}
-		}
-
-		return [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
+		return [...builtinCommands, ...hookCommands, ...customCommands];
 	}
 
-	/** Reload session skills and the `/skill:<name>` command list. */
+	/**
+	 * Register skill commands under `/<name>` unless a builtin, hook, custom, or file command
+	 * already holds the name; `/skill:<name>` always resolves. Adds the bare names to `reservedNames`.
+	 */
+	#buildSkillSlashCommands(reservedNames: Set<string>): SlashCommand[] {
+		this.skillCommands.clear();
+		if (this.session.skillsSettings?.enableSkillCommands === false) return [];
+		const icon = getSlashCommandTypeIcon("skill");
+		const commands: SlashCommand[] = [];
+		for (const skill of this.session.skills) {
+			const prefixed = getSkillSlashCommandName(skill);
+			this.skillCommands.set(prefixed, skill);
+			const bare = !reservedNames.has(skill.name);
+			if (bare) {
+				this.skillCommands.set(skill.name, skill);
+				reservedNames.add(skill.name);
+			}
+			commands.push({ name: bare ? skill.name : prefixed, description: skill.description, icon, iconName: "skill" });
+		}
+		return commands;
+	}
+
+	/** Reload session skills and their slash commands. */
 	async refreshSkillState(): Promise<void> {
 		// The session's command-metadata notification rebuilds the picker.
 		await this.session.refreshSkills();
@@ -3072,6 +3078,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			reservedNames.add(command.name);
 			for (const alias of command.aliases ?? []) reservedNames.add(alias);
 		}
+		const skillSlashCommands = this.#buildSkillSlashCommands(reservedNames);
 		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
 			.filter(template => !reservedNames.has(template.name))
 			.map(template => ({
@@ -3083,7 +3090,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				iconName: "prompt",
 			}));
 		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(
-			[...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands],
+			[...this.#pendingSlashCommands, ...fileSlashCommands, ...skillSlashCommands, ...promptTemplateCommands],
 			basePath,
 		);
 		this.#applyAutocompleteProvider();

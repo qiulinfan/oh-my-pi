@@ -36,7 +36,7 @@ export const cfgSkillsEnableSkillCommands = register({
 		tab: "tasks",
 		group: "Commands & Skills",
 		label: "Skill Commands",
-		description: "Register skills as /skill:name commands",
+		description: "Register skills as /name commands (/skill:name when another command holds the name)",
 	},
 });
 

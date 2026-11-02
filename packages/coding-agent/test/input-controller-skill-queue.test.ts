@@ -15,6 +15,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { isKnownSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/skill-command";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -200,6 +201,30 @@ describe("InputController skill queue chip metadata", () => {
 		expect(promptCustomMessage.mock.calls[0]?.[0].details.__queueChipText).toBeUndefined();
 		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("invokes a skill registered under its bare name from /<name> with the trailing args", async () => {
+		skillCommands.set("test-skill", skillCommands.get("skill:test-skill")!);
+		const { ctx, editor, prompt, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: false,
+		});
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		editor.setText("/test-skill arg1 arg2");
+		await editor.onSubmit?.("/test-skill arg1 arg2");
+
+		expect(prompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		expect(promptCustomMessage.mock.calls[0]?.[0].details.args).toBe("arg1 arg2");
+	});
+
+	it("does not treat /<name> as a skill when the skill is only registered as /skill:<name>", () => {
+		const { ctx } = createStubInputControllerContext({ skillCommands, isStreaming: false });
+
+		expect(isKnownSkillCommand(ctx, "/test-skill arg1")).toBe(false);
+		expect(isKnownSkillCommand(ctx, "/skill:test-skill arg1")).toBe(true);
 	});
 
 	it("queues known skill steers during compaction instead of dispatching immediately", async () => {

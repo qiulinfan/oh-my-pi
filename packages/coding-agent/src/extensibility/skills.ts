@@ -832,6 +832,19 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 	return { name, args, prompt };
 }
 
+/**
+ * Parse a leading `/<name> [args]` draft as a bare skill command candidate.
+ *
+ * Only the leading position is recognized: a mid-prompt `/<name>` is too easily
+ * a path. The caller decides whether `name` is a skill no other command shadows.
+ */
+export function parseBareSkillInvocation(text: string): ParsedSkillInvocation | undefined {
+	const prompt = text.trim();
+	const match = /^\/([^\s/:]+)(?:\s+([\s\S]*))?$/.exec(prompt);
+	if (!match) return undefined;
+	return { name: match[1], args: match[2]?.trim() ?? "", prompt };
+}
+
 export type SkillInvocationKind = "user" | "autoload";
 
 /** What the user typed around a skill token: `args` feed the template, `prompt` only the transcript. */

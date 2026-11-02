@@ -154,11 +154,11 @@ Task tool subagents receive the session's discovered/provided skills list via no
 
 ### Interactive `/skill:<name>` commands
 
-If `skills.enableSkillCommands` is true, interactive mode registers one slash command per discovered skill.
+If `skills.enableSkillCommands` is true, interactive mode registers one slash command per discovered skill, listed in autocomplete as `/<name>`. When a builtin, extension, custom, or file command already holds that name, the skill is listed as `/skill:<name>` instead. `/skill:<name>` always resolves, so it reaches a shadowed skill.
 
-`/skill:<name> [args]` behavior:
+`/<name> [args]` and `/skill:<name> [args]` behavior:
 
-- recognizes the traditional leading form and a whitespace-delimited `/skill:<name>` token embedded in ordinary prose
+- recognizes the leading forms and a whitespace-delimited `/skill:<name>` token embedded in ordinary prose; a bare `/<name>` is recognized only at the start of the draft
 - for an embedded token, removes the token and passes the surrounding prose as arguments
 - does not treat embedded tokens as invocations when the draft starts with another slash command or a local bash/Python execution sigil
 - reads the skill file directly from `filePath`

@@ -1,6 +1,12 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
+import {
+	getSkillSlashCommandName,
+	type ParsedSkillInvocation,
+	parseBareSkillInvocation,
+	parseSkillInvocation,
+	type Skill,
+} from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -46,30 +52,45 @@ interface InvokeSkillCommandOptions {
 	onPromptQueued?: (queued: readonly AgentMessage[]) => void;
 }
 
-/** Built custom-message payload and delivery options for a `/skill:` command. */
+/** Built custom-message payload and delivery options for a skill command. */
 export interface BuiltSkillCommandPrompt {
 	message: SkillPromptMessage;
 	options: SkillPromptOptions;
 }
 
-/** Return true when `text` invokes a registered `/skill:<name>` command. */
-export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolean {
+/**
+ * Resolve `text` to a registered skill command: `/skill:<name>` (leading or mid-prompt),
+ * or a leading `/<name>` that `skillCommands` registered because no other command shadows it.
+ */
+function resolveSkillCommand(
+	ctx: Pick<SkillCommandHost, "skillCommands">,
+	text: string,
+): { skill: Skill; parsed: ParsedSkillInvocation } | undefined {
 	const parsed = parseSkillInvocation(text);
-	if (!parsed) return false;
-	return ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name }));
+	if (parsed) {
+		const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));
+		return skill && { skill, parsed };
+	}
+	const bare = parseBareSkillInvocation(text);
+	const skill = bare && ctx.skillCommands.get(bare.name);
+	return skill && { skill, parsed: bare };
 }
 
-/** Build the user-attributed custom message for a registered `/skill:<name>` command. */
+/** Return true when `text` invokes a registered skill command. */
+export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolean {
+	return resolveSkillCommand(ctx, text) !== undefined;
+}
+
+/** Build the user-attributed custom message for a registered skill command. */
 export async function buildSkillCommandPrompt(
 	ctx: SkillCommandHost,
 	text: string,
 	streamingBehavior: "steer" | "followUp",
 	images?: ImageContent[],
 ): Promise<BuiltSkillCommandPrompt | undefined> {
-	const parsed = parseSkillInvocation(text);
-	if (!parsed) return undefined;
-	const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));
-	if (!skill) return undefined;
+	const resolved = resolveSkillCommand(ctx, text);
+	if (!resolved) return undefined;
+	const { skill, parsed } = resolved;
 
 	const built = await ctx.session.buildUserSkillPrompt(skill, parsed);
 	const textBlock: TextContent = { type: "text", text: built.message };
@@ -87,7 +108,7 @@ export async function buildSkillCommandPrompt(
 	};
 }
 
-/** Invoke a registered `/skill:<name>` command as a user-attributed custom message. */
+/** Invoke a registered skill command as a user-attributed custom message. */
 export async function invokeSkillCommandFromText(
 	ctx: SkillCommandHost,
 	text: string,
