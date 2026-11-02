@@ -43,6 +43,7 @@ import {
 } from "../session/session-listing";
 import { loadPinnedSessionIds, setSessionPinned } from "../session/session-pins";
 import { FileSessionStorage, tryAcquireSessionFileLease } from "../session/session-storage";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../slash-commands/builtin-registry";
 import { resolveCliEntryCmd, resolveExecutablePath } from "../subprocess/worker-client";
 import { APPROVAL_MODES, type ApprovalMode, isApprovalMode } from "../tools/approval";
 import {
@@ -925,6 +926,83 @@ async function chooseFolder(): Promise<string | null> {
 	return result.text().trim().replace(/\/$/, "") || null;
 }
 
+/** A slash command the start page offers, as a session in that project lists it. */
+export interface GuiSlashCommand {
+	name: string;
+	description?: string;
+	hint?: string;
+}
+
+const COMMANDS_TIMEOUT_MS = 15_000;
+/** A project's command list is asked again after this long: skills and command files change rarely. */
+const COMMANDS_TTL_MS = 60_000;
+
+/**
+ * omp's slash commands in `cwd`, with the preset a session there would start with. A headless
+ * `omp --mode rpc --no-session` answers `get_available_commands` (builtins, extension, custom, file and
+ * skill commands) and is stopped: no session starts and nothing is written. The TUI-only builtins it
+ * leaves out (`/new`, `/resume`, `/settings`, ...) come from the builtin registry.
+ */
+export async function listSlashCommands(cwd: string, preset: string | undefined): Promise<GuiSlashCommand[]> {
+	const env: Record<string, string | undefined> = { ...process.env, PI_PEERS: "0" };
+	delete env.OMP_GUI_SERVER_PID;
+	const args = ["--mode", "rpc", "--no-session"];
+	if (preset === "") args.push("--no-preset");
+	else if (preset) args.push("--preset", preset);
+	const proc = Bun.spawn([...resolveCliEntryCmd(), ...args], {
+		// A chat's own directory is made when it starts; before that the chats share omp's commands from home.
+		cwd: fs.existsSync(cwd) ? cwd : os.homedir(),
+		env,
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "ignore",
+		windowsHide: true,
+	});
+	const timer = setTimeout(() => proc.kill(), COMMANDS_TIMEOUT_MS);
+	try {
+		proc.stdin.write(`${JSON.stringify({ id: "commands", type: "get_available_commands" })}\n`);
+		proc.stdin.flush();
+		let listed: Array<{ name: string; description?: string; input?: { hint?: string } }> | undefined;
+		let buffer = "";
+		const decoder = new TextDecoder();
+		for await (const chunk of proc.stdout) {
+			buffer += decoder.decode(chunk, { stream: true });
+			let newline = buffer.indexOf("\n");
+			while (newline >= 0 && !listed) {
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				newline = buffer.indexOf("\n");
+				try {
+					const frame = JSON.parse(line);
+					if (frame?.id === "commands" && frame.type === "response") {
+						if (!frame.success) throw new Error(frame.error ?? "omp could not list its commands");
+						listed = frame.data.commands;
+					}
+				} catch (err) {
+					if (!(err instanceof SyntaxError)) throw err;
+				}
+			}
+			if (listed) break;
+		}
+		if (!listed) throw new Error("omp ended without listing its commands");
+		const commands: GuiSlashCommand[] = listed.map(({ name, description, input }) => ({
+			name,
+			description,
+			hint: input?.hint,
+		}));
+		const seen = new Set(commands.map(command => command.name));
+		for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
+			if (seen.has(command.name)) continue;
+			seen.add(command.name);
+			commands.push({ name: command.name, description: command.description });
+		}
+		return commands;
+	} finally {
+		clearTimeout(timer);
+		proc.kill();
+	}
+}
+
 interface ModelChoice {
 	selector: string;
 	name: string;
@@ -1149,6 +1227,8 @@ class GuiHost implements SessionHost {
 	readonly #restoring = new Map<string, Promise<string | undefined>>();
 	readonly #executable: ExecutableIdentity | undefined;
 	#models: Promise<ModelList> | null = null;
+	/** `/api/commands` listings by project and preset, each with when it was asked. */
+	#commands = new Map<string, { at: number; listing: Promise<GuiSlashCommand[]> }>();
 	/**
 	 * The Settings page's omp (`--settings-panel`): no session, no roster entry, not listed. Closing its
 	 * panel ends it; the page ends it when it leaves.
@@ -1373,6 +1453,23 @@ class GuiHost implements SessionHost {
 					this.#models = null;
 					return fail(500, "internal", String(err));
 				}
+			case "/api/commands": {
+				// The slash commands a session in `project` (with `preset`) offers, for the start page's list.
+				const project = url.searchParams.get("project");
+				const cwd = project ? expandHome(project) : CHATS_DIR;
+				const preset = url.searchParams.get("preset") ?? undefined;
+				const key = `${cwd}\0${preset ?? "\u0001"}`;
+				const cached = this.#commands.get(key);
+				const listing =
+					cached && Date.now() - cached.at < COMMANDS_TTL_MS ? cached.listing : listSlashCommands(cwd, preset);
+				if (listing !== cached?.listing) this.#commands.set(key, { at: Date.now(), listing });
+				try {
+					return Response.json({ commands: await listing });
+				} catch (err) {
+					if (this.#commands.get(key)?.listing === listing) this.#commands.delete(key);
+					return fail(500, "internal", err instanceof Error ? err.message : String(err));
+				}
+			}
 			case "/api/peers":
 				return this.#peers();
 			case "/api/instructions":

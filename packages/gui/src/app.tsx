@@ -21,6 +21,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import type { TspEditorContext } from "@oh-my-pi/pi-wire";
+import { matchCommands, type SlashCommandInfo, slashQuery } from "./slash-commands";
 import { ApiError, api, errorText, link, type ServerIdentity } from "./api";
 import { EditorContextChip, editorContext } from "./editor-context";
 import { Icon } from "./icons";
@@ -135,6 +136,15 @@ interface Project {
 	name: string;
 	modified: string;
 	sessions: SavedSession[];
+}
+
+/** `/api/commands`'s query for a project (none: the chats) and a preset request (see presetRequest). */
+function commandsQuery(project: string, preset: string | undefined): string {
+	const params = new URLSearchParams();
+	if (project) params.set("project", project);
+	if (preset !== undefined) params.set("preset", preset);
+	const query = params.toString();
+	return query ? `?${query}` : "";
 }
 
 /** Start-page text that is a slash command, which omp runs only from its composer. */
@@ -1215,6 +1225,62 @@ function presetRequest(value: string): string | undefined {
 	return value === NO_PRESET ? "" : value || undefined;
 }
 
+/**
+ * The start page's slash command list (slash-commands.ts): the commands are fetched for the picked project
+ * and preset once a `/` starts the text. Up and Down pick, Tab completes, Enter completes a partly typed
+ * name and sends a whole one, Escape hides the list until the text changes.
+ */
+function useSlashCommands(prompt: string, query: string) {
+	const typed = slashQuery(prompt);
+	const [commands, setCommands] = useState<{ query: string; list: SlashCommandInfo[] } | null>(null);
+	const [selected, setSelected] = useState(0);
+	const [hidden, setHidden] = useState(false);
+	const wanted = typed !== null;
+	useEffect(() => {
+		if (!wanted || commands?.query === query) return;
+		let current = true;
+		api<{ commands: SlashCommandInfo[] }>(`/api/commands${query}`).then(
+			result => current && setCommands({ query, list: result.commands }),
+			() => current && setCommands({ query, list: [] }),
+		);
+		return () => {
+			current = false;
+		};
+	}, [wanted, query, commands?.query]);
+	const matches = typed !== null && commands?.query === query ? matchCommands(commands.list, typed) : [];
+	useEffect(() => setSelected(0), [typed]);
+	const open = !hidden && matches.length > 0;
+	return {
+		open,
+		matches,
+		selected: Math.min(selected, Math.max(matches.length - 1, 0)),
+		reopen: () => setHidden(false),
+		/** The name to complete for a key the list handles (null: handled, nothing to complete); undefined: not the list's key. */
+		key(event: React.KeyboardEvent<HTMLTextAreaElement>): string | null | undefined {
+			if (!open) return undefined;
+			const pick = matches[Math.min(selected, matches.length - 1)]!;
+			switch (event.key) {
+				case "ArrowDown":
+					setSelected(index => (index + 1) % matches.length);
+					return null;
+				case "ArrowUp":
+					setSelected(index => (index - 1 + matches.length) % matches.length);
+					return null;
+				case "Tab":
+					return pick.name;
+				case "Escape":
+					setHidden(true);
+					return null;
+				case "Enter":
+					if (event.shiftKey || pick.name === typed) return undefined;
+					return pick.name;
+				default:
+					return undefined;
+			}
+		},
+	};
+}
+
 function StartPage({
 	picker,
 	modelPicker,
@@ -1227,6 +1293,7 @@ function StartPage({
 	onResume,
 	onRestore,
 	onPin,
+	commandsQuery,
 }: {
 	picker: ReactNode;
 	modelPicker: ReactNode;
@@ -1241,8 +1308,11 @@ function StartPage({
 	onResume: (session: SavedSession) => void;
 	onRestore: (session: SavedSession) => void;
 	onPin: (session: SavedSession) => void;
+	/** `/api/commands`'s query for the picked project and preset. */
+	commandsQuery: string;
 }): ReactNode {
 	const [prompt, setPrompt] = useState("");
+	const slash = useSlashCommands(prompt, commandsQuery);
 	const [showAll, setShowAll] = useState(false);
 	useEffect(() => setShowAll(false), [recentTitle]);
 	const shown = showAll
@@ -1264,13 +1334,18 @@ function StartPage({
 						ref={ref}
 						value={prompt}
 						onChange={event => {
-							const value = event.target.value;
-							setPrompt(value);
-							// A slash typed into the empty box starts the session at once, so omp's command list opens there.
-							if (!prompt && value === "/" && !spawning) onStart(value);
+							setPrompt(event.target.value);
+							slash.reopen();
 						}}
 						onKeyDown={event => {
-							if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+							if (event.nativeEvent.isComposing) return;
+							const picked = slash.key(event);
+							if (picked !== undefined) {
+								event.preventDefault();
+								if (picked !== null) setPrompt(`/${picked} `);
+								return;
+							}
+							if (event.key === "Enter" && !event.shiftKey) {
 								event.preventDefault();
 								// A held Enter repeats; only the first press starts a session.
 								if (!event.repeat) start();
@@ -1279,6 +1354,31 @@ function StartPage({
 						placeholder="Describe a task for omp, or start with an empty session"
 						spellCheck={false}
 					/>
+					{slash.open ? (
+						<div className="picker-menu slash-menu" role="listbox">
+							<div className="picker-scroll">
+								{slash.matches.map((command, index) => (
+									<div
+										key={command.name}
+										role="option"
+										aria-selected={index === slash.selected}
+										className={`picker-item ${index === slash.selected ? "on" : ""}`}
+										ref={
+											index === slash.selected ? el => el?.scrollIntoView({ block: "nearest" }) : undefined
+										}
+										onMouseDown={event => {
+											// Keeps the focus in the textarea.
+											event.preventDefault();
+											setPrompt(`/${command.name} `);
+										}}
+									>
+										<span className="slash-name">/{command.name}</span>
+										{command.description ? <span className="slash-desc">{command.description}</span> : null}
+									</div>
+								))}
+							</div>
+						</div>
+					) : null}
 					<div className="start-bar">
 						{picker}
 						{modelPicker}
@@ -1943,8 +2043,8 @@ export function App(): ReactNode {
 				connections.current.get(request.from)?.info?.sessionFile,
 			));
 
-	/** `draft` goes into the first session's composer rather than in as its first message. */
-	const spawn = async (requests: SpawnRequest[], replaces?: string, draft?: string) => {
+	/** `command` (a slash command) is typed into the first session's composer and sent there, not given as its first message. */
+	const spawn = async (requests: SpawnRequest[], replaces?: string, command?: string) => {
 		if (spawnInFlight.current) return;
 		spawnInFlight.current = true;
 		setSpawning(true);
@@ -1974,9 +2074,9 @@ export function App(): ReactNode {
 			// with that session, as when two roster entries name the same file.
 			const unique = [...new Set(ids)];
 			for (const id of unique.slice(1)) connect(id);
-			if (unique.length && draft) {
+			if (unique.length && command) {
 				connect(unique[0]!);
-				connections.current.get(unique[0]!)!.draft = draft;
+				connections.current.get(unique[0]!)!.command = command;
 			}
 			if (unique.length) {
 				setOpen(current => [...current, ...unique.filter(id => !current.includes(id))]);
@@ -2439,10 +2539,11 @@ export function App(): ReactNode {
 							recent={recentForTarget}
 							recentTitle={recentTitle}
 							onPin={session => void pin(session)}
+							commandsQuery={commandsQuery(target, presetRequest(preset))}
 							spawning={spawning}
 							isCutOff={isCutOff}
 							onStart={prompt => {
-								// omp runs a slash command only from its composer; a first message is sent to the model.
+								// omp runs a slash command only from its composer; a first message goes to the model.
 								const command = isSlashCommand(prompt);
 								void spawn(
 									[
@@ -2457,7 +2558,7 @@ export function App(): ReactNode {
 										},
 									],
 									undefined,
-									command ? prompt.trimStart() : undefined,
+									command ? prompt.trim() : undefined,
 								);
 							}}
 							onResume={session => void spawn([resumeRequest(session)])}

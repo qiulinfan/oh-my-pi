@@ -94,10 +94,10 @@ export class SessionConnection {
 	/** Bumps on surface open/close/exit and connection changes: the session shell re-renders. */
 	version = 0;
 	/**
-	 * Text the start page handed over for omp's composer (a slash command being typed): the editor types it
-	 * in once omp shows its composer, so omp's own command list opens and Enter runs the command.
+	 * A slash command sent from the start page: omp runs those only from its composer, so the editor types it
+	 * in and presses Enter once omp's composer is live.
 	 */
-	draft = "";
+	command = "";
 	#ws: WebSocket | null = null;
 	#listeners = new Set<Listener>();
 	#disposed = false;

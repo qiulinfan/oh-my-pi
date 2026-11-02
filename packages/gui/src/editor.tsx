@@ -88,15 +88,15 @@ export function Editor({ node, common }: { node: StoreNode; common: Record<strin
 		if (ref.current) autosize(ref.current, p.maxLines);
 	}, [p.maxLines]);
 
-	// Text the start page handed over (a slash command being typed) goes in once omp's composer is live and empty.
+	// A slash command sent from the start page is typed in and sent once omp's composer is live and empty.
 	useLayoutEffect(() => {
 		const el = ref.current;
-		if (!el || !live || p.readonly || !session.draft || el.value !== "" || text !== "") return;
-		el.value = session.draft;
-		session.draft = "";
-		el.focus({ preventScroll: true });
-		el.setSelectionRange(el.value.length, el.value.length);
+		if (!el || !live || p.readonly || !session.command || el.value !== "" || text !== "") return;
+		el.value = session.command;
+		session.command = "";
 		sendEdit();
+		sync.current!.keyed();
+		session.keys("\r");
 	}, [live, p.readonly, text]);
 
 	useEffect(() => {

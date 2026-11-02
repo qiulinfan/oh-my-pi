@@ -114,10 +114,13 @@ directory under `~/.omp/chats/`; chats share the session directory
 
 The start page's text goes in as the new session's first message, except a
 slash command: omp runs those only from its composer and would send one given
-as a first message to the model. A `/` typed into the empty box starts the
-session at once and carries the text into its composer, where omp's command
-list opens; text starting with `/` sent with Enter is carried over the same
-way, and Enter there runs it.
+as a first message to the model. Typing `/` opens the start page's own list of
+the commands a session in the picked project (and preset) offers, which the
+server asks a headless `omp --mode rpc --no-session` for (`/api/commands`,
+cached for a minute) and completes with the TUI-only builtins; no session
+starts for it. Up and Down pick, Tab completes, Enter completes a partly typed
+name and sends a whole one, Escape hides the list. Sending a slash command
+starts the session and types the command into its composer, where omp runs it.
 
 The model picker lists the models `omp models` reports, with the `default`
 model role from `config.yml` first.

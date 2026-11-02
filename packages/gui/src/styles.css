@@ -3709,3 +3709,30 @@ button.picker-item:focus-visible {
 	min-height: 0;
 	overflow-y: auto;
 }
+
+/* The start page's slash command list (slash-commands.ts), under the box's text. */
+.start-box {
+	position: relative;
+}
+.slash-menu {
+	top: 50px;
+	left: 12px;
+	right: 12px;
+	width: auto;
+}
+.slash-menu .picker-item {
+	align-items: baseline;
+}
+.slash-name {
+	flex: none;
+	font-family: var(--mono);
+	color: var(--fg);
+}
+.slash-desc {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+	font-size: 12.5px;
+}
