@@ -57,7 +57,6 @@ import {
 } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { parseSkillInvocation } from "../../extensibility/skills";
 import { PYTHON_KERNEL_CANCEL_BUDGET_MS } from "../../eval/py/kernel";
 import { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
@@ -73,7 +72,11 @@ import type { UsageStatistics } from "../../session/session-entries";
 import { listArchivedSessionIds, type SessionInfo as StoredSessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
+import {
+	buildAvailableSlashCommands,
+	resolveSkillCommandInvocation,
+	toAcpAvailableCommands,
+} from "../../slash-commands/available-commands";
 import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -1349,17 +1352,11 @@ export class AcpAgent implements Agent {
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
-		if (!record.session.skillsSettings?.enableSkillCommands) {
+		const resolved = resolveSkillCommandInvocation(record.session, text);
+		if (!resolved) {
 			return false;
 		}
-		const parsed = parseSkillInvocation(text);
-		if (!parsed) {
-			return false;
-		}
-		const skill = record.session.skills.find(candidate => candidate.name === parsed.name);
-		if (!skill) {
-			return false;
-		}
+		const { skill, parsed } = resolved;
 		const built = await record.session.buildUserSkillPrompt(skill, parsed);
 		await record.session.promptCustomMessage(
 			{

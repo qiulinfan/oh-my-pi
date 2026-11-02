@@ -154,7 +154,7 @@ Task tool subagents receive the session's discovered/provided skills list via no
 
 ### Interactive `/skill:<name>` commands
 
-If `skills.enableSkillCommands` is true, interactive mode registers one slash command per discovered skill, listed in autocomplete as `/<name>`. When a builtin, extension, custom, or file command already holds that name, the skill is listed as `/skill:<name>` instead. `/skill:<name>` always resolves, so it reaches a shadowed skill.
+If `skills.enableSkillCommands` is true, interactive mode registers one slash command per discovered skill, listed in autocomplete as `/<name>`; ACP and RPC advertise and dispatch skills the same way (`buildAvailableSlashCommands` and `resolveSkillCommandInvocation` in `src/slash-commands/available-commands.ts`). When a builtin, extension, custom, or file command already holds that name, the skill is listed as `/skill:<name>` instead. `/skill:<name>` always resolves, so it reaches a shadowed skill.
 
 `/<name> [args]` and `/skill:<name> [args]` behavior:
 

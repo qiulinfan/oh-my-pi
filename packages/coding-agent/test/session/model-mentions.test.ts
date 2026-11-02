@@ -283,6 +283,8 @@ describe("model mentions", () => {
 				results,
 				session: {
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [{ ...skill, description: "Tagged skill", source: "test" }],
 					buildUserSkillPrompt: agentSession.buildUserSkillPrompt.bind(agentSession),
 					renderUserSkillPrompt: agentSession.renderUserSkillPrompt.bind(agentSession),

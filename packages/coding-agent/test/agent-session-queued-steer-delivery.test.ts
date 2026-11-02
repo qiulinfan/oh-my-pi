@@ -573,6 +573,8 @@ describe("AgentSession queued steer delivery", () => {
 					buildUserSkillPrompt: session.buildUserSkillPrompt.bind(session),
 					renderUserSkillPrompt: session.renderUserSkillPrompt.bind(session),
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",
@@ -840,6 +842,8 @@ describe("AgentSession queued steer delivery", () => {
 						buildUserSkillPrompt: session.buildUserSkillPrompt.bind(session),
 						renderUserSkillPrompt: session.renderUserSkillPrompt.bind(session),
 						skillsSettings: { enableSkillCommands: true },
+						customCommands: [],
+						slashCommands: [],
 						skills: [
 							{
 								name: "reviewer",
@@ -895,6 +899,8 @@ describe("AgentSession queued steer delivery", () => {
 						buildUserSkillPrompt: session.buildUserSkillPrompt.bind(session),
 						renderUserSkillPrompt: session.renderUserSkillPrompt.bind(session),
 						skillsSettings: { enableSkillCommands: true },
+						customCommands: [],
+						slashCommands: [],
 						skills: [
 							{
 								name: "reviewer",

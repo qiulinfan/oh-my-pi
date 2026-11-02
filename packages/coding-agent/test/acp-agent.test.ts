@@ -2676,7 +2676,7 @@ describe("ACP agent", () => {
 		expect(names).toContain("fast");
 		expect(names).toContain("retry");
 		expect(names).toContain("force");
-		expect(names).toContain("skill:sample");
+		expect(names).toContain("sample");
 		expect(names).not.toContain("settings");
 		expect(names).not.toContain("copy");
 		expect(names).not.toContain("plan");

@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildSkillPromptMessage, renderSkillPromptMessage } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { dispatchRpcSkillPrompt, tryRunRpcSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
+import {
+	dispatchRpcSkillPrompt,
+	resolveRpcSkillInvocation,
+	tryRunRpcSkillCommand,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import {
 	RpcExtensionUserMessageTracker,
 	RpcPromptResults,
@@ -15,6 +19,40 @@ const skillPromptBuilder = {
 	buildUserSkillPrompt: buildSkillPromptMessage,
 	renderUserSkillPrompt: renderSkillPromptMessage,
 };
+
+describe("resolveRpcSkillInvocation", () => {
+	const skill = {
+		name: "reviewer",
+		description: "Review code",
+		filePath: "/tmp/reviewer/SKILL.md",
+		baseDir: "/tmp/reviewer",
+		source: "project",
+	};
+	const session = (slashCommands: { name: string }[] = []) => ({
+		...skillPromptBuilder,
+		skillsSettings: { enableSkillCommands: true },
+		skills: [skill, { ...skill, name: "model" }],
+		customCommands: [],
+		slashCommands,
+		async promptCustomMessage() {
+			return true;
+		},
+	});
+
+	test("resolves a leading /<name> to the skill with its arguments", () => {
+		const invocation = resolveRpcSkillInvocation(session(), "/reviewer focus on risks");
+		expect(invocation?.skill.name).toBe("reviewer");
+		expect(invocation?.args).toBe("focus on risks");
+	});
+
+	test("leaves /<name> to the command that holds the name, while /skill:<name> still resolves", () => {
+		expect(resolveRpcSkillInvocation(session([{ name: "reviewer" }]), "/reviewer x")).toBeNull();
+		expect(resolveRpcSkillInvocation(session(), "/model x")).toBeNull();
+		expect(resolveRpcSkillInvocation(session([{ name: "reviewer" }]), "/skill:reviewer x")?.skill.name).toBe(
+			"reviewer",
+		);
+	});
+});
 
 describe("tryRunRpcSkillCommand", () => {
 	test("dispatches registered /skill commands as skill prompt messages", async () => {
@@ -32,6 +70,8 @@ describe("tryRunRpcSkillCommand", () => {
 			{
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
 				],
@@ -70,6 +110,8 @@ describe("tryRunRpcSkillCommand", () => {
 				{
 					...skillPromptBuilder,
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",
@@ -112,6 +154,8 @@ describe("tryRunRpcSkillCommand", () => {
 				{
 					...skillPromptBuilder,
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",
@@ -148,6 +192,8 @@ describe("tryRunRpcSkillCommand", () => {
 			{
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [],
 				async promptCustomMessage() {
 					throw new Error("should not dispatch unknown skills");
@@ -173,6 +219,8 @@ describe("tryRunRpcSkillCommand", () => {
 				{
 					...skillPromptBuilder,
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",
@@ -232,6 +280,8 @@ describe("dispatchRpcSkillPrompt", () => {
 			session: {
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
 				],
@@ -274,6 +324,8 @@ describe("dispatchRpcSkillPrompt", () => {
 			session: {
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
 				],
@@ -313,6 +365,8 @@ describe("dispatchRpcSkillPrompt", () => {
 			session: {
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [],
 				async promptCustomMessage() {
 					return true;
@@ -337,6 +391,8 @@ describe("dispatchRpcSkillPrompt", () => {
 			session: {
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
 				],
@@ -367,6 +423,8 @@ describe("dispatchRpcSkillPrompt", () => {
 				session: {
 					...skillPromptBuilder,
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",
@@ -403,6 +461,8 @@ describe("dispatchRpcSkillPrompt", () => {
 			session: {
 				...skillPromptBuilder,
 				skillsSettings: { enableSkillCommands: true },
+				customCommands: [],
+				slashCommands: [],
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
 				],
@@ -441,6 +501,8 @@ describe("dispatchRpcSkillPrompt", () => {
 				session: {
 					...skillPromptBuilder,
 					skillsSettings: { enableSkillCommands: true },
+					customCommands: [],
+					slashCommands: [],
 					skills: [
 						{
 							name: "reviewer",

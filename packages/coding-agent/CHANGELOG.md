@@ -4,7 +4,7 @@
 
 ### Added
 
-- Skills run as `/<name>` in the TUI and omp gui; `/skill:<name>` remains for a skill whose name another command already holds.
+- Skills run as `/<name>` in the TUI, omp gui, ACP clients and RPC; `/skill:<name>` remains for a skill whose name another command already holds.
 - ACP and RPC hosts check this fork's releases at startup without blocking the protocol handshake or writing update notices to stdout.
 - omp gui and its VS Code and Obsidian sidebars support Windows, with native executable discovery and a pipe transport that preserves interface messages.
 

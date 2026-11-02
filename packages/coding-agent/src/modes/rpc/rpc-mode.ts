@@ -35,7 +35,6 @@ import {
 import {
 	type BuiltSkillPromptMessage,
 	loadSkillPrompt,
-	parseSkillInvocation,
 	type Skill,
 	type SkillPromptInput,
 	type SkillRediscoverySource,
@@ -58,7 +57,11 @@ import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "..
 import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
+import {
+	buildAvailableSlashCommands,
+	resolveSkillCommandInvocation,
+	type SkillCommandSession,
+} from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
@@ -254,8 +257,9 @@ export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchS
 
 export type RpcSkillCommandSession = Pick<
 	AgentSession,
-	"buildUserSkillPrompt" | "renderUserSkillPrompt" | "promptCustomMessage" | "skills" | "skillsSettings"
+	"buildUserSkillPrompt" | "renderUserSkillPrompt" | "promptCustomMessage"
 > &
+	SkillCommandSession &
 	SkillRediscoverySource;
 export type RpcSkillCommandResult = { agentInvoked: true };
 
@@ -270,11 +274,9 @@ export interface RpcSkillInvocation extends SkillPromptInput {
  * command. Performs no I/O — safe to run on the RPC serial queue.
  */
 export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text: string): RpcSkillInvocation | null {
-	if (!session.skillsSettings?.enableSkillCommands) return null;
-	const parsed = parseSkillInvocation(text);
-	if (!parsed) return null;
-	const skill = session.skills.find(candidate => candidate.name === parsed.name);
-	if (!skill) return null;
+	const resolved = resolveSkillCommandInvocation(session, text);
+	if (!resolved) return null;
+	const { skill, parsed } = resolved;
 	return { skill, args: parsed.args, prompt: parsed.prompt, queueChipText: text };
 }
 

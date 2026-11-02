@@ -13,6 +13,7 @@ describe("buildAvailableSlashCommands", () => {
 		const session = {
 			extensionRunner: {
 				getRegisteredCommands: () => [{ name: "ext:hello", description: "Extension hello" }],
+				getCommand: () => undefined,
 			},
 			customCommands: [
 				mcpPrompt,
@@ -24,7 +25,11 @@ describe("buildAvailableSlashCommands", () => {
 				},
 			],
 			mcpPromptCommands: [mcpPrompt],
-			skills: [{ name: "reviewer", description: "Review code", filePath: "/tmp/reviewer/SKILL.md" }],
+			skills: [
+				{ name: "reviewer", description: "Review code", filePath: "/tmp/reviewer/SKILL.md" },
+				{ name: "notes", description: "Notes skill", filePath: "/tmp/notes/SKILL.md" },
+				{ name: "model", description: "Model skill", filePath: "/tmp/model/SKILL.md" },
+			],
 			skillsSettings: { enableSkillCommands: true },
 			sessionManager: { getCwd: () => process.cwd() },
 			setSlashCommands(commands: typeof fileCommands) {
@@ -52,10 +57,13 @@ describe("buildAvailableSlashCommands", () => {
 		expect(byName["custom:hello"].description).toBe("Custom hello");
 		expect(byName["server:prompt"].description).toBe("MCP prompt");
 		expect(byName.notes.description).toBe("Open notes");
-		expect(byName["skill:reviewer"].description).toBe("Review code");
+		expect(byName.reviewer.description).toBe("Review code");
+		// A skill named like a file or builtin command keeps `/skill:<name>`; the command keeps `/<name>`.
+		expect(byName["skill:notes"].source).toBe("skill");
+		expect(byName["skill:model"].source).toBe("skill");
 
 		expect(byName.model.source).toBe("builtin");
-		expect(byName["skill:reviewer"].source).toBe("skill");
+		expect(byName.reviewer.source).toBe("skill");
 		expect(byName["ext:hello"].source).toBe("extension");
 		expect(byName["server:prompt"].source).toBe("mcp_prompt");
 		expect(byName["custom:hello"].source).toBe("custom");
