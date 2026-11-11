@@ -11,7 +11,7 @@
  * child) whose agent spawned it, taken from the agent registry's `parentId`.
  */
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { type AgentRef, AgentRegistry, type RegistryEvent } from "../../registry/agent-registry";
+import { type AgentRef, AgentRegistry, type AgentRegistryApi, type RegistryEvent } from "../../registry/agent-registry";
 import { mapAgentSessionEventToAcpSessionUpdates } from "./acp-event-mapper";
 
 /** Where a forwarder sends its notifications (the ACP connection's `sessionUpdate`). */
@@ -37,7 +37,7 @@ export class AcpSubagentForwarder {
 	readonly #rootAgentId: string;
 	readonly #rootSessionId: string;
 	readonly #send: AcpSessionUpdateSink;
-	readonly #registry: AgentRegistry;
+	readonly #registry: AgentRegistryApi;
 	readonly #children = new Map<string, Child>();
 	/** Serializes notifications so a child's announcement always precedes its traffic. */
 	#queue: Promise<void> = Promise.resolve();
@@ -46,7 +46,7 @@ export class AcpSubagentForwarder {
 		rootAgentId: string;
 		rootSessionId: string;
 		send: AcpSessionUpdateSink;
-		registry?: AgentRegistry;
+		registry?: AgentRegistryApi;
 	}) {
 		this.#rootAgentId = options.rootAgentId;
 		this.#rootSessionId = options.rootSessionId;
@@ -97,7 +97,7 @@ export class AcpSubagentForwarder {
 		const parentSessionId = this.#parentSessionOf(ref);
 		if (!parentSessionId) return;
 		const session = ref.session;
-		const sessionId = session.sessionId;
+		const sessionId = session.sessionManager.getSessionId();
 		const state = ref.status === "running" ? "running" : "idle";
 		this.#emit(parentSessionId, {
 			sessionUpdate: "subagent_update",

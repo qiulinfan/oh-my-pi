@@ -57,6 +57,9 @@ async function legacyStartToken(pid: number): Promise<string | null> {
 	return started.length > 0 ? started : null;
 }
 
+/** This process's start token, read once: every isolated run it starts records the same one. */
+let ownStartToken: Promise<string | null> | undefined;
+
 /**
  * Record the current process as owner of the sandbox rooted at `baseDir`.
  *
@@ -64,7 +67,8 @@ async function legacyStartToken(pid: number): Promise<string | null> {
  * `omp worktree clear` never sees an owner-less sandbox mid-creation.
  */
 export async function writeIsolationOwner(baseDir: string, id: string): Promise<void> {
-	const startToken = await processStartToken(process.pid);
+	ownStartToken ??= processStartToken(process.pid);
+	const startToken = await ownStartToken;
 	const owner: IsolationOwner = {
 		pid: process.pid,
 		id,

@@ -4,9 +4,10 @@ import { TSP_KINDS, type TspKind } from "@oh-my-pi/pi-wire";
  * Node kinds the browser view draws. omp falls back to pre-rendered ANSI
  * `rows` for any kind a terminal leaves out, so this list may only grow as
  * kinds get real renderers. `media` loads files by path, which a browser
- * view cannot do without a file route.
+ * view cannot do without a file route; `shell` (the live execution trace of a
+ * bash command) has no renderer here, so the command draws as code.
  */
-export const SUPPORTED_KINDS: readonly TspKind[] = TSP_KINDS.filter(kind => kind !== "media");
+export const SUPPORTED_KINDS: readonly TspKind[] = TSP_KINDS.filter(kind => kind !== "media" && kind !== "shell");
 
 /**
  * The page's own preferences, which the GUI server keeps for every window onto it: the

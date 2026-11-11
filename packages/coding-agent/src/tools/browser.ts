@@ -22,6 +22,7 @@ import { relayExtensionNotice } from "./browser/relay/probe";
 import { describeTernTargets, listTernBlocks, type TernTarget, ternTargets } from "./browser/tern/blocks";
 import { resolveTernKind } from "./browser/tern/kind";
 import { isTernUnavailable } from "./browser/tern/wire";
+import { ownsTerminal } from "./browser/terminal-owner";
 import type { AriaSnapshotOptions } from "./browser/aria/aria-snapshot";
 import type { ScreenshotResult } from "./browser/tab-protocol";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
@@ -33,6 +34,7 @@ import {
 	getTab,
 	listTabs,
 	releaseAllTabs,
+	releaseTabsForOwner,
 	releaseIdleTabsForOwner,
 	releaseTab,
 	runInTab,
@@ -40,7 +42,7 @@ import {
 	type TernTabSession,
 	ternBlocksTaken,
 } from "./browser/tab-supervisor";
-import { renderTabCall } from "./browser/tab-call";
+import { renderTabCall, tabCallBudgetSeconds } from "./browser/tab-call";
 import { resolveToCwd } from "./path-utils";
 import { renderCallChain, renderFunctionRun } from "./run-code";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
@@ -141,9 +143,11 @@ const browserSchema = type({
 	"args?": type("unknown[]").describe("arguments passed to a serialized function"),
 	"chain?": tabCallStepSchema.array(),
 	"timeout?": type("number").describe("timeout in seconds"),
-	"all?": type("boolean").describe("release every managed tab"),
+	"all?": type("boolean").describe("release every managed tab this agent opened"),
 	"kill?": type("boolean").describe("also kill spawned-app browsers"),
-	"persist?": type("boolean").describe("keep tab live across turn settle and idle close"),
+	"persist?": type("boolean").describe(
+		"keep tab live across turn settle and idle close; on a relay tab omp opened, keep it open after the session ends",
+	),
 });
 
 type BrowserParams = typeof browserSchema.infer;
@@ -164,7 +168,7 @@ interface BrowserPreludeDetails {
  * relay, `browser.cdpUrl`, Tern (inside a Tern pane, unless `app.tern: false`;
  * `app.tern: true` forces it, `app.target` selects it over the `browser.tern`
  * setting to adopt a block; `headed` does not opt out), a cmux surface, then
- * Chromium.
+ * Chromium. Tern and cmux are automatic only while no other omp owns the terminal.
  */
 export function resolveBrowserKind(
 	params: BrowserParams,
@@ -220,17 +224,21 @@ export function resolveBrowserKind(
 	if (configuredCdpUrl) {
 		return { kind: "connected", cdpUrl: configuredCdpUrl.replace(/\/+$/, "") };
 	}
+	// Tern and cmux show the tab beside the omp drawn in that terminal. An omp started from that
+	// session's commands (`omp -p` from its bash tool, a script an eval cell runs) inherited the
+	// pane env, and its tabs would float over the other session's work.
+	const ownsPane = ownsTerminal(env);
 	if (app?.tern !== false) {
 		// `app.target` inside Tern names a browser block to adopt: an explicit request, like `app.tern: true`.
 		const ternKind = resolveTernKind(
-			{ settingEnabled: app?.target !== undefined || cfgBrowserTern.get(session.settings) },
+			{ settingEnabled: app?.target !== undefined || (ownsPane && cfgBrowserTern.get(session.settings)) },
 			env,
 		);
 		if (ternKind) return ternKind;
 	}
 	const cmuxKind = resolveCmuxKind(
 		{
-			settingEnabled: cfgBrowserCmux.get(session.settings),
+			settingEnabled: ownsPane && cfgBrowserCmux.get(session.settings),
 		},
 		env,
 	);
@@ -297,12 +305,22 @@ export async function restartBrowserForModeChange(): Promise<void> {
 }
 
 /**
+ * Owner key for tabs this session opens: the agent's stable kernel owner id,
+ * which survives `/new`, `/resume`, fork, and branch (unlike the conversation
+ * session id) and is shared with its advisors, like eval kernels and computer
+ * sessions. Subagents get their own.
+ */
+function tabOwnerId(session: ToolSession): string | undefined {
+	return session.getEvalKernelOwnerId?.() ?? undefined;
+}
+
+/**
  * Best-effort idle-close sweep for the calling session's owned headless
  * tabs. Never throws — callers detach it (`void`) so a slow reap cannot
  * delay the open it follows.
  */
 function sweepIdleOwnedTabs(session: ToolSession): Promise<number> {
-	const ownerId = session.getSessionId?.() ?? undefined;
+	const ownerId = tabOwnerId(session);
 	if (!ownerId) return Promise.resolve(0);
 	const idleSec = cfgBrowserIdleCloseSec.get(session.settings);
 	if (!(idleSec > 0)) {
@@ -329,7 +347,8 @@ async function invokeBrowser(
 
 	try {
 		throwIfAborted(context.signal);
-		const timeoutSeconds = clampTimeout("browser", parsed.timeout, cfgToolsMaxTimeout.get(session.settings));
+		const requested = parsed.timeout ?? (parsed.action === "call" ? tabCallBudgetSeconds(parsed.chain) : undefined);
+		const timeoutSeconds = clampTimeout("browser", requested, cfgToolsMaxTimeout.get(session.settings));
 		const timeoutMs = timeoutSeconds * 1000;
 		const name = parsed.name ?? DEFAULT_TAB_NAME;
 		const details: BrowserPreludeDetails = { action: parsed.action, name };
@@ -338,7 +357,7 @@ async function invokeBrowser(
 			case "open":
 				return await openBrowser(session, name, parsed, details, timeoutMs, context.signal);
 			case "close":
-				return await closeBrowser(name, parsed, details, timeoutMs, context.signal);
+				return await closeBrowser(session, name, parsed, details, timeoutMs, context.signal);
 			case "tabs":
 				details.value = listTabs();
 				return toolResult(details).done();
@@ -424,6 +443,12 @@ async function openOnKind(
 	if (params.ignore_https_errors && kind.kind === "relay") {
 		throw new ToolError(
 			"ignore_https_errors is not supported through the Chrome relay: the extension debugger API does not expose the CDP Security domain. Pass app.relay:false to use omp's Chromium instead.",
+		);
+	}
+	// Chrome never lets an extension choose where downloads go. Refused here, before an existing tab is closed to reopen.
+	if (params.downloads !== undefined && kind.kind === "relay") {
+		throw new ToolError(
+			"The omp browser relay cannot choose where Chrome saves downloads: open the tab without `downloads`, and tab.waitForDownload() and tab.downloads() report where Chrome saved each file.",
 		);
 	}
 
@@ -519,7 +544,7 @@ async function openOnKind(
 					userAgent: params.user_agent,
 					ignoreHttpsErrors: params.ignore_https_errors,
 					signal: openSignal,
-					ownerSessionId: session.getSessionId?.() ?? undefined,
+					ownerSessionId: tabOwnerId(session),
 					// Omitted stays undefined: creation defaults it to false
 					// while reuse by the owner leaves a set value alone.
 					persist: params.persist,
@@ -621,6 +646,7 @@ async function listTargets(
 }
 
 async function closeBrowser(
+	session: ToolSession,
 	name: string,
 	params: BrowserParams,
 	details: BrowserPreludeDetails,
@@ -629,7 +655,13 @@ async function closeBrowser(
 ): Promise<AgentToolResult<unknown>> {
 	const kill = !!params.kill;
 	if (params.all) {
-		const count = await untilAborted(signal, () => releaseAllTabs({ kill, timeoutMs }));
+		// Only the caller's own tabs: another agent's tabs (a parent's, a sibling's)
+		// are reaped when that agent disposes. No owner (SDK callers) keeps the
+		// process-wide release.
+		const ownerId = tabOwnerId(session);
+		const count = await untilAborted(signal, () =>
+			ownerId ? releaseTabsForOwner(ownerId, { kill, timeoutMs }) : releaseAllTabs({ kill, timeoutMs }),
+		);
 		const text = `Released ${count} managed tab${count === 1 ? "" : "s"}`;
 		return toolResult(details).text(text).done();
 	}
@@ -671,6 +703,7 @@ async function runBrowser(
 		timeoutMs,
 		signal,
 		session,
+		waitsForDownload: params.action === "call" && params.chain?.[0]?.method === "waitForDownload",
 	});
 
 	if (screenshots.length) details.screenshots = screenshots;

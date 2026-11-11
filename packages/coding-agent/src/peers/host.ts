@@ -11,7 +11,7 @@
  * (parent checks compare bare ids) and the reply goes back the same way.
  */
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
-import { IrcBus } from "../irc/bus";
+import { IrcBus, type IrcBusApi } from "../irc/bus";
 import type { AgentSession } from "../session/agent-session";
 import {
 	deliverToPeer,
@@ -91,11 +91,11 @@ export class PeerHost {
 
 	readonly #hosted = new Set<Hosted>();
 	readonly #dir: string | undefined;
-	readonly #bus: () => IrcBus;
+	readonly #bus: () => IrcBusApi;
 	#publication: Promise<PeerPublication | null> | null = null;
 	#enabled: boolean;
 
-	constructor(options?: { dir?: string; bus?: IrcBus; enabled?: boolean }) {
+	constructor(options?: { dir?: string; bus?: IrcBusApi; enabled?: boolean }) {
 		this.#dir = options?.dir;
 		this.#bus = () => options?.bus ?? IrcBus.global();
 		this.#enabled = options?.enabled ?? true;

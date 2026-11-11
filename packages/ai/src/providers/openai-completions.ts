@@ -14,6 +14,7 @@ import {
 import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
+import { isReasoningSourceSignature, MISTRAL_CONTENT_PARTS_SIGNATURE } from "../utils/reasoning-source";
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import { getEnvApiKey } from "../env-api-key";
 import type {
@@ -304,21 +305,12 @@ function getLiteLLMThinkingBlocksDelta(delta: object): unknown[] | undefined {
 	return Array.isArray(mirrored) && mirrored.length > 0 ? mirrored : undefined;
 }
 
-/** `thinkingSignature` marking thinking decoded from Mistral typed content parts. */
-const MISTRAL_CONTENT_PARTS_SIGNATURE = "mistral-content-parts";
-
 /**
  * Whether a thinking block's signature is a raw LiteLLM (Anthropic) one, not a
  * reasoning field name or the Mistral content-parts marker.
  */
 export function isLiteLLMThinkingSignature(signature: string | undefined): signature is string {
-	return (
-		!!signature &&
-		signature !== "reasoning_content" &&
-		signature !== "reasoning" &&
-		signature !== "reasoning_text" &&
-		signature !== MISTRAL_CONTENT_PARTS_SIGNATURE
-	);
+	return !!signature && !isReasoningSourceSignature(signature);
 }
 
 /**
@@ -703,6 +695,11 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	openrouterVariant?: string;
 	/** Opt-in GPT-5.6+ prompt-cache policy. Unsupported explicit mode fails locally. */
 	promptCache?: OpenAIPromptCacheOptions;
+	/**
+	 * Send no `X-Stainless-Timeout` for the first-event budget. For adapter
+	 * wrappers whose native client strips the SDK telemetry headers.
+	 */
+	omitStainlessTimeoutHeader?: boolean;
 }
 
 type AppliedToolStrictMode = "mixed" | "all_strict" | "none";
@@ -979,7 +976,7 @@ const streamOpenAICompletionsOnce = (
 				}
 				try {
 					const headersWithTimeout = { ...headers };
-					if (requestTimeoutMs !== undefined) {
+					if (requestTimeoutMs !== undefined && !options?.omitStainlessTimeoutHeader) {
 						headersWithTimeout["X-Stainless-Timeout"] = Math.floor(requestTimeoutMs / 1000).toString();
 					}
 					const { events, response, requestId } = await postOpenAIStream<ChatCompletionChunk>({

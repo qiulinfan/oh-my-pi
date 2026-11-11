@@ -19,6 +19,7 @@ import {
 	describeExecutionTool,
 	type ExecutionColorKey,
 	type ExecutionStatus,
+	executionStatusLabel,
 	PREVIEW_LINES,
 	resolveExecutionStatus,
 } from "./execution-shared";
@@ -26,6 +27,7 @@ import { code, span } from "../native/describe";
 import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
 import { Memo } from "../native/memo";
 import { currentToggle, rowExpanded, type WorkDetailToggle, workDetailEpoch } from "./work-detail";
+import type { DynamicBorder } from "../chrome/dynamic-border";
 
 export type EvalExecutionLanguage = "python" | "js";
 
@@ -33,6 +35,7 @@ export class EvalExecutionComponent extends Container {
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
+	readonly #bottomBorder: DynamicBorder;
 	#truncation?: TruncationMeta;
 	#artifactError?: OutputArtifactError;
 	#expanded = false;
@@ -77,9 +80,10 @@ export class EvalExecutionComponent extends Container {
 		this.#language = language;
 
 		const colorKey: ExecutionColorKey = this.#excludeFromContext ? "dim" : "pythonMode";
-		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
+		const { contentContainer, loader, bottomBorder } = buildExecutionFrame(this, ui, colorKey);
 		this.#contentContainer = contentContainer;
 		this.#loader = loader;
+		this.#bottomBorder = bottomBorder;
 		this.#outputPane = new OutputPane(theme, {
 			expanded: false,
 			collapsedMaxLines: PREVIEW_LINES,
@@ -94,7 +98,6 @@ export class EvalExecutionComponent extends Container {
 		});
 
 		this.#contentContainer.addChild(this.#formatHeader(colorKey));
-		this.#contentContainer.addChild(this.#loader);
 	}
 
 	/**
@@ -213,6 +216,12 @@ export class EvalExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/** The loader animates the bottom border from outside the child tree, so teardown stops it here. */
+	override dispose(): void {
+		this.#loader.dispose();
+		super.dispose();
+	}
+
 	#updateDisplay(): void {
 		// Only the collapsed preview hides lines; when expanded the footer must
 		// not keep advertising hidden lines / ctrl+o.
@@ -225,12 +234,10 @@ export class EvalExecutionComponent extends Container {
 
 		if (this.#outputPane.lineCount > 0) this.#contentContainer.addChild(this.#outputPane);
 
-		if (this.#status === "running") {
-			this.#contentContainer.addChild(this.#loader);
-		} else {
+		// The bottom border keeps the live loader until the run settles, then its exit/cancel marker.
+		if (this.#status !== "running") {
+			this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
 			const footer = buildStatusFooter({
-				status: this.#status,
-				exitCode: this.#exitCode,
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,
 				hiddenLineCount,

@@ -8,7 +8,7 @@
  * `streamFn` wrapper (so `providers.openrouterVariant` and `loopGuard` never
  * landed on advisor requests), its `promptCacheKey` (so OpenAI Responses
  * fell back to a different cache shard), its shared `providerSessionState`,
- * and its explicit websocket preference.
+ * and its independent transport settings without bypassing model-level vetoes.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Agent, type StreamFn } from "@oh-my-pi/pi-agent-core";
@@ -25,8 +25,12 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { endpoint as responsesEndpoint } from "../../ai/test/fixtures/openai-responses-server";
 
-import { cfgProvidersOpenaiWebsockets } from "@oh-my-pi/pi-coding-agent/session/settings";
+import {
+	cfgProvidersOpenaiResponsesWebsockets,
+	cfgProvidersOpenaiWebsockets,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
 
 /** Provider-facing advisor session ids must be UUIDv7 (issue #5040): Codex writes
  *  them verbatim onto `conversation_id`/`session_id` headers, so `-advisor`
@@ -58,7 +62,9 @@ describe("AgentSession advisor provider-options parity", () => {
 		// authoritative; the developer's `~/.omp` models.db can drop models these
 		// tests select, and their models.yml can override a provider's credentials.
 		cacheDir = TempDir.createSync("@pi-advisor-parity-cache-");
-		modelRegistry = new ModelRegistry(authStorage, cacheDir.join("models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, cacheDir.join("models.yml"), {
+			cacheDbPath: cacheDir.join("models.db"),
+		});
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
 		model = bundled;
@@ -126,7 +132,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		const advisor = session.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected advisor agent to be live");
 
-		// Flipped after the advisor exists: the websocket hint is read per request.
+		// A live Codex global opt-in must not opt this Anthropic advisor into WebSockets.
 		cfgProvidersOpenaiWebsockets.set(session.settings, "on");
 		await advisor.prompt("ping").catch(() => {});
 
@@ -152,7 +158,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		expect(opts.sessionId).toBe(advisor.sessionId);
 		expect(opts.promptCacheKey).toBe(advisor.sessionId);
 		expect(opts.providerSessionState).toBe(session.providerSessionState);
-		expect(opts.preferWebsockets).toBe(true);
+		expect(opts.preferWebsockets).toBeUndefined();
 	});
 
 	it("gives each advisor a provider transform of its own, apart from the main loop's", async () => {
@@ -198,6 +204,45 @@ describe("AgentSession advisor provider-options parity", () => {
 		expect(advisorRequests[1]).toHaveLength(0);
 		expect(mainRequests).toHaveLength(0);
 	});
+	it.each([true, false])("uses the model's WS veto %s on a real advisor request", async preferWebsockets => {
+		const fixture = responsesEndpoint();
+		const advisorModel = getBundledModel("openai", "gpt-5.4");
+		authStorage.keys.setRuntime("openai", "test-key");
+		modelRegistry.registerProvider("openai", {
+			api: "openai-responses",
+			apiKey: "test-key",
+			baseUrl: `${fixture.server.url.origin}/v1`,
+			models: [
+				{
+					...advisorModel,
+					baseUrl: `${fixture.server.url.origin}/v1`,
+					contextWindow: 128_000,
+					maxTokens: 16_000,
+					preferWebsockets,
+				},
+			],
+		});
+		try {
+			session = new AgentSession({
+				agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+				sessionManager,
+				settings: settings(),
+				modelRegistry,
+				advisorTools: [],
+			});
+			cfgProvidersOpenaiResponsesWebsockets.set(session.settings, true);
+			session.settings.setModelRole("advisor", `openai/${advisorModel.id}`);
+			expect(session.setAdvisorEnabled(true)).toBe(true);
+			const advisor = session.getAdvisorAgent();
+			if (!advisor) throw new Error("Expected standard Responses advisor");
+			await advisor.prompt("ping");
+			expect(fixture.requests).toHaveLength(preferWebsockets ? 1 : 0);
+			expect(fixture.httpRequests).toHaveLength(preferWebsockets ? 0 : 1);
+		} finally {
+			modelRegistry.unregisterProvider("openai");
+			await fixture.server.stop(true);
+		}
+	});
 
 	it("caps Codex SSE attempts inside each advisor-level retry", async () => {
 		authStorage.keys.setRuntime("openai-codex", "test-key");
@@ -225,6 +270,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			advisorStreamFn: captureStreamFn,
 		});
 		session.settings.setModelRole("advisor", "openai-codex/gpt-5.6-sol");
+		cfgProvidersOpenaiWebsockets.set(session.settings, "on");
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
 		const advisor = session.getAdvisorAgent();
@@ -233,6 +279,7 @@ describe("AgentSession advisor provider-options parity", () => {
 
 		expect(capturedModels[0]?.api).toBe("openai-codex-responses");
 		expect(capturedStreamOptions[0]?.codexSseMaxAttempts).toBe(1);
+		expect(capturedStreamOptions[0]?.preferWebsockets).toBe(true);
 		expect(requestCount).toBe(1);
 		expect(advisor.state.error).toContain("socket connection was closed unexpectedly");
 	});
@@ -424,7 +471,11 @@ describe("AgentSession advisor provider-options parity", () => {
 				agent: mainAgent,
 				sessionManager,
 				settings: settings(),
-				modelRegistry: accountPoolScope.registry(new ModelRegistry(pooledStorage, tempDir.join("models.yml"))),
+				modelRegistry: accountPoolScope.registry(
+					new ModelRegistry(pooledStorage, tempDir.join("models.yml"), {
+						cacheDbPath: tempDir.join("models.db"),
+					}),
+				),
 				advisorTools: [],
 				accountPoolScope,
 			});

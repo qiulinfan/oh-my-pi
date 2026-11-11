@@ -428,7 +428,8 @@ describe("session exit diagnostics", () => {
 			]);
 			expect(late).toEqual(heard);
 			expect(await store.restores(sessionFiles[1])).toBe(restorable);
-		});
+			// The teardown listens through its 5 s drain before it stops; the late abort lands after that.
+		}, 20_000);
 	}
 
 	// A parent's signal teardown aborts each subagent's turn through `abort()` with no
@@ -966,7 +967,9 @@ describe("session exit diagnostics", () => {
 
 	it("keeps an interrupted ask question in resumed model context without replaying completed calls", () => {
 		const sessionManager = SessionManager.inMemory();
-		const question = { questions: [{ question: "Deploy now?", options: ["Yes", "No"], recommended: "Yes" }] };
+		const question = {
+			html: '<form><p>Deploy now?</p><label><input type="radio" name="deploy" value="yes" checked> Yes</label><label><input type="radio" name="deploy" value="no"> No</label></form>',
+		};
 		sessionManager.appendMessage({ role: "user", content: "prepare deployment", timestamp: Date.now() });
 		sessionManager.appendMessage({
 			...pendingAssistant,

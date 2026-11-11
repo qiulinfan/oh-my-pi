@@ -8,7 +8,7 @@ import { formatScreenshot, resizeImage } from "../../utils/image-resize";
 import { throwIfAborted } from "../tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "./aria/aria-snapshot";
-import { clickElement, fillViaHandle, pressKey, typeIntoElement } from "./interactions";
+import { clickElement, fillViaHandle, pressKey, typeIntoElement, withLiveElement } from "./interactions";
 import { readPageViewport } from "./launch";
 import { RunOutput } from "./run-output";
 import { whileDrawing } from "./screenshot";
@@ -46,8 +46,11 @@ export interface FrameWaitOptions {
 
 /** A frame-scoped helper object exposed by `tab.frame()`. */
 export interface BrowserFrameApi {
-	/** Click a matching element in this frame. */
-	click(selector: string): Promise<void>;
+	/** Click a matching element in this frame, optionally with another button or click count. */
+	click(
+		selector: string,
+		options?: { button?: "left" | "right" | "middle" | "back" | "forward"; count?: number },
+	): Promise<void>;
 	/** Replace a matching form control's value. */
 	fill(selector: string, value: string): Promise<void>;
 	/** Type text into a matching element. */
@@ -229,18 +232,26 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 		return handle;
 	};
 	return {
-		click: selector =>
+		click: (selector, options) =>
 			hooks.op(
 				`frame.click(${JSON.stringify(selector)})`,
 				hooks.actionOpMs,
 				async signal => {
 					const label = `frame.click(${JSON.stringify(selector)})`;
-					const handle = await actionHandle(label, selector, signal);
-					try {
-						await clickElement(handle, label, signal);
-					} finally {
-						await handle.dispose().catch(() => undefined);
-					}
+					await withLiveElement(
+						() => actionHandle(label, selector, signal),
+						async handle => {
+							try {
+								await clickElement(handle, label, signal, {
+									button: options?.button,
+									clickCount: options?.count,
+								});
+							} finally {
+								await handle.dispose().catch(() => undefined);
+							}
+						},
+						signal,
+					);
 				},
 				selectorOptions(selector),
 			),
@@ -277,7 +288,7 @@ export function createFrameApi(frame: Frame, hooks: FrameApiHooks): BrowserFrame
 			hooks.op(`frame.press(${JSON.stringify(key)})`, hooks.actionOpMs, async signal => {
 				if (options?.selector)
 					await untilAborted(signal, () => frame.focus(hooks.normalizeSelector(options.selector!)));
-				await untilAborted(signal, () => pressKey(frame.page(), key));
+				await pressKey(frame.page(), key, undefined, signal);
 			}),
 		// Without a selector, the frame's `<body>`; any value passed, `null` included, is still checked as a selector.
 		text: (selector = "body") =>

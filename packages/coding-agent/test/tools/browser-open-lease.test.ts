@@ -63,12 +63,16 @@ async function drainAllTabs(): Promise<void> {
 }
 
 let prevSocketPath: string | undefined;
+let prevTerminalOwner: string | undefined;
 
 beforeEach(() => {
 	prevSocketPath = process.env.CMUX_SOCKET_PATH;
 	// Unique per test so the module-global browsers map (keyed by socket path)
 	// never carries a handle across tests.
 	process.env.CMUX_SOCKET_PATH = `/tmp/omp-open-lease-${process.pid}-${Math.random().toString(36).slice(2)}.sock`;
+	// Run from an interactive omp's bash tool, the tests inherit its claim on the terminal, which skips cmux.
+	prevTerminalOwner = process.env.PI_TERMINAL_OWNER_PID;
+	delete process.env.PI_TERMINAL_OWNER_PID;
 });
 
 afterEach(async () => {
@@ -77,6 +81,7 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	if (prevSocketPath === undefined) delete process.env.CMUX_SOCKET_PATH;
 	else process.env.CMUX_SOCKET_PATH = prevSocketPath;
+	if (prevTerminalOwner !== undefined) process.env.PI_TERMINAL_OWNER_PID = prevTerminalOwner;
 });
 
 describe("browser open — requested timeout bounds the whole acquisition (#6365)", () => {
@@ -296,7 +301,11 @@ describe("browser open — an abandoned browser acquisition does not hold up the
 			process.kill(pid, "SIGKILL");
 			events.push("kill-end");
 		});
-		const browser = { connected: true, disconnect: () => undefined } as unknown as Browser;
+		const browser = {
+			connected: true,
+			disconnect: () => undefined,
+			wsEndpoint: () => "ws://127.0.0.1/devtools/browser/test",
+		} as unknown as Browser;
 
 		const owner = new AbortController();
 		const first = rejectionOf(registry.acquireBrowser(kind, { cwd, signal: owner.signal }));
@@ -321,10 +330,10 @@ describe("browser open — failed spawned-app acquisition reaps its owned proces
 			key: "spawned:/tmp/chrome-headless-shell",
 			kind: { kind: "spawned", path: "/tmp/chrome-headless-shell" },
 			refCount: 0,
+			wsEndpoint: "ws://127.0.0.1/devtools/browser/test",
 			browser: {
 				connected: true,
 				disconnect: disconnectSpy,
-				wsEndpoint: () => "ws://127.0.0.1/devtools/browser/test",
 				targets: () => [],
 				pages: async () => [],
 				waitForTarget: async () => {

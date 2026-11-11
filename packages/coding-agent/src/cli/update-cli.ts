@@ -47,6 +47,7 @@ import {
 	type ForkBuild,
 	type ForkRelation,
 	fetchForkBuild,
+	forkAssetName,
 	forkBuildLabel,
 	forkRelation,
 } from "./fork-release";
@@ -1915,6 +1916,16 @@ export function runsInstalledBinary(): boolean {
 	const ompPath = resolveOmpPath();
 	const installed = ompPath ? tryRealpath(ompPath) : undefined;
 	return installed !== undefined && installed === tryRealpath(process.execPath);
+}
+
+/**
+ * Whether this omp installs its own updates in the background: the installed binary
+ * ({@link runsInstalledBinary}) on a platform this fork publishes, not kept by a managing app.
+ * The setup wizard asks about `update.auto` only then.
+ */
+export async function canSelfUpdate(): Promise<boolean> {
+	if (!runsInstalledBinary() || forkAssetName() === undefined) return false;
+	return (await managedInstallName(process.execPath)) === undefined;
 }
 
 /** How often the startup check asks GitHub, across every omp started on this machine. */

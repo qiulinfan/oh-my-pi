@@ -56,7 +56,7 @@ Shell scripts in these directories are not loaded. Claude Code's declarative com
 
 ### 3) Installed plugin extension entries
 
-After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
+After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `listPackageExtensionModules()`.
 
 Plugin extension entries come from package `omp.extensions` / `pi.extensions` manifests, including enabled feature entries.
 
@@ -165,6 +165,11 @@ disabledExtensions:
 An explicitly configured file path bypasses this name filter. Explicit-only
 sessions (`--no-extensions` / `disableExtensionDiscovery`) also omit the settings
 disable list entirely.
+
+`/extensions` lists every module this filter governs — native modules, installed-plugin
+entries, and entries expanded from configured directories (under OMP Extension
+Packages) — and toggles the same ids. Configured file paths have no row because
+the list cannot disable them.
 
 ### Live source changes
 

@@ -7,7 +7,7 @@ function fakeSession(sessionId: string) {
 	const listeners = new Set<(event: AgentSessionEvent) => void>();
 	const session = {
 		sessionId,
-		sessionManager: { getCwd: () => "/work" },
+		sessionManager: { getCwd: () => "/work", getSessionId: () => sessionId },
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);

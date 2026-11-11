@@ -8,6 +8,7 @@ import {
 	executeCancel,
 	runningAgentsOutsideJobs,
 	runningTaskProgressSuffix,
+	settledJobIds,
 	snapshotJobs,
 } from "../async/job-control";
 import {
@@ -192,7 +193,8 @@ export class ProcProtocolHandler implements ProtocolHandler {
 							? `up ${formatDuration(now - job.startTime)}`
 							: `in ${formatDuration(job.endTime - job.startTime)}`;
 					const progress = runningTaskProgressSuffix(snapshots[index], { duration: false });
-					return `${job.id} [${job.type}] ${job.status} ${duration} — ${job.label.replace(/\s+/g, " ")}${progress}`;
+					const intent = job.intent ? `${job.intent} — ` : "";
+					return `${job.id} [${job.type}] ${job.status} ${duration} — ${intent}${job.label.replace(/\s+/g, " ")}${progress}`;
 				}),
 				...runningAgentsOutsideJobs(session).map(
 					agent =>
@@ -225,7 +227,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		if (job) {
 			const snapshot = snapshotJobs(session, [job])[0];
 			const lines = [
-				`${job.id} [${job.type}] — ${job.status} — ${job.label}${runningTaskProgressSuffix(snapshot, { duration: true })}`,
+				`${job.id} [${job.type}] — ${job.status} — ${job.intent ? `${job.intent} — ` : ""}${job.label}${runningTaskProgressSuffix(snapshot, { duration: true })}`,
 			];
 			if (job.resultText) lines.push(job.resultText);
 			if (job.errorText) lines.push(`Error: ${job.errorText}`);
@@ -269,6 +271,12 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				"Write requires proc://<service> for stdin, proc://<id>/kill, or proc://<service>/mode; stdin and modes are services-only.",
 			);
 		const ownerId = session.getAgentId?.() ?? undefined;
+		// Stamped before the broker lookup below: a job that settles while that
+		// await runs finished during this call, and the kill snapshot must say so
+		// rather than calling the result genuinely late (#16052 review).
+		const callStartedAt = Date.now();
+		const manager = session.asyncJobManager;
+		const settledAtEntry = manager ? settledJobIds(manager, ownerId) : undefined;
 		const jobs = ownerJobs(session);
 		const exactJob = jobs.find(item => item.id === id);
 		const agentJob = exactJob ? undefined : runningJobOfAgent(jobs, id);
@@ -322,7 +330,10 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			};
 		}
 		if ((job || agent) && session.asyncJobManager) {
-			const result = await executeCancel(session, session.asyncJobManager, ownerId, [job?.id ?? id]);
+			const result = await executeCancel(session, session.asyncJobManager, ownerId, [job?.id ?? id], {
+				startedAtMs: callStartedAt,
+				settledAtEntry,
+			});
 			return { content: result.content, details: { proc: result.details } };
 		}
 		if (agent) {

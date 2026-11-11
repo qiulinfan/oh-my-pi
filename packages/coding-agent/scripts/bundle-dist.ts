@@ -16,7 +16,7 @@ const obsoleteHtmlExportAssetPattern =
 /** The `omp gui` page (an HTML import of @oh-my-pi/gui) and the client chunks it loads. */
 const guiAssetPattern = /^(?:index\.html|chunk-[^.]+\.(?:css|js))$/;
 
-// Native / optional / platform-specific deps are loaded from installed files.
+// Native/platform dependencies and on-demand model runtimes stay outside the bundle.
 const ALWAYS_EXTERNAL = ["@oh-my-pi/pi-natives", "@huggingface/transformers", "fastembed", "onnxruntime-node"];
 
 /**

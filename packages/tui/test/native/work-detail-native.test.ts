@@ -358,7 +358,7 @@ describe("work-detail mode: read groups", () => {
 	}
 
 	function previewCard(reads: ReadToolGroupComponent, toolCallId: string): NativeNode {
-		const found = nodes(reads.describe(cx)).find(n => n.k === "card" && n.key === `p${toolCallId}`);
+		const found = nodes(reads.describe(cx)).find(n => n.k === "card" && n.key === `m${toolCallId}`);
 		if (!found) throw new Error(`no preview card for ${toolCallId}`);
 		return found;
 	}
@@ -370,7 +370,7 @@ describe("work-detail mode: read groups", () => {
 
 		// The terminal reports the card's keypath under its file's section. The opened card lifts the
 		// folded group's clamp (each card still clamps itself), so the card is not cut off by it.
-		reads.handleNativeEvent({ type: "toggle", key: "pread-0/pread-0", collapsed: false });
+		reads.handleNativeEvent({ type: "toggle", key: "pread-0/mread-0", collapsed: false });
 		expect(previewCard(reads, "read-0").p).toMatchObject({ collapsed: false });
 		expect(previewCard(reads, "read-1").p).toMatchObject({ collapsed: true });
 		expect(reads.describe(cx).p).toMatchObject({ collapsed: true, preview: "children" });
