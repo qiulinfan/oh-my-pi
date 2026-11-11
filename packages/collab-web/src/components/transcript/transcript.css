@@ -486,3 +486,14 @@
 	opacity: 0.8;
 	margin: 2px 0;
 }
+/* A `<details>` block in an answer: a disclosure whose summary is the click target. */
+.tr-md .tr-details {
+	margin: 6px 0;
+}
+.tr-md .tr-details > summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+.tr-md .tr-details[open] > summary {
+	margin-bottom: 4px;
+}

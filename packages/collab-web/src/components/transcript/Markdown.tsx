@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { escapeHtml } from "../../lib/format";
 import { getHljs } from "../../tool-render/util";
+import { detailsExtension } from "./details";
 import { footnoteExtension } from "./footnote";
 import { mathExtension } from "./math";
 
@@ -70,7 +71,7 @@ function safeHref(href: string): string | null {
 const md = new Marked({
 	gfm: true,
 	renderer: {
-		// Raw HTML tokens (block + inline both arrive here) are escaped, never emitted.
+		// Raw HTML tokens (block + inline both arrive here) are escaped, never emitted; `<details>` is its own block.
 		html({ text }) {
 			const cleaned = text.replace(/<\/?(?:advisory|span|text)\b(?:\s[^>]*)?\s*\/?>/gi, "");
 			if (cleaned === "") return "";
@@ -99,6 +100,7 @@ const md = new Marked({
 });
 md.use(mathExtension);
 md.use(footnoteExtension);
+md.use(detailsExtension);
 
 function renderMarkdown(text: string): string {
 	try {

@@ -25,6 +25,40 @@ describe("Transcript Markdown", () => {
 		expect(html).toContain("<li>Decision:<br>│   └── detail</li>");
 	});
 
+	it("draws <details> as a disclosure with Markdown inside, and keeps other raw tags escaped", () => {
+		const html = renderMarkdown(
+			"Before\n<details>\n<summary>Open **me**</summary>\n\nFirst *para*.\n\n<img src=x>\n\n</details>\n\nAfter",
+		);
+
+		expect(html).toContain('<details class="tr-details"><summary>Open <strong>me</strong></summary>');
+		expect(html).toContain("<p>First <em>para</em>.</p>");
+		expect(html).toContain("&lt;img src=x&gt;");
+		expect(html).not.toContain("&lt;details");
+		expect(html).not.toContain("&lt;summary");
+		expect(html.indexOf("</details>")).toBeLessThan(html.indexOf("<p>After</p>"));
+	});
+
+	it("draws a one-line <details> and the text after it on that line", () => {
+		const html = renderMarkdown("<details> <summary>See</summary> Body text. </details> tail");
+
+		expect(html).toContain('<details class="tr-details"><summary>See</summary><p>Body text.</p>\n</details>');
+		expect(html).toContain("<p>tail</p>");
+	});
+
+	it("keeps a nested <details> inside its parent, and an unclosed one open to the end of the text", () => {
+		const nested = renderMarkdown(
+			"<details>\n<summary>A</summary>\n\n<details>\n<summary>B</summary>\n\nb\n\n</details>\n\na\n\n</details>",
+		);
+		expect(nested).toMatch(
+			/<summary>A<\/summary><details class="tr-details"><summary>B<\/summary><p>b<\/p>\n<\/details>\n<p>a<\/p>\n<\/details>/,
+		);
+
+		const open = renderMarkdown("<details>\n<summary>A</summary>\n\nstill\n\nstreaming");
+		expect(open).toContain(
+			'<details class="tr-details" open><summary>A</summary><p>still</p>\n<p>streaming</p>\n</details>',
+		);
+	});
+
 	it("continues escaping raw HTML", () => {
 		const html = renderMarkdown("safe\n<img src=x onerror=alert(1)>");
 
@@ -227,6 +261,8 @@ const PARAGRAPHS = Array.from({ length: 6 }, (_, i) => `Paragraph ${i} has *emph
 /** Documents whose block structure can straddle a blank line in a streamed prefix. */
 const STREAM_DOCS: Record<string, string> = {
 	paragraphs: `${PARAGRAPHS}\n`,
+	"details across blank lines":
+		"Intro.\n\n<details>\n<summary>More</summary>\n\nOne.\n\n- a\n\n- b\n\n</details>\n\nAfter one.\n\nAfter two.\n\n<details open>\n\nlate\n\nstill open",
 	"list then prose": "- a\n- b\n\nprose after\n\n1. one\n2. two\n\n3) three\n\ntail",
 	"same-marker items across blank lines": "- a\n\n- b\n\n- c\n\nend\n\n* x\n\n+ y\n\n1. one\n\n2. two\n\n10. ten",
 	"nested list continuation": "- item\n\n  continued para\n\n  ```\n  code\n\n  more\n  ```\n\nafter",

@@ -1585,6 +1585,17 @@ button.picker-item:focus-visible {
 .tr-md .tr-footnote > sup {
 	margin-right: 2px;
 }
+/* A `<details>` block in an answer: a disclosure whose summary is the click target. */
+.tr-md .tr-details {
+	margin: 6px 0;
+}
+.tr-md .tr-details > summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+.tr-md .tr-details[open] > summary {
+	margin-bottom: 4px;
+}
 /* Highlighted code in answers (highlight.js classes), in this page's palette so it follows light and dark. */
 .tr-md .hljs-comment,
 .tr-md .hljs-quote {
