@@ -50,7 +50,7 @@ for (const failure of [false, true]) {
 						await gate;
 						finished = true;
 						if (failure) throw new Error("GitHub unavailable");
-						return { label: "999.0.0 (aaaaaaaaaa)", installing: false };
+						return "999.0.0 (aaaaaaaaaa)";
 					},
 					runAcpMode: async () => {
 						expect(checkedSettings).toBe(activeSettings);

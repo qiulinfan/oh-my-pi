@@ -350,7 +350,7 @@ The script handles version bump, CHANGELOG finalization, commit, tag, publish, a
 
 - `omp update` and the startup check read only this fork's GitHub Releases (`src/cli/fork-release.ts`), never upstream's build service or npm, which would install upstream's build over the fork. `.github/workflows/fork_omp.yml` publishes every push to `main` as `fork-v<version>-<commit10>` with `omp-darwin-arm64`, `omp-linux-x64` and `omp-windows-x64.exe` and their `.sha256`.
 - Fork builds of one upstream version share its version, so the commit decides: `scripts/compile-binary.ts` defines `PI_BUILD_COMMIT` (CI's `GITHUB_SHA`, else `git rev-parse HEAD`), and a release replaces the install only when its version is higher or GitHub's compare says its commit is ahead. A local build of unpushed commits is never replaced by an older release.
-- The startup check (`startup.checkUpdate`, at most hourly through the `update-check` stamp in the agent dir) installs in the background with `update.auto` by running `omp update` detached (output in the logs dir's `update.log`), only when the running binary is the `omp` on PATH. Test it with a copy on a PATH of its own, never the installed omp.
+- The startup check (`startup.checkUpdate`, at most hourly through the `update-check` stamp in the agent dir) installs in the background with `update.auto` through a detached worker (`src/cli/auto-update.ts`, `__omp_worker_auto_update`) that installs as `omp update` does, only when the running binary is the `omp` on PATH. The worker's status file and log are in `~/.omp/update/`; the TUI follows the status file and shows the progress after the welcome banner's version. Test it with a copy on a PATH of its own, never the installed omp.
 
 ## GUI development (fork-only)
 

@@ -1312,23 +1312,16 @@ export class UiHelpers {
 		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(notice) : notice);
 	}
 
-	showNewVersionNotification(newVersion: string, installing = false): void {
+	showNewVersionNotification(newVersion: string): void {
 		const title = "Update Available";
-		const prefix = installing
-			? `omp ${newVersion} is being installed in the background. Restart: `
-			: `New version ${newVersion} is available. Run: `;
-		const command = installing ? "omp" : "omp update";
+		const prefix = `New version ${newVersion} is available. Run: `;
+		const command = "omp update";
 		const native = noticeRow(
 			"info",
 			[
 				span("Update available", "strong"),
-				span(
-					installing
-						? ` · omp ${newVersion} is being installed in the background; restart `
-						: ` · New version ${newVersion} is available. Run `,
-				),
+				span(` · New version ${newVersion} is available. Run `),
 				span(command, "code"),
-				...(installing ? [span(" to use it")] : []),
 			],
 			{ icon: "download" },
 		);

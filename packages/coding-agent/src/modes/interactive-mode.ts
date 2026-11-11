@@ -9123,8 +9123,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setWorkingMessage(message);
 	}
 
-	showNewVersionNotification(newVersion: string, installing?: boolean): void {
-		this.#uiHelpers.showNewVersionNotification(newVersion, installing);
+	showNewVersionNotification(newVersion: string): void {
+		this.#uiHelpers.showNewVersionNotification(newVersion);
 	}
 
 	/** Show (or with `null`, clear) background auto-update progress after the welcome banner's version. */

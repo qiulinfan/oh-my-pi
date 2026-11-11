@@ -4,7 +4,6 @@
  * Handles `omp update` to check for and install updates.
  * Uses the installer that owns the active omp executable when it can be detected.
  */
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +16,6 @@ import {
 	compareVersions,
 	formatBytes,
 	getAgentDir,
-	getLogsDir,
 	isCompiledBinary,
 	isEnoent,
 	VERSION,
@@ -86,6 +84,29 @@ const SUPPORTED_NATIVE_TAGS: ReadonlySet<string> = new Set([
 function currentNativeTag(): string {
 	return `${process.platform}-${process.arch}`;
 }
+
+/**
+ * Live progress of an install, for callers that display it (the auto-update
+ * banner). `version` is the build's label ({@link forkBuildLabel}); `installing`
+ * covers the binary swap, which reports no byte count.
+ */
+export type UpdateProgress =
+	| { phase: "downloading"; version: string; received: number; total: number }
+	| { phase: "installing"; version: string };
+
+/** Receives {@link UpdateProgress} while an update installs. */
+export type UpdateProgressListener = (progress: UpdateProgress) => void;
+
+/** How {@link installUpdate} ended without an error; `version` is the build's label. */
+export type UpdateOutcome =
+	/** Nothing newer to install. */
+	| { kind: "current" }
+	/** `--check` found `version`; nothing was installed. */
+	| { kind: "available"; version: string }
+	/** This install cannot update itself (a managing app keeps it). */
+	| { kind: "unsupported"; reason: string }
+	/** `version` was installed and the binary on PATH reports it. */
+	| { kind: "installed"; version: string };
 
 /** Distribution channel advertised by a release's published npm manifest. */
 export type ReleaseDist = "npm" | "binary";
@@ -197,6 +218,8 @@ export interface VerifiedBinaryDownloadOptions {
 	expectedSize: number;
 	expectedDigest: string;
 	fetchImpl?: Fetch;
+	/** Called with the bytes received so far as the download streams. */
+	onProgress?: (received: number) => void;
 }
 
 /**
@@ -239,6 +262,7 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 				return;
 			}
 			hash.update(chunk);
+			options.onProgress?.(size);
 			callback(null, chunk);
 		},
 	});
@@ -1563,6 +1587,9 @@ export type BinaryPatchApplier = (oldPath: string, patchPath: string, outPath: s
 export interface BuildDownloadOptions {
 	fetchImpl?: Fetch;
 	applyPatch?: BinaryPatchApplier;
+	onProgress?: UpdateProgressListener;
+	/** The build's name in progress reports; defaults to its version. */
+	progressVersion?: string;
 }
 
 /** Size and lowercase hex SHA-256 of a file, streamed. */
@@ -1605,6 +1632,13 @@ async function installFromPatch(
 			expectedSize: patch.size,
 			expectedDigest: `sha256:${patch.sha256}`,
 			fetchImpl: options.fetchImpl,
+			onProgress: received =>
+				options.onProgress?.({
+					phase: "downloading",
+					version: options.progressVersion ?? build.version,
+					received,
+					total: patch.size,
+				}),
 		});
 		await (options.applyPatch ?? applyBinaryPatch)(paths.basePath, paths.patchPath, paths.tempPath);
 		const result = await fileDigest(paths.tempPath);
@@ -1649,6 +1683,13 @@ async function downloadBuild(
 		expectedSize: build.file.size,
 		expectedDigest: `sha256:${build.file.sha256}`,
 		fetchImpl: options.fetchImpl,
+		onProgress: received =>
+			options.onProgress?.({
+				phase: "downloading",
+				version: options.progressVersion ?? build.version,
+				received,
+				total: build.file.size,
+			}),
 	});
 	console.log(chalk.dim(`Verified sha256:${build.file.sha256}`));
 }
@@ -1685,6 +1726,7 @@ export async function updateViaBinaryAt(
 	// overlapping `omp update` runs never replace the same binary concurrently
 	// or reclaim each other's live backup/temp files. The download above writes
 	// to a unique temp path and is safe to overlap; only the swap is shared.
+	options.onProgress?.({ phase: "installing", version: options.progressVersion ?? build.version });
 	const verification = await withFileLock(targetPath, async () => {
 		console.log(chalk.dim("Installing update..."));
 		const result = await replaceBinaryForUpdate({
@@ -1858,13 +1900,30 @@ export async function runUpdateCommand(opts: {
 		console.error(chalk.red(`${FORK_REPO} publishes no canary builds.`));
 		process.exit(1);
 	}
+	try {
+		await installUpdate(opts);
+	} catch (err) {
+		console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+		process.exit(1);
+	}
+}
+
+/**
+ * What `omp update` does, for callers that go on afterwards (the background
+ * auto-update worker): prints the same lines, reports progress, returns how it
+ * ended and throws when the check or the install fails.
+ */
+export async function installUpdate(opts: {
+	force: boolean;
+	check: boolean;
+	onProgress?: UpdateProgressListener;
+}): Promise<UpdateOutcome> {
 	const ompPath = resolveOmpPath();
 	const manager = ompPath ? await managedInstallName(ompPath) : undefined;
 	if (manager) {
-		console.log(
-			chalk.yellow(`${ompPath} is installed and kept up to date by ${manager}; update it from ${manager}.`),
-		);
-		return;
+		const reason = `${ompPath} is installed and kept up to date by ${manager}; update it from ${manager}.`;
+		console.log(chalk.yellow(reason));
+		return { kind: "unsupported", reason };
 	}
 	console.log(chalk.dim(`Current version: ${forkBuildLabel(VERSION, BUILD_COMMIT)}`));
 
@@ -1874,8 +1933,7 @@ export async function runUpdateCommand(opts: {
 		build = await fetchForkBuild();
 		relation = await forkRelation(build);
 	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
+		throw new Error(`Failed to check for updates: ${err}`, { cause: err });
 	}
 	const label = forkBuildLabel(build.version, build.commit);
 	if (relation !== "newer" && !opts.force) {
@@ -1887,10 +1945,10 @@ export async function runUpdateCommand(opts: {
 					? `Already newer than the latest release, ${label}`
 					: `This build is not on the line of the latest release, ${label}; --force installs it`;
 		console.log(relation === "diverged" ? chalk.yellow(why) : chalk.green(`${icon} ${why}`));
-		return;
+		return { kind: "current" };
 	}
 	console.log(chalk.cyan(relation === "newer" ? `New version available: ${label}` : `Forcing install of ${label}`));
-	if (opts.check) return;
+	if (opts.check) return { kind: "available", version: label };
 
 	try {
 		const target = await resolveUpdateTarget({ allowPackageManagers: true });
@@ -1899,11 +1957,15 @@ export async function runUpdateCommand(opts: {
 				`this ${APP_NAME} is a ${target.method} install; ${FORK_REPO} updates only a standalone binary on PATH`,
 			);
 		}
-		await updateViaBinaryAt(target.path, build, { validateExistingTarget: target.validateExistingTarget });
+		await updateViaBinaryAt(target.path, build, {
+			validateExistingTarget: target.validateExistingTarget,
+			onProgress: opts.onProgress,
+			progressVersion: label,
+		});
 	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
+		throw new Error(`Update failed: ${err}`, { cause: err });
 	}
+	return { kind: "installed", version: label };
 }
 
 /**
@@ -1949,27 +2011,6 @@ export function claimStartupUpdateCheck(now: number = Date.now()): boolean {
 		return true;
 	} catch {
 		return false;
-	}
-}
-
-/**
- * Run `omp update` detached, its output appended to `update.log` in the logs
- * directory. The swap is a rename, so the running omp and every other open
- * session keep the build they started with; the next start uses the new one.
- */
-export function startBackgroundUpdate(): void {
-	const logDir = getLogsDir();
-	fs.mkdirSync(logDir, { recursive: true });
-	const log = fs.openSync(path.join(logDir, "update.log"), "a");
-	try {
-		const child = spawn(process.execPath, ["update"], {
-			detached: true,
-			windowsHide: true,
-			stdio: ["ignore", log, log],
-		});
-		child.unref();
-	} finally {
-		fs.closeSync(log);
 	}
 }
 

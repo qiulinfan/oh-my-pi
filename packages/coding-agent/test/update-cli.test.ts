@@ -1081,6 +1081,32 @@ describe("update-cli release binary integrity", () => {
 		if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
 	});
 
+	it("reports cumulative bytes per chunk, ending at the full size", async () => {
+		const dir = await makeTempDir();
+		const chunks = ["verified ", "binary"];
+		const received: number[] = [];
+
+		await downloadVerifiedBinary({
+			url,
+			targetPath: path.join(dir, binaryName),
+			expectedSize: Buffer.byteLength(content),
+			expectedDigest: digest,
+			fetchImpl: async () =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						pull(controller) {
+							const chunk = chunks.shift();
+							if (chunk === undefined) controller.close();
+							else controller.enqueue(new TextEncoder().encode(chunk));
+						},
+					}),
+				),
+			onProgress: bytes => received.push(bytes),
+		});
+
+		expect(received).toEqual([9, 15]);
+	});
+
 	it("aborts the response stream as soon as it exceeds the expected size", async () => {
 		const dir = await makeTempDir();
 		const targetPath = path.join(dir, binaryName);

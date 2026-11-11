@@ -45,13 +45,8 @@ import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker"
 import { fetchForkBuild, forkBuildLabel, forkRelation } from "./cli/fork-release";
 import { takeEditorContext } from "./gui/editor-context";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import {
-	claimStartupUpdateCheck,
-	isSourceCheckout,
-	managedInstallName,
-	runsInstalledBinary,
-	startBackgroundUpdate,
-} from "./cli/update-cli";
+import { runAutoUpdate } from "./cli/auto-update";
+import { claimStartupUpdateCheck, isSourceCheckout, managedInstallName } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { type AgentPreset, applyAgentPreset, resolveLaunchPreset } from "./config/agent-presets";
 import { ModelRegistry } from "./config/model-registry";
@@ -291,13 +286,11 @@ function writeStartupWarning(warning: string): void {
 }
 
 /**
- * Ask this fork's releases whether a newer build is out. When one is and this
- * omp is the installed binary, it is installed in the background (with
- * `update.auto`), effective from the next start.
+ * Ask this fork's releases whether a newer build is out: its label
+ * (`18.18.9 (b0eea71f0d)`), or undefined. With `update.auto` the caller hands
+ * the answer to {@link runAutoUpdate}, which installs it in the background.
  */
-async function checkForNewVersion(
-	activeSettings: Settings = settings,
-): Promise<{ label: string; installing: boolean } | undefined> {
+async function checkForNewVersion(activeSettings: Settings = settings): Promise<string | undefined> {
 	if (!cfgStartupCheckUpdate.get(activeSettings)) {
 		return;
 	}
@@ -307,9 +300,7 @@ async function checkForNewVersion(
 		if (!claimStartupUpdateCheck()) return;
 		const build = await fetchForkBuild({ timeoutMs: 5_000 });
 		if ((await forkRelation(build, { timeoutMs: 5_000 })) !== "newer") return;
-		const installing = cfgUpdateAuto.get(activeSettings) && runsInstalledBinary();
-		if (installing) startBackgroundUpdate();
-		return { label: forkBuildLabel(build.version, build.commit), installing };
+		return forkBuildLabel(build.version, build.commit);
 	} catch {
 		return undefined;
 	}
@@ -671,7 +662,7 @@ async function runInteractiveMode(
 	session: AgentSession,
 	version: string,
 	notifs: (InteractiveModeNotify | null)[],
-	versionCheckPromise: Promise<{ label: string; installing: boolean } | undefined>,
+	versionCheckPromise: Promise<string | undefined>,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
@@ -782,14 +773,20 @@ async function runInteractiveMode(
 			mode.renderInitialMessages({ preserveExistingChat: true }),
 		);
 		// A resolved version check must not insert its banner into a partial transcript.
-		checkedVersionPromise.then(newVersion => {
-			if (!cfgStartupCheckUpdate.get(settings)) {
-				return;
-			}
-			if (newVersion) {
-				mode.showNewVersionNotification(newVersion.label, newVersion.installing);
-			}
-		});
+		const notifyNewVersion = (newVersion: string): void => {
+			if (cfgStartupCheckUpdate.get(settings)) mode.showNewVersionNotification(newVersion);
+		};
+		if (cfgUpdateAuto.get(settings)) {
+			// Installs in the background, with its progress after the welcome banner's version.
+			void runAutoUpdate(checkedVersionPromise, {
+				show: update => mode.showVersionUpdate(update),
+				notify: notifyNewVersion,
+			});
+		} else {
+			checkedVersionPromise.then(newVersion => {
+				if (newVersion) notifyNewVersion(newVersion);
+			});
+		}
 
 		const advisorConfigWarnings = session.getAdvisorConfigWarnings();
 		if (advisorConfigWarnings.length > 0) {
@@ -2548,7 +2545,11 @@ export async function runRootCommand(
 
 		// Editor sidebars also discover fork releases. Never block their protocol
 		// handshake or print a TUI update notice onto the protocol's stdout.
-		if (isProtocolMode) void (deps.checkForNewVersion ?? checkForNewVersion)(settingsInstance).catch(() => undefined);
+		// A newer one installs in the background (`update.auto`), with nothing to show here.
+		if (isProtocolMode) {
+			const check = (deps.checkForNewVersion ?? checkForNewVersion)(settingsInstance).catch(() => undefined);
+			if (cfgUpdateAuto.get(settingsInstance)) void runAutoUpdate(check);
+		}
 
 		if (mode === "acp") {
 			// ACP binds extensions per `session/new`, and any of them may own a flag

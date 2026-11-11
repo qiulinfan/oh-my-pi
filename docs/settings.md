@@ -950,7 +950,7 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `startup.showSplash`           | boolean | `false`         | Show the full setup animation on ordinary interactive startup without rerunning setup.                                                                                                                                                                      |
 | `startup.changelogMode`        | enum    | `summary`       | `summary`, `expanded`, `hidden`: choose startup release-note presentation.                                                                                                                                                                                  |
 | `startup.setupWizard`          | boolean | `true`          | Show newly added onboarding steps once per setup version.                                                                                                                                                                                                   |
-| `update.auto`                  | boolean | `true`          | Install a newer release of this fork found at startup in the background, as `omp update` installs it; the next start uses it. Only an omp that is the binary on PATH installs in the background. |
+| `update.auto`                  | boolean | `true`          | Install a newer release of this fork found at startup in the background, as `omp update` installs it; progress shows after the welcome banner's version and the next start uses the new build. Only an omp that is the binary on PATH installs in the background. Status and worker log: `~/.omp/update/`. |
 
 ### Providers and services
 
